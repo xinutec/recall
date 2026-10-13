@@ -360,26 +360,24 @@ pub async fn get_blob(
 /// What a runner says it can do (`?kinds=transcribe-segment,enroll-speaker`).
 #[derive(Debug, Deserialize, Default)]
 pub struct LeaseQuery {
-    kinds: Option<String>,
+    #[serde(default)]
+    kinds: String,
 }
 
 impl LeaseQuery {
-    /// Absent means `transcribe-segment` only: an older runner holds only the
-    /// `asr` shim. An unknown kind (from a newer runner) is dropped.
+    /// None named leases nothing. An unknown kind (from a newer runner) is
+    /// dropped.
     fn kinds(&self) -> Vec<audiocore::job::Kind> {
-        match self.kinds.as_deref() {
-            None => vec![audiocore::job::Kind::TranscribeSegment],
-            Some(list) => list
-                .split(',')
-                .map(str::trim)
-                .filter(|k| !k.is_empty())
-                .filter_map(|k| {
-                    k.parse()
-                        .inspect_err(|err| tracing::warn!(%err, "lease query"))
-                        .ok()
-                })
-                .collect(),
-        }
+        self.kinds
+            .split(',')
+            .map(str::trim)
+            .filter(|k| !k.is_empty())
+            .filter_map(|k| {
+                k.parse()
+                    .inspect_err(|err| tracing::warn!(%err, "lease query"))
+                    .ok()
+            })
+            .collect()
     }
 }
 

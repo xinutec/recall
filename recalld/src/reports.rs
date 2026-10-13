@@ -8,8 +8,8 @@
 //! newline could forge a `client-event` line.
 
 use axum::Json;
-use axum::response::{IntoResponse, Response};
-use serde::{Deserialize, Serialize};
+use axum::response::Response;
+use serde::Deserialize;
 
 /// So one POST cannot flood the log.
 const MAX_EVENTS: usize = 100;
@@ -91,15 +91,6 @@ pub fn log_line(stamp: &str, entry: &ClientLog) -> String {
     line
 }
 
-#[derive(Serialize)]
-struct Ok_ {
-    ok: bool,
-}
-
-fn ok() -> Response {
-    Json(Ok_ { ok: true }).into_response()
-}
-
 #[derive(Clone, Debug)]
 pub struct Reports {
     /// Where `/api/log` appends. Telemetry goes to the tracing log instead, to
@@ -134,7 +125,7 @@ pub async fn log_route(
         }
     })
     .await;
-    ok()
+    crate::route::ack()
 }
 
 pub async fn telemetry_route(Json(events): Json<Vec<TelemetryEvent>>) -> Response {
@@ -147,5 +138,5 @@ pub async fn telemetry_route(Json(events): Json<Vec<TelemetryEvent>>) -> Respons
             e.at,
         );
     }
-    ok()
+    crate::route::ack()
 }
