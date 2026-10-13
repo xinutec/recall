@@ -446,8 +446,8 @@ fn moment_out(
     // The stored text, not a reformatted instant: chrono trims trailing zeros
     // (.960 for .960000), changing every timestamp on the wire.
     MomentOut {
-        start: reads::iso(&line.start_utc),
-        end: reads::iso(&line.end_utc),
+        start: line.start_utc.clone(),
+        end: line.end_utc.clone(),
         primary: reads::to_out_with(line, Some(guess)),
         alternates: moment
             .alternates
@@ -483,10 +483,10 @@ fn conversation_out(
     ConversationOut {
         start: group
             .first()
-            .map(|&i| reads::iso(&row(i).start_utc))
+            .map(|&i| row(i).start_utc.clone())
             .unwrap_or_default(),
         end: extreme(turns, group, |t| t.end, true)
-            .map(|i| reads::iso(&row(i).end_utc))
+            .map(|i| row(i).end_utc.clone())
             .unwrap_or_default(),
         turn_count: shown.len(),
         speakers: distinct(group.iter().map(|&i| turns[i].speaker_label.as_deref())),

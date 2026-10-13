@@ -176,8 +176,10 @@ pub fn to_out_with(
     };
     TranscriptOut {
         id: segment.id,
-        start: iso(&segment.start_utc),
-        end: iso(&segment.end_utc),
+        // As stored: reformatting could only change them (a `Z` for
+        // `+00:00`, dropped microseconds).
+        start: segment.start_utc.clone(),
+        end: segment.end_utc.clone(),
         text: segment.text.clone(),
         language: segment.language.clone(),
         speaker,
@@ -193,12 +195,6 @@ pub fn to_out_with(
         cluster: segment.speaker_cluster.clone(),
         words_checked: segment.words_checked,
     }
-}
-
-/// Times go out exactly as stored: reformatting could only change them (a `Z`
-/// for `+00:00`, dropped microseconds).
-pub fn iso(stored: &str) -> String {
-    stored.to_owned()
 }
 
 /// Open `recall.sqlite` read-only.
