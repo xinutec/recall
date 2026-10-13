@@ -165,7 +165,7 @@ fn browsing(
                 .route("/api/capture/resume", post(capture::resume_route))
                 .with_state(Arc::new(capture::Control {
                     root: capture_root,
-                    webauth: Some(st.cfg.clone()),
+                    webauth: st.cfg.clone(),
                     trusted_proxies,
                 })),
         )

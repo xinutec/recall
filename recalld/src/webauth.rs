@@ -101,7 +101,7 @@ pub fn accepts_device_token(method: &str, path: &str) -> bool {
 /// Never fails: annotating a pause must not break it.
 #[must_use]
 pub fn request_origin(
-    cfg: Option<&Config>,
+    cfg: &Config,
     method: &str,
     path: &str,
     cookie: Option<&str>,
@@ -110,9 +110,6 @@ pub fn request_origin(
     client_host: Option<&str>,
 ) -> String {
     let host = client_host.unwrap_or("unknown-host");
-    let Some(cfg) = cfg else {
-        return format!("no-auth {host}");
-    };
     if let Some(session) = read_session_cookie(&cfg.session_secret, cookie, now) {
         return format!("user {} {host}", session.user_id);
     }
@@ -210,7 +207,7 @@ pub fn read_state(secret: &str, token: &str, now: i64) -> Option<String> {
     Some(validate_return_to(Some(&claims.rt)))
 }
 
-/// The gate's configuration. Absent: an open LAN UI, for dev and tests.
+/// The gate's configuration. Without it the browsing plane is not mounted.
 #[derive(Debug, Clone)]
 pub struct Config {
     pub session_secret: String,

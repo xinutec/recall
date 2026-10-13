@@ -338,13 +338,25 @@ fn a_pause_elapsing_changes_the_fingerprint_with_nobody_pressing_anything() {
 
 use recalld::webauth::request_origin;
 
+fn gate() -> recalld::webauth::Config {
+    recalld::webauth::Config {
+        session_secret: "test-secret-not-a-real-one".into(),
+        client_id: "cid".into(),
+        client_secret: "csec".into(),
+        nc_base_url: "https://dash.example.org".into(),
+        nc_internal_url: "https://dash.example.org".into(),
+        redirect_uri: "http://127.0.0.1/auth/callback".into(),
+        allowed_users: std::collections::HashSet::new(),
+        device_token: None,
+    }
+}
+
 #[test]
-fn with_no_gate_configured_only_the_peer_is_known() {
-    // No plane is claimed where there is none; the host still answers "was
-    // that pause mine?" on a household network.
+fn without_a_sign_in_only_the_peer_is_known() {
+    // The host still answers "was that pause mine?" on a household network.
     assert_eq!(
         request_origin(
-            None,
+            &gate(),
             "POST",
             "/api/capture/pause",
             None,
@@ -352,15 +364,15 @@ fn with_no_gate_configured_only_the_peer_is_known() {
             0,
             Some("10.0.0.5")
         ),
-        "no-auth 10.0.0.5"
+        "anon 10.0.0.5"
     );
 }
 
 #[test]
 fn an_unknown_peer_is_named_rather_than_left_blank() {
     assert_eq!(
-        request_origin(None, "POST", "/api/capture/pause", None, None, 0, None),
-        "no-auth unknown-host"
+        request_origin(&gate(), "POST", "/api/capture/pause", None, None, 0, None),
+        "anon unknown-host"
     );
 }
 

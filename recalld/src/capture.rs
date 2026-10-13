@@ -298,7 +298,7 @@ use std::sync::Arc;
 /// The capture routes' state: the gate config, to say who pressed the button.
 pub struct Control {
     pub root: std::path::PathBuf,
-    pub webauth: Option<Arc<crate::webauth::Config>>,
+    pub webauth: Arc<crate::webauth::Config>,
     pub trusted_proxies: Vec<std::net::IpAddr>,
 }
 
@@ -425,7 +425,7 @@ impl Asker {
         }
     }
 
-    fn describe(&self, cfg: Option<&crate::webauth::Config>, now: i64) -> String {
+    fn describe(&self, cfg: &crate::webauth::Config, now: i64) -> String {
         crate::webauth::request_origin(
             cfg,
             &self.method,
@@ -493,11 +493,7 @@ async fn control(st: Arc<Control>, intent: Intent, request: axum::extract::Reque
             }
         };
         // After the action, so the audit cannot prevent it.
-        audit(
-            &conn,
-            verb,
-            &asker.describe(cfg.as_deref(), now.timestamp()),
-        );
+        audit(&conn, verb, &asker.describe(&cfg, now.timestamp()));
         fleet_capture_state(&conn, now)
     })
     .await
