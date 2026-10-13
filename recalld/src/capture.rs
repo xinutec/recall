@@ -119,22 +119,20 @@ pub fn intent_until(conn: &Connection, now: DateTime<Utc>) -> rusqlite::Result<O
     Ok(audiocore::instant::respell_utc(&raw))
 }
 
+/// Whether the Mac reported within [`report_fresh`] of `now`.
+fn report_is_fresh(conn: &Connection, now: DateTime<Utc>) -> rusqlite::Result<bool> {
+    Ok(setting(conn, REPORTED_AT_KEY)?
+        .as_deref()
+        .and_then(audiocore::instant::parse)
+        .is_some_and(|at| now - at.with_timezone(&Utc) <= report_fresh()))
+}
+
 /// The Mac's last report if fresh.
 pub fn reported_state(conn: &Connection, now: DateTime<Utc>) -> rusqlite::Result<Option<Reported>> {
-    let (Some(at), Some(running)) = (
-        setting(conn, REPORTED_AT_KEY)?,
-        setting(conn, REPORTED_RUNNING_KEY)?,
-    ) else {
+    let Some(running) = setting(conn, REPORTED_RUNNING_KEY)? else {
         return Ok(None);
     };
-    if at.is_empty() {
-        return Ok(None);
-    }
-    let Some(at) = audiocore::instant::parse(&at) else {
-        return Ok(None);
-    };
-    let at = at.with_timezone(&Utc);
-    if now - at > report_fresh() {
+    if !report_is_fresh(conn, now)? {
         return Ok(None);
     }
     Ok(Some(Reported {
@@ -172,13 +170,7 @@ pub fn reported_source_liveness(
     conn: &Connection,
     now: DateTime<Utc>,
 ) -> rusqlite::Result<Option<std::collections::HashMap<String, DateTime<Utc>>>> {
-    let Some(at) = setting(conn, REPORTED_AT_KEY)?.filter(|s| !s.is_empty()) else {
-        return Ok(None);
-    };
-    let Some(at) = audiocore::instant::parse(&at) else {
-        return Ok(None);
-    };
-    if now - at.with_timezone(&Utc) > report_fresh() {
+    if !report_is_fresh(conn, now)? {
         return Ok(None);
     }
     let Some(raw) = setting(conn, REPORTED_LIVENESS_KEY)?.filter(|s| !s.is_empty()) else {

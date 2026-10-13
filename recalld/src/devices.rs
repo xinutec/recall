@@ -20,8 +20,9 @@ crate::statements! {
          ON CONFLICT(key) DO UPDATE SET value = excluded.value";
 }
 
-const BEATS_KEY: &str = "device_mic_heartbeats";
-const REPORTS_KEY: &str = "device_outbox_reports";
+/// The `settings` keys the two lists live under.
+pub const BEATS: &str = "device_mic_heartbeats";
+pub const REPORTS: &str = "device_outbox_reports";
 
 /// Client-supplied text is bounded: it is stored and shown in a health check.
 const MAX_DEVICE_LEN: usize = 64;
@@ -43,7 +44,8 @@ fn clip(value: &str, max: usize) -> String {
     value.chars().take(max).collect()
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct Beat {
     pub device: String,
     pub app: String,
@@ -58,7 +60,8 @@ pub struct Beat {
     pub at: String,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct Report {
     pub device: String,
     pub queued: i64,
@@ -190,12 +193,9 @@ pub fn forget(conn: &Connection, key: &str, device: &str) -> rusqlite::Result<bo
     Ok(true)
 }
 
-pub const BEATS: &str = BEATS_KEY;
-pub const REPORTS: &str = REPORTS_KEY;
-
 /// Every app's last beat, by device id. A bad entry is skipped.
 pub fn read_beats(conn: &Connection) -> rusqlite::Result<Vec<Beat>> {
-    let map = stored_map(conn, BEATS_KEY)?;
+    let map = stored_map(conn, BEATS)?;
     let mut devices: Vec<&String> = map.keys().collect();
     devices.sort();
     Ok(devices
@@ -205,7 +205,7 @@ pub fn read_beats(conn: &Connection) -> rusqlite::Result<Vec<Beat>> {
 }
 
 pub fn read_reports(conn: &Connection) -> rusqlite::Result<Vec<Report>> {
-    let map = stored_map(conn, REPORTS_KEY)?;
+    let map = stored_map(conn, REPORTS)?;
     let mut devices: Vec<&String> = map.keys().collect();
     devices.sort();
     Ok(devices
@@ -257,7 +257,7 @@ fn evicted(
 }
 
 pub fn record_beat(conn: &Connection, beat: &Beat, now: DateTime<Utc>) -> rusqlite::Result<()> {
-    let mut map = stored_map(conn, BEATS_KEY)?;
+    let mut map = stored_map(conn, BEATS)?;
     map.insert(
         clip(&beat.device, MAX_DEVICE_LEN),
         serde_json::json!({
@@ -274,7 +274,7 @@ pub fn record_beat(conn: &Connection, beat: &Beat, now: DateTime<Utc>) -> rusqli
     );
     set_setting(
         conn,
-        BEATS_KEY,
+        BEATS,
         &serde_json::Value::Object(evicted(map, now)).to_string(),
     )
 }
@@ -284,7 +284,7 @@ pub fn record_report(
     report: &Report,
     now: DateTime<Utc>,
 ) -> rusqlite::Result<()> {
-    let mut map = stored_map(conn, REPORTS_KEY)?;
+    let mut map = stored_map(conn, REPORTS)?;
     map.insert(
         clip(&report.device, MAX_DEVICE_LEN),
         serde_json::json!({
@@ -297,7 +297,7 @@ pub fn record_report(
     );
     set_setting(
         conn,
-        REPORTS_KEY,
+        REPORTS,
         &serde_json::Value::Object(evicted(map, now)).to_string(),
     )
 }
@@ -349,39 +349,13 @@ pub struct OutboxIn {
 }
 
 #[derive(Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct BeatOut {
-    device: String,
-    app: String,
-    version: String,
-    started_at: Option<String>,
-    streaming: bool,
-    charging: Option<bool>,
-    mic_ok: Option<bool>,
-    via_lan: Option<bool>,
-    dropped_bytes: Option<i64>,
-    at: String,
-}
-
-#[derive(Serialize)]
 pub struct BeatsOut {
-    items: Vec<BeatOut>,
-}
-
-#[derive(Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct ReportOut {
-    device: String,
-    queued: i64,
-    oldest_queued_at: Option<String>,
-    failing: i64,
-    reason: Option<String>,
-    at: String,
+    items: Vec<Beat>,
 }
 
 #[derive(Serialize)]
 pub struct ReportsOut {
-    items: Vec<ReportOut>,
+    items: Vec<Report>,
 }
 
 fn client_instant(value: Option<&str>) -> Option<String> {
@@ -444,37 +418,13 @@ pub async fn outbox_post_route(
 
 pub fn beats_out(conn: &Connection) -> rusqlite::Result<BeatsOut> {
     Ok(BeatsOut {
-        items: read_beats(conn)?
-            .into_iter()
-            .map(|b| BeatOut {
-                device: b.device,
-                app: b.app,
-                version: b.version,
-                started_at: b.started_at,
-                streaming: b.streaming,
-                charging: b.charging,
-                mic_ok: b.mic_ok,
-                via_lan: b.via_lan,
-                dropped_bytes: b.dropped_bytes,
-                at: b.at,
-            })
-            .collect(),
+        items: read_beats(conn)?,
     })
 }
 
 pub fn reports_out(conn: &Connection) -> rusqlite::Result<ReportsOut> {
     Ok(ReportsOut {
-        items: read_reports(conn)?
-            .into_iter()
-            .map(|r| ReportOut {
-                device: r.device,
-                queued: r.queued,
-                oldest_queued_at: r.oldest_queued_at,
-                failing: r.failing,
-                reason: r.reason,
-                at: r.at,
-            })
-            .collect(),
+        items: read_reports(conn)?,
     })
 }
 
