@@ -1,50 +1,8 @@
-//! Whether transcript text is trustworthy, decided from the text and its own
-//! word timings: a phone's noise suppression makes the same utterance measure
-//! differently on two microphones, which broke every signal from outside the
-//! turn. The rules are `transcript::quality` and `transcript::text`; this adds
-//! what the write-time passes need.
+//! Text rules recalld applies outside render: the live feed's refusals. The
+//! rest are `transcript::quality` and `transcript::text`.
 
-pub use audiocore::text::{is_repetition_loop, is_wordless, trim_wordless};
-use audiocore::vad::Region;
-pub use transcript::quality::{
-    FOREIGN_SCRIPT_MAX, NEAR_SILENT_S, SLOW_RATE, foreign_script_ratio, is_foreign_script,
-    is_implausibly_slow, is_latin_letter, is_silence_phrase, speaking_rate,
-};
-
-/// What the speech pass found in a clip, for the write-time sweep.
-#[derive(Debug, Clone, Default)]
-pub struct Heard {
-    /// Seconds of speech in the whole clip; negative when it could not look.
-    pub seconds: Option<f64>,
-    /// Where that speech is, seconds from the clip's start. `None` until the
-    /// pass has placed it.
-    pub regions: Option<Vec<Region>>,
-}
-
-impl Heard {
-    /// `render`'s rule for an invented silence phrase, for the old passes.
-    #[must_use]
-    pub fn invented(&self, text: &str, start: f64, end: f64) -> bool {
-        if !is_silence_phrase(text) {
-            return false;
-        }
-        let near_silent = self
-            .seconds
-            .is_some_and(|s| (0.0..NEAR_SILENT_S).contains(&s));
-        let none_here = self
-            .regions
-            .as_deref()
-            .is_some_and(|regions| speech_inside(regions, start, end) <= 0.0);
-        near_silent || none_here
-    }
-}
-
-/// Seconds of `regions` inside `[start, end)`: [`transcript::quality::speech_inside`].
-#[must_use]
-pub fn speech_inside(regions: &[Region], start: f64, end: f64) -> f64 {
-    let pairs: Vec<(f64, f64)> = regions.iter().map(|r| (r.start, r.end)).collect();
-    transcript::quality::speech_inside(&pairs, start, end)
-}
+use audiocore::text::trim_wordless;
+pub use audiocore::text::{is_repetition_loop, is_wordless};
 
 /// True if `text` is nothing but one of `names`: "Anna.", " anna ", "Anna!".
 ///
@@ -59,44 +17,4 @@ pub fn is_bare_name(text: &str, names: &[String]) -> bool {
         && names
             .iter()
             .any(|name| name.trim().eq_ignore_ascii_case(bare))
-}
-
-/// One word as the model timed it.
-#[derive(Debug, Clone, PartialEq)]
-pub struct Word {
-    pub start: f64,
-    pub end: f64,
-    pub text: String,
-}
-
-/// The words of a stored `word_timings`, in either encoding: recalld's
-/// `{s,e,w}`, turn-relative, or the shim's `{start,end,text,probability}`,
-/// clip-relative (not comparable across turns).
-#[must_use]
-pub fn timed_words(timings: &str) -> Vec<Word> {
-    let Ok(serde_json::Value::Array(items)) = serde_json::from_str(timings) else {
-        return Vec::new();
-    };
-    items
-        .iter()
-        .filter_map(|w| {
-            let start = w.get("s").or_else(|| w.get("start"))?.as_f64()?;
-            let end = w.get("e").or_else(|| w.get("end"))?.as_f64()?;
-            let text = w.get("w").or_else(|| w.get("text"))?.as_str()?;
-            Some(Word {
-                start,
-                end,
-                text: text.to_owned(),
-            })
-        })
-        .collect()
-}
-
-/// Word spans out of a stored `word_timings` value, via [`timed_words`].
-#[must_use]
-pub fn word_spans(timings: &str) -> Vec<(f64, f64)> {
-    timed_words(timings)
-        .into_iter()
-        .map(|w| (w.start, w.end))
-        .collect()
 }

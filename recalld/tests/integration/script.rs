@@ -1,7 +1,7 @@
 //! Which script a turn is written in: a turn mostly in a foreign script is a
 //! hallucination.
 
-use recalld::quality::{foreign_script_ratio, is_foreign_script};
+use transcript::quality::{foreign_script_ratio, is_foreign_script};
 
 /// The household's own languages read as fully Latin, diacritics and all.
 #[test]

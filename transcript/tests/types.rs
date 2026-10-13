@@ -60,8 +60,6 @@ fn spans_overlap_only_when_they_share_time() {
         !span(0, 10).overlaps(span(10, 20)),
         "touching ends do not overlap"
     );
-    assert_eq!(span(0, 10).intersection(span(5, 15)), Some(span(5, 10)));
-    assert_eq!(span(0, 10).intersection(span(10, 20)), None);
     assert!(span(0, 10).contains(us(0)));
     assert!(!span(0, 10).contains(us(10)));
 }

@@ -151,12 +151,12 @@ pub struct LiveTurn {
     pub language: Option<String>,
 }
 
-/// Store pushed live turns: provisional, audio-less lines shown until the
-/// archive pass writes their minute. `created_utc` records the tier's latency.
+/// Store pushed live turns: provisional, audio-less lines the view shows until
+/// a transcribed clip covers their start. `created_utc` records the tier's
+/// latency.
 ///
-/// Idempotent by (start, text) among live turns, so a retried push neither
-/// duplicates a turn nor brings back a reconciled one. Loops, wordless text
-/// and bare names are dropped and not counted.
+/// Idempotent by (start, text), so a retried push does not duplicate a turn.
+/// Loops, wordless text and bare names are dropped and not counted.
 pub fn ingest_live(
     conn: &mut Connection,
     turns: &[LiveTurn],

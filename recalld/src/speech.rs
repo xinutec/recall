@@ -134,19 +134,29 @@ pub fn parse_regions(json: &str) -> Option<Vec<Region>> {
     )
 }
 
+/// What the speech pass found in a clip.
+#[derive(Debug, Clone, Default)]
+pub struct Heard {
+    /// Seconds of speech in the whole clip; negative when it could not look.
+    pub seconds: Option<f64>,
+    /// Where that speech is, seconds from the clip's start. `None` until the
+    /// pass has placed it.
+    pub regions: Option<Vec<Region>>,
+}
+
 /// What the pass found in one blob; each part `None` until measured.
 ///
 /// # Errors
 /// On database failure.
-pub fn heard(ingest: &Connection, filename: &str) -> rusqlite::Result<crate::quality::Heard> {
+pub fn heard(ingest: &Connection, filename: &str) -> rusqlite::Result<Heard> {
     use rusqlite::OptionalExtension as _;
     let row: Option<(f64, Option<String>)> = HEARD
         .query_row(ingest, [filename], |r| Ok((r.get(0)?, r.get(1)?)))
         .optional()?;
     let Some((seconds, regions)) = row else {
-        return Ok(crate::quality::Heard::default());
+        return Ok(Heard::default());
     };
-    Ok(crate::quality::Heard {
+    Ok(Heard {
         seconds: Some(seconds),
         regions: regions.as_deref().and_then(parse_regions),
     })

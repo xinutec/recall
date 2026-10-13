@@ -49,12 +49,6 @@ impl Span {
         self.start < other.end && other.start < self.end
     }
 
-    /// The shared stretch, if any.
-    pub fn intersection(self, other: Self) -> Option<Self> {
-        Self::new(self.start.max(other.start), self.end.min(other.end))
-            .filter(|shared| shared.micros() > 0)
-    }
-
     /// The smallest span containing both.
     #[must_use]
     pub fn cover(self, other: Self) -> Self {

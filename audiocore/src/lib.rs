@@ -5,10 +5,8 @@
 //! (a segment's name, whether audio is speech, whether a turn's text says
 //! anything) lives here so it has one answer.
 
-pub mod align;
 pub mod capture_log;
 pub mod decode;
-pub mod envelope;
 pub mod instant;
 pub mod job;
 pub mod names;

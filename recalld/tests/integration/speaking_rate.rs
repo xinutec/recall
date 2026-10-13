@@ -1,6 +1,6 @@
-//! The turn's own speaking rate, and the two ways word timings are stored.
+//! A line's own speaking rate (`transcript::quality`).
 
-use recalld::quality::{SLOW_RATE, is_implausibly_slow, speaking_rate, word_spans};
+use transcript::quality::{SLOW_RATE, is_implausibly_slow, speaking_rate};
 
 /// Word spans at a steady `rate`, starting at zero.
 fn at_rate(words: usize, rate: f64) -> Vec<(f64, f64)> {
@@ -49,29 +49,6 @@ fn the_cut_is_read_from_the_rule_rather_than_copied_beside_it() {
     let just_over = at_rate(6, SLOW_RATE * 1.1);
     assert!(is_implausibly_slow(&just_under));
     assert!(!is_implausibly_slow(&just_over));
-}
-
-#[test]
-fn both_stored_timing_encodings_are_read() {
-    // `diarized` writes `{s,e,w}`, turn-relative; `turns` stores the shim's
-    // `{start,end,probability,text}`, clip-relative.
-    let ours = r#"[{"s":0.0,"e":0.4,"w":"one"},{"s":11.0,"e":11.3,"w":"two"}]"#;
-    let shims = r#"[{"start":32.0,"end":32.4,"probability":0.9,"text":"one"},
-                    {"start":43.0,"end":43.3,"probability":0.8,"text":"two"}]"#;
-    assert_eq!(word_spans(ours), vec![(0.0, 0.4), (11.0, 11.3)]);
-    assert_eq!(word_spans(shims), vec![(32.0, 32.4), (43.0, 43.3)]);
-    // The same junk, spelled both ways, gets the same verdict.
-    assert!(is_implausibly_slow(&word_spans(ours)));
-    assert!(is_implausibly_slow(&word_spans(shims)));
-}
-
-#[test]
-fn a_turn_with_no_usable_timings_accuses_nobody() {
-    // An absent or unreadable encoding gives no verdict.
-    for timings in ["", "not json", "{}", "[]", r#"[{"probability":0.9}]"#] {
-        assert!(word_spans(timings).is_empty(), "{timings:?}");
-        assert!(!is_implausibly_slow(&word_spans(timings)), "{timings:?}");
-    }
 }
 
 #[test]
