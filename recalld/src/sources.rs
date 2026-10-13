@@ -18,11 +18,8 @@ crate::statements! {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum SourceKind {
     CoreAudio,
-    Lavfi,
-    Rtsp,
     TcpPcm,
     Upload,
-    Discovered,
     /// A stream built rather than recorded (the retired room stream). Not a
     /// device: measuring it would double-count the mic whose audio it carries.
     Derived,
@@ -33,11 +30,8 @@ impl SourceKind {
     pub fn parse(raw: &str) -> Option<Self> {
         Some(match raw {
             "coreaudio" => Self::CoreAudio,
-            "lavfi" => Self::Lavfi,
-            "rtsp" => Self::Rtsp,
             "tcp_pcm" => Self::TcpPcm,
             "upload" => Self::Upload,
-            "discovered" => Self::Discovered,
             "derived" => Self::Derived,
             _ => return None,
         })
@@ -47,21 +41,16 @@ impl SourceKind {
     pub fn as_str(self) -> &'static str {
         match self {
             Self::CoreAudio => "coreaudio",
-            Self::Lavfi => "lavfi",
-            Self::Rtsp => "rtsp",
             Self::TcpPcm => "tcp_pcm",
             Self::Upload => "upload",
-            Self::Discovered => "discovered",
             Self::Derived => "derived",
         }
     }
 
-    /// A recorder whose up-or-down state is a real question. `Discovered` is
-    /// audio found on disk with no registered source; a real recorder's agent
-    /// registers its true kind on start.
+    /// A recorder whose up-or-down state is a real question.
     #[must_use]
     pub fn is_device(self) -> bool {
-        !matches!(self, Self::Upload | Self::Discovered | Self::Derived)
+        !matches!(self, Self::Upload | Self::Derived)
     }
 }
 

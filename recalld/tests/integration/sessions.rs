@@ -229,15 +229,6 @@ fn diarized_meeting(source: &str) -> tempfile::TempDir {
                 )
                 .expect("job");
         }
-        recalld::ledger::record(
-            &ingest,
-            Kind::DiarizeSegment,
-            &filename,
-            recalld::ledger::Outcome::Aligned,
-            None,
-            &crate::stamp(NOW),
-        )
-        .expect("ledger row");
     }
     dir
 }
@@ -247,17 +238,6 @@ fn open_jobs(root: &std::path::Path, kind: &str) -> i64 {
         .expect("ingest")
         .query_row(
             "SELECT count(*) FROM jobs WHERE kind = ?1 AND state = 'queued' AND done_utc IS NULL",
-            [kind],
-            |r| r.get(0),
-        )
-        .expect("count")
-}
-
-fn ledgered(root: &std::path::Path, kind: &str) -> i64 {
-    recalld::store::open(root)
-        .expect("ingest")
-        .query_row(
-            "SELECT count(*) FROM pass_ledger WHERE kind = ?1",
             [kind],
             |r| r.get(0),
         )
@@ -278,11 +258,6 @@ fn rediarizing_requeues_every_clip_of_the_meeting_and_nothing_else() {
         open_jobs(root, "diarize-segment"),
         2,
         "both clips are leasable again"
-    );
-    assert_eq!(
-        ledgered(root, "diarize-segment"),
-        0,
-        "the pass will decide them afresh"
     );
     // The words stand: only who said them is re-derived.
     assert_eq!(open_jobs(root, "transcribe-segment"), 0);

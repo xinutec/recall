@@ -1,5 +1,5 @@
 //! The ingest plane's bookkeeping: one row per stored blob, in
-//! `<root>/ingest.sqlite`. Append-only (decision 2), except
+//! `<root>/ingest.sqlite`. Append-only, except
 //! [`forget_upload`].
 
 use rusqlite::{Connection, OptionalExtension};
@@ -36,10 +36,20 @@ crate::statements! {
          ORDER BY start_utc, filename LIMIT ?3";
 }
 
-/// A byte count; negative is an out-of-range error.
-fn byte_count(r: &rusqlite::Row<'_>, column: usize) -> rusqlite::Result<u64> {
-    let stored: i64 = r.get(column)?;
-    u64::try_from(stored).map_err(|_| rusqlite::Error::IntegralValueOutOfRange(column, stored))
+/// A `segments` row, in [`LOOKUP`]'s column order. A negative byte count is an
+/// out-of-range error.
+fn row(r: &rusqlite::Row<'_>) -> rusqlite::Result<Row> {
+    let bytes: i64 = r.get(3)?;
+    Ok(Row {
+        source: r.get(0)?,
+        filename: r.get(1)?,
+        start_utc: r.get(2)?,
+        bytes: u64::try_from(bytes)
+            .map_err(|_| rusqlite::Error::IntegralValueOutOfRange(3, bytes))?,
+        sha256: r.get(4)?,
+        received_utc: r.get(5)?,
+        sent_utc: r.get(6)?,
+    })
 }
 
 /// One stored segment, as the read side serves it.
@@ -56,8 +66,7 @@ pub struct Row {
     pub sent_utc: Option<String>,
 }
 
-/// The retired room stream (#1388); its rows stay as history and the passes
-/// skip them.
+/// The retired room stream: its rows stay as history and the passes skip them.
 pub const ROOM_SOURCE: &str = "room";
 pub const ROOM_KIND: &str = "derived";
 
@@ -112,19 +121,7 @@ pub fn insert(conn: &Connection, row: &Row) -> rusqlite::Result<()> {
 }
 
 pub fn lookup(conn: &Connection, filename: &str) -> rusqlite::Result<Option<Row>> {
-    LOOKUP
-        .query_row(conn, [filename], |r| {
-            Ok(Row {
-                source: r.get(0)?,
-                filename: r.get(1)?,
-                start_utc: r.get(2)?,
-                bytes: byte_count(r, 3)?,
-                sha256: r.get(4)?,
-                received_utc: r.get(5)?,
-                sent_utc: r.get(6)?,
-            })
-        })
-        .optional()
+    LOOKUP.query_row(conn, [filename], row).optional()
 }
 
 /// Stored segments, optionally of one source and since an instant, in capture
@@ -137,16 +134,6 @@ pub fn list(
 ) -> rusqlite::Result<Vec<Row>> {
     let sql = if source.is_some() { LIST_SOURCE } else { LIST };
     let mut stmt = sql.prepare(conn)?;
-    let rows = stmt.query_map(rusqlite::params![source, since, limit], |r| {
-        Ok(Row {
-            source: r.get(0)?,
-            filename: r.get(1)?,
-            start_utc: r.get(2)?,
-            bytes: byte_count(r, 3)?,
-            sha256: r.get(4)?,
-            received_utc: r.get(5)?,
-            sent_utc: r.get(6)?,
-        })
-    })?;
+    let rows = stmt.query_map(rusqlite::params![source, since, limit], row)?;
     rows.collect()
 }

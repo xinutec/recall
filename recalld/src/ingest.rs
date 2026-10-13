@@ -6,7 +6,7 @@
 //!   then the row, then the receipt. A crash leaves nothing, or a blob the next
 //!   identical PUT heals a row for.
 //! - Append-only: identical bytes are idempotent; different bytes under a
-//!   taken name are 409. There is no delete endpoint (decision 2).
+//!   taken name are 409. There is no delete endpoint.
 //! - A device token can only write. Reading takes the sync token.
 
 use crate::app::Config;

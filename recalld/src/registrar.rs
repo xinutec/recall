@@ -86,7 +86,7 @@ pub fn register_segments(
         if probes >= limit {
             break;
         }
-        let decided = |outcome| record(ingest, PassKind::Register, &filename, outcome, None, now);
+        let decided = |outcome| record(ingest, PassKind::Register, &filename, outcome, now);
         if have.contains(&filename) {
             decided(Outcome::AlreadyRegistered)?;
             out.known += 1;

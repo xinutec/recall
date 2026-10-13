@@ -340,7 +340,6 @@ pub fn write_pass(
                 Kind::EnrollSpeaker,
                 &filename,
                 Outcome::Unreadable,
-                None,
                 now,
             )?;
             continue;
@@ -351,7 +350,6 @@ pub fn write_pass(
                 Kind::EnrollSpeaker,
                 &filename,
                 Outcome::Refused,
-                None,
                 now,
             )?;
             continue;
@@ -378,7 +376,7 @@ pub fn write_pass(
         } else {
             Outcome::NothingEnrolled
         };
-        record(ingest, Kind::EnrollSpeaker, &filename, outcome, None, now)?;
+        record(ingest, Kind::EnrollSpeaker, &filename, outcome, now)?;
     }
     Ok(pass)
 }

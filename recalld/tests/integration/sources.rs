@@ -32,7 +32,7 @@ fn sources() -> Vec<SourceRow> {
         SourceRow {
             id: "geb".into(),
             name: "geb".into(),
-            kind: SourceKind::Rtsp,
+            kind: SourceKind::CoreAudio,
         },
     ]
 }
@@ -226,23 +226,16 @@ fn the_fleet_lag_widens_every_window_by_the_report_cadence() {
         active_window(SourceKind::CoreAudio, true),
         Duration::seconds(82)
     );
-    // Every non-streaming kind takes the watchdog window, not just the mic.
-    assert_eq!(
-        active_window(SourceKind::Rtsp, false),
-        Duration::seconds(75)
-    );
 }
 
 #[test]
 fn only_real_recorders_are_devices() {
-    // An upload is a clip somebody sent and a discovered source has no known
-    // producer; neither is a machine that can be "up".
+    // An upload is a clip somebody sent and the room stream was built from
+    // other mics; neither is a machine that can be "up".
     assert!(SourceKind::CoreAudio.is_device());
     assert!(SourceKind::TcpPcm.is_device());
-    assert!(SourceKind::Rtsp.is_device());
-    assert!(SourceKind::Lavfi.is_device());
     assert!(!SourceKind::Upload.is_device());
-    assert!(!SourceKind::Discovered.is_device());
+    assert!(!SourceKind::Derived.is_device());
 }
 
 #[test]
@@ -504,7 +497,7 @@ async fn a_pause_silences_delivered_evidence_for_every_kind() {
 /// A store-and-forward recorder has no marker: delivery counts.
 #[tokio::test]
 async fn a_recorder_that_streams_to_nothing_proves_itself_by_delivering() {
-    let (_dir, root) = root_with(&[("geb", "geb", "rtsp")]);
+    let (_dir, root) = root_with(&[("geb", "geb", "coreaudio")]);
     let conn = recalld::work::open_write(&root).expect("db");
     let at = now();
     // Running, and the Mac reports no marker for geb: it never streams.

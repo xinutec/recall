@@ -1,9 +1,6 @@
-//! The passes' ledger (`pass_ledger` in `ingest.sqlite`): each terminal decision
-//! a pass made about a clip without writing a turn, so the clip is not decided
-//! again. Written turns are their own record; deleting them re-enables a clip.
-//!
-//! The outcome is one word from [`Outcome`]; counts go in `detail` as JSON, so
-//! the table groups by outcome without parsing sentences.
+//! The passes' ledger (`pass_ledger` in `ingest.sqlite`): the terminal decision
+//! a pass made about a clip, so the clip is not decided again. Deleting a row
+//! lets the pass decide it afresh.
 
 use audiocore::instant::Stamp;
 use audiocore::job::Kind;
@@ -12,7 +9,7 @@ use rusqlite::types::ToSqlOutput;
 crate::statements! {
     RECORD: Ingest =
         "INSERT OR REPLACE INTO pass_ledger (kind, filename, outcome, detail, decided_utc)
-         VALUES (?1, ?2, ?3, ?4, ?5)";
+         VALUES (?1, ?2, ?3, NULL, ?4)";
 }
 
 /// Which pass decided a clip: a job kind's, or registration's, which has no job.
@@ -52,37 +49,11 @@ pub enum Outcome {
     AlreadyRegistered,
     /// Another copy of the same minute already holds it.
     CoveredBySibling,
-    // Any pass.
     /// The filename is not a segment name.
     Unnameable,
+    // Any pass.
     /// The file or the stored result cannot be read.
     Unreadable,
-    /// The clip was deleted; its audio is never coming.
-    Deleted,
-    // Transcription.
-    /// The clip's audio row has no readable end.
-    Unspanned,
-    /// Decided, and every turn was swept or refused.
-    NothingToWrite,
-    // Diarization.
-    /// Speaker-split turns replaced the clip's turns.
-    Aligned,
-    /// The clip's turns were named in place. Detail: `turns`, `speakers`.
-    Attributed,
-    /// No words or no speaker spans.
-    NothingAligned,
-    /// Every turn dropped. Detail: `loops`, `corrected`.
-    AllTurnsFiltered,
-    /// The transcription carries no usable words.
-    AllSegmentsLooped,
-    /// Far less text than what exists. Detail: `new_chars`, `existing_chars`.
-    CoverageGuard,
-    /// Fewer turns than exist and nothing to name. Detail: `produced`,
-    /// `existing`, `speakers`.
-    Undiscriminating,
-    /// The clip's lines predate its stored result and stay as they are: the
-    /// result is fetched for render only (#1916).
-    LinesPredateResult,
     // Enrolment.
     Enrolled,
     NothingEnrolled,
@@ -90,7 +61,7 @@ pub enum Outcome {
 }
 
 impl Outcome {
-    /// The stored spelling. Older rows carry the same words.
+    /// The stored spelling.
     pub const fn as_str(self) -> &'static str {
         match self {
             Self::Registered => "registered",
@@ -98,17 +69,6 @@ impl Outcome {
             Self::CoveredBySibling => "covered-by-sibling",
             Self::Unnameable => "unnameable",
             Self::Unreadable => "unreadable",
-            Self::Deleted => "deleted",
-            Self::Unspanned => "unspanned",
-            Self::NothingToWrite => "nothing-to-write",
-            Self::Aligned => "aligned",
-            Self::Attributed => "attributed",
-            Self::NothingAligned => "nothing-aligned",
-            Self::AllTurnsFiltered => "all-turns-filtered",
-            Self::AllSegmentsLooped => "all-segments-looped",
-            Self::CoverageGuard => "coverage-guard",
-            Self::Undiscriminating => "undiscriminating",
-            Self::LinesPredateResult => "lines-predate-result",
             Self::Enrolled => "enrolled",
             Self::NothingEnrolled => "nothing",
             Self::Refused => "refused",
@@ -122,27 +82,14 @@ impl rusqlite::ToSql for Outcome {
     }
 }
 
-/// Record a pass's terminal decision on a clip, with its counts if any.
-///
-/// A reversal must clear both the pass's turns and these rows, or the clips it
-/// declined stay decided for ever.
+/// Record a pass's terminal decision on a clip.
 pub fn record(
     conn: &rusqlite::Connection,
     kind: impl Into<PassKind>,
     filename: &str,
     outcome: Outcome,
-    detail: Option<&serde_json::Value>,
     now: &Stamp,
 ) -> rusqlite::Result<()> {
-    RECORD.execute(
-        conn,
-        rusqlite::params![
-            kind.into(),
-            filename,
-            outcome,
-            detail.map(serde_json::Value::to_string),
-            now
-        ],
-    )?;
+    RECORD.execute(conn, rusqlite::params![kind.into(), filename, outcome, now])?;
     Ok(())
 }

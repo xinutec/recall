@@ -1,5 +1,5 @@
 //! Router assembly. The ingest plane has no DELETE route, by design
-//! (docs/architecture.md, decision 2).
+//! (docs/architecture.md, principle 5).
 //!
 //! Three planes, gated differently: ingest and work take their own tokens, the
 //! sync plane its shared secret, and the browsing plane sits behind the

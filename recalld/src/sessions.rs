@@ -41,9 +41,6 @@ crate::statements! {
         "UPDATE jobs SET state = 'queued', leased_until = NULL, done_utc = NULL
          WHERE kind = ?1 AND done_utc IS NOT NULL
            AND filename IN (SELECT filename FROM segments WHERE source = ?2)";
-    CLEAR_DIARIZE_LEDGER: Ingest =
-        "DELETE FROM pass_ledger WHERE kind = ?1
-           AND filename IN (SELECT filename FROM segments WHERE source = ?2)";
     SESSION_TURNS: Meaning =
         "SELECT t.start_utc, t.text, t.speaker_label, t.speaker_cluster \
          FROM rendered_lines t \
@@ -177,9 +174,9 @@ pub fn rename(conn: &Connection, source: &str, title: &str) -> Result<(), Sessio
     Ok(())
 }
 
-/// Diarize a whole session again: its finished diarize jobs are re-queued and
-/// their ledger rows cleared, so the pass decides afresh. Returns how many were
-/// re-queued; zero if none had finished.
+/// Diarize a whole session again: its finished diarize jobs are re-queued, and
+/// each clip keeps its result until the new one replaces it. Returns how many
+/// were re-queued; zero if none had finished.
 pub fn rediarize(
     meaning: &Connection,
     ingest: &Connection,
@@ -192,7 +189,6 @@ pub fn rediarize(
     }
     let tx = crate::sql::write_shared(ingest)?;
     let requeued = REQUEUE_DIARIZE.execute(&tx, (audiocore::job::Kind::DiarizeSegment, source))?;
-    CLEAR_DIARIZE_LEDGER.execute(&tx, (audiocore::job::Kind::DiarizeSegment, source))?;
     tx.commit()?;
     Ok(requeued)
 }
