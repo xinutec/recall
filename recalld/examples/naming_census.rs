@@ -185,29 +185,37 @@ fn main() {
     merged(&scored);
 }
 
-/// A voice people named as two different persons is two speakers the
-/// diarizer merged: no print can name both halves right.
+/// A naming on a voice people mostly named as someone else: the diarizer put
+/// it with another speaker, and no print can name it right. A voice with a
+/// few stray namings is not counted as merged for them.
 fn merged(scored: &[Scored]) {
-    let mut names: HashMap<&(i64, String), std::collections::BTreeSet<&str>> = HashMap::new();
+    let mut names: HashMap<&(i64, String), HashMap<&str, usize>> = HashMap::new();
     for s in scored {
-        names.entry(&s.voice).or_default().insert(&s.named);
+        *names
+            .entry(&s.voice)
+            .or_default()
+            .entry(&s.named)
+            .or_default() += 1;
     }
+    let majority = |v: &(i64, String)| {
+        names[v]
+            .iter()
+            .max_by_key(|(name, n)| (**n, std::cmp::Reverse(**name)))
+            .map(|(name, _)| *name)
+    };
     for upload in [false, true] {
-        let wrong: Vec<&Scored> = scored
+        let mine: Vec<&Scored> = scored
             .iter()
-            .filter(|s| s.upload == upload && s.known && s.named != s.guessed)
+            .filter(|s| s.upload == upload && s.known)
             .collect();
-        let merged = wrong.iter().filter(|s| names[&s.voice].len() > 1).count();
-        let voices: std::collections::BTreeSet<&(i64, String)> = scored
-            .iter()
-            .filter(|s| s.upload == upload)
-            .map(|s| &s.voice)
-            .collect();
-        let mixed = voices.iter().filter(|v| names[*v].len() > 1).count();
+        let minority = |s: &&&Scored| majority(&s.voice) != Some(s.named.as_str());
+        let wrong: Vec<&&Scored> = mine.iter().filter(|s| s.named != s.guessed).collect();
         println!(
-            "\n{}: {mixed} of {} named voices carry two or more people; {merged} of {} wrong guesses sit on one",
+            "\n{}: {} of {} namings sit on a voice mostly named as someone else; {} of {} wrong guesses do",
             if upload { "uploads" } else { "microphones" },
-            voices.len(),
+            mine.iter().filter(|s| minority(s)).count(),
+            mine.len(),
+            wrong.iter().filter(|s| minority(s)).count(),
             wrong.len()
         );
     }
