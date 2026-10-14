@@ -160,26 +160,6 @@ class ResumeWarningPlanTest {
     }
 
     @Test
-    fun fallsBackToConfirmedResumeWhenDesiredIsAbsent() {
-        // Old server sends only the confirmed view; desiredPausedUntil mirrors it via
-        // the parser, but guard the null-desired path directly too.
-        val onlyConfirmed =
-            CaptureState(
-                running = false,
-                pausedUntil = "2026-07-04T08:30:00+00:00",
-                desiredRunning = false,
-                desiredPausedUntil = null,
-                settled = true,
-                micReachable = true,
-                stateToken = "t",
-            )
-        val warn =
-            planResumeWarning(onlyConfirmed, Instant.parse("2026-07-04T06:00:00Z"), lead)
-                as ResumeWarningPlan.Warn
-        assertEquals(Instant.parse("2026-07-04T06:30:00Z"), warn.at)
-    }
-
-    @Test
     fun ignoresAnUnparseableResumeTime() {
         assertEquals(
             ResumeWarningPlan.Cancel,

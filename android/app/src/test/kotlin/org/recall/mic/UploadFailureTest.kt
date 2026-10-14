@@ -36,6 +36,12 @@ class UploadFailureTest {
     }
 
     @Test
+    fun aDeletedRecordingSaysTheDeletionIsFinal() {
+        val said = UploadFailure.describe(IllegalStateException("HTTP 410"))
+        assertTrue(said, said.contains("deleted"))
+    }
+
+    @Test
     fun aServerErrorSaysThereIsNothingToDoHere() {
         val said = UploadFailure.describe(IllegalStateException("HTTP 503"))
         assertTrue(said, said.contains("503"))

@@ -134,13 +134,7 @@ final class AudioCapture {
         onPCM?(data)
 
         let samples = UnsafeBufferPointer(start: ch[0], count: count)
-        var peak: Int32 = 0
-        for s in samples {
-            let a = Int32(s).magnitude
-            if Int32(a) > peak { peak = Int32(a) }
-        }
-        let level = Levels.meter(fromPeak: Float(peak) / 32768.0)
-        onLevel?(level)
+        onLevel?(Levels.meter(fromPeak: Levels.peakNormalised(samples)))
     }
 
     @objc private func handleInterruption(_ note: Notification) {

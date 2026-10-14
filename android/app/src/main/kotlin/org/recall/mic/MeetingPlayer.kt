@@ -65,9 +65,6 @@ object MeetingPlayer {
         _durationMs.value = 0L
     }
 
-    /** [stop], named for the lifecycle callers. */
-    fun release() = stop()
-
     private fun load(target: File) {
         stop()
         val mp = MediaPlayer()

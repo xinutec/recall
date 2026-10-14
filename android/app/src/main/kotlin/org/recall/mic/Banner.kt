@@ -56,8 +56,8 @@ object Banner {
         return "Recording paused — auto-resumes in ${remaining(until.toInstant(), now)} (by $by)"
     }
 
-    /** Time left as "5h 23m", "23m" or "now", as format.ts `durationUntil`. */
-    private fun remaining(until: Instant, now: Instant): String {
+    /** Time left as "5h 23m", "2h 0m", "23m" or "now", as format.ts `durationUntil`. */
+    fun remaining(until: Instant, now: Instant): String {
         val mins =
             max(
                 0L,

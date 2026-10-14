@@ -5,8 +5,6 @@ import java.time.Instant
 import java.time.OffsetDateTime
 import java.time.ZoneId
 import java.time.format.DateTimeFormatter
-import kotlin.math.max
-import kotlin.math.roundToLong
 
 /*
  * Whether and when to warn that recording is about to resume, so the pause can be
@@ -45,9 +43,15 @@ fun planResumeWarning(
     // A failed poll.
     if (capture == null) return ResumeWarningPlan.Leave
     if (capture.desiredRunning) return ResumeWarningPlan.Cancel
-    val resumeIso = capture.desiredPausedUntil ?: capture.pausedUntil
     val resumeAt =
-        resumeIso?.let { runCatching { OffsetDateTime.parse(it).toInstant() }.getOrNull() }
+        capture.desiredPausedUntil?.let {
+            runCatching {
+                OffsetDateTime
+                    .parse(
+                        it,
+                    ).toInstant()
+            }.getOrNull()
+        }
             ?: return ResumeWarningPlan.Cancel
     if (!resumeAt.isAfter(now)) return ResumeWarningPlan.Cancel
     val warnAt = resumeAt.minus(lead)
@@ -62,20 +66,6 @@ fun planResumeWarning(
  */
 fun resumeWarningText(resumeAt: Instant, now: Instant, zone: ZoneId): String {
     val by = OffsetDateTime.ofInstant(resumeAt, zone).format(WARNING_DATE_TIME)
-    return "Recording auto-resumes in ${remaining(resumeAt, now)} (by $by) — " +
+    return "Recording auto-resumes in ${Banner.remaining(resumeAt, now)} (by $by) — " +
         "tap to extend the pause"
-}
-
-/** Time left as "2h 0m", "23m" or "now": whole minutes, never negative. Unlike the
- *  Banner's, keeps "0m" at a whole hour. */
-private fun remaining(until: Instant, now: Instant): String {
-    val mins =
-        max(
-            0L,
-            (until.toEpochMilli() - now.toEpochMilli()).toDouble().div(60_000).roundToLong(),
-        )
-    if (mins == 0L) return "now"
-    val h = mins / 60
-    val m = mins % 60
-    return if (h > 0) "${h}h ${m}m" else "${m}m"
 }

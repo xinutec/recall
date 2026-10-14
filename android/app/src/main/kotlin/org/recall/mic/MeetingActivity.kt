@@ -98,7 +98,7 @@ class MeetingActivity : ComponentActivity() {
     }
 
     override fun onStop() {
-        MeetingPlayer.release()
+        MeetingPlayer.stop()
         super.onStop()
     }
 

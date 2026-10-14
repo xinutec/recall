@@ -104,7 +104,7 @@ class ShareActivity : ComponentActivity() {
                 finish()
             }.onFailure {
                 Log.w("recall.share", "upload failed", it)
-                state = UiState.Failed("Couldn't reach the recall host on your network.")
+                state = UiState.Failed(UploadFailure.describe(it))
             }
     }
 

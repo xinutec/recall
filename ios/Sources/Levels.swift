@@ -6,7 +6,7 @@ enum Levels {
     static let floorDbfs: Float = -70
 
     /// Peak amplitude of a block of signed 16-bit samples, normalised to 0...1.
-    static func peakNormalised(_ samples: [Int16]) -> Float {
+    static func peakNormalised<S: Sequence>(_ samples: S) -> Float where S.Element == Int16 {
         var peak: Int32 = 0
         for s in samples {
             let a = Int32(s).magnitude

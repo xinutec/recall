@@ -1,14 +1,14 @@
 package org.recall.mic
 
-import java.io.IOException
 import java.net.ConnectException
 import java.net.SocketTimeoutException
 import java.net.UnknownHostException
 
 /**
- * Why an upload failed, as one of the four causes with different fixes: a wrong token
- * (Settings), no route home (wait, or fix the control host), a refused file (look at
- * the recording), or a server fault (nothing to do). A bare 401 in the log once went
+ * Why an upload failed, as one of the causes with different fixes: a wrong token
+ * (Settings), no route home (wait, or fix the control host), a recording deleted in
+ * recall (it stays deleted), a refused file (look at the recording), or a server fault
+ * (nothing to do). A bare 401 in the log once went
  * unnoticed for months.
  *
  * The text is written here, never copied from the throwable, which could carry the
@@ -19,6 +19,8 @@ object UploadFailure {
     private const val UNREACHABLE =
         "Couldn't reach recall. Check the control host in Settings, or try again from home."
     private const val UNKNOWN = "Upload failed. It will keep trying."
+    private const val DELETED =
+        "This recording was deleted in recall, and a deletion is final. Delete it here too."
 
     /** What [ShareUpload] raises for a non-2xx. */
     private val STATUS = Regex("""^HTTP (\d{3})$""")
@@ -41,8 +43,6 @@ object UploadFailure {
             // One situation from the phone, with one fix.
             is ConnectException, is UnknownHostException, is SocketTimeoutException -> UNREACHABLE
 
-            is IOException -> UNKNOWN
-
             else -> UNKNOWN
         }
     }
@@ -51,6 +51,10 @@ object UploadFailure {
         when {
             status == 401 || status == 403 -> {
                 AUTH
+            }
+
+            status == 410 -> {
+                DELETED
             }
 
             // The server refused the file; the phone still has it.
