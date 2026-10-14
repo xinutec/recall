@@ -466,6 +466,47 @@ async fn a_language_outside_the_households_is_refused_before_anything_is_stored(
     );
 }
 
+#[tokio::test]
+async fn a_deleted_meeting_uploaded_again_is_gone_and_nothing_is_stored() {
+    let dir = scratch();
+    let start = [("start", "2026-07-03T09:50:00+01:00")];
+    match upload(dir.path(), &start).await {
+        0 => return eprintln!("skipped: no ffmpeg on this host"),
+        status => assert_eq!(status, 200),
+    }
+    let deleted = gated(dir.path())
+        .oneshot(
+            Request::delete("/api/sessions/meeting-20260703-0950")
+                .header("cookie", cookie())
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .expect("call");
+    assert_eq!(deleted.status(), 200);
+
+    assert_eq!(upload(dir.path(), &start).await, 410);
+
+    let conn = Connection::open(dir.path().join("recall.sqlite")).expect("db");
+    let rows: i64 = conn
+        .query_row(
+            "SELECT (SELECT count(*) FROM sources) + (SELECT count(*) FROM audio_segments)",
+            [],
+            |r| r.get(0),
+        )
+        .expect("count");
+    assert_eq!(rows, 0);
+    let ingest = recalld::store::open(dir.path()).expect("ingest db");
+    let segments: i64 = ingest
+        .query_row("SELECT count(*) FROM segments", [], |r| r.get(0))
+        .expect("count");
+    assert_eq!(segments, 0);
+    assert!(
+        !recalld::store::source_dir(dir.path(), "meeting-20260703-0950").exists(),
+        "no file written"
+    );
+}
+
 #[test]
 fn a_start_is_kept_to_the_second() {
     assert_eq!(

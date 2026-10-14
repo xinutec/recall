@@ -1,5 +1,5 @@
 import { ChangeDetectionStrategy, Component, computed, inject, signal } from '@angular/core';
-import { httpResource } from '@angular/common/http';
+import { HttpErrorResponse, httpResource } from '@angular/common/http';
 import { Router } from '@angular/router';
 import { MatCardModule } from '@angular/material/card';
 import { MatButtonModule } from '@angular/material/button';
@@ -91,9 +91,14 @@ export class Sessions {
         this.data.reload();
         this.snack.open(`Uploaded “${s.title}” — transcribing…`, undefined, { duration: 4000 });
       },
-      error: () => {
+      error: (err: unknown) => {
         this.uploading.set(false);
-        this.snack.open('Upload failed', 'Dismiss', { duration: 5000 });
+        const deleted = err instanceof HttpErrorResponse && err.status === 410;
+        this.snack.open(
+          deleted ? 'That recording was deleted, and a deletion is final' : 'Upload failed',
+          'Dismiss',
+          { duration: 5000 },
+        );
       },
     });
   }

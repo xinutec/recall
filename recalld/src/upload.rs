@@ -20,6 +20,8 @@ crate::statements! {
         "INSERT OR IGNORE INTO audio_segments \
              (source_id, path, start_utc, end_utc, sample_rate, channels) \
          VALUES (?1, ?2, ?3, ?4, ?5, ?6)";
+    WAS_DELETED: Meaning =
+        "SELECT EXISTS (SELECT 1 FROM deleted_segments WHERE source_id = ?1 AND start_utc = ?2)";
 }
 
 /// Accepted containers. Each must also parse as `audiocore::names::Extension`,
@@ -42,6 +44,8 @@ pub enum UploadError {
     Unreadable,
     /// The client's `start` is not an ISO-8601 instant.
     BadStart,
+    /// This recording was uploaded and then deleted: a deletion is final.
+    Deleted,
     Io(std::io::Error),
     Db(rusqlite::Error),
 }
@@ -232,6 +236,19 @@ pub fn deliver(
     )
 }
 
+/// Whether a person deleted the recording `source` started at `started`.
+pub fn was_deleted(
+    conn: &Connection,
+    source: &str,
+    started: DateTime<Utc>,
+) -> rusqlite::Result<bool> {
+    WAS_DELETED.query_row(
+        conn,
+        (source, instant::python_isoformat_utc(started)),
+        |r| r.get(0),
+    )
+}
+
 /// Register the source and its one audio segment. A re-upload keeps the title
 /// the session already has.
 pub fn register(
@@ -401,6 +418,10 @@ pub async fn create_session_route(
         } else {
             title
         };
+        let meaning = work::open_write(&root)?;
+        if was_deleted(&meaning, &source, started)? {
+            return Err(UploadError::Deleted);
+        }
         let path = stored_path(&root, &source, started, &suffix);
         std::fs::create_dir_all(path.parent().expect("a file has a parent"))?;
         std::fs::write(&path, &form.bytes)?;
@@ -412,7 +433,6 @@ pub async fn create_session_route(
                 return Err(err);
             }
         };
-        let meaning = work::open_write(&root)?;
         let ingest = crate::store::open(&root)?;
         register(&meaning, &source, &name, &path, started, media)?;
         // Before the ingest row, so the first transcription leases with it.
@@ -441,6 +461,9 @@ pub async fn create_session_route(
         }
         Ok(Err(UploadError::BadStart)) => {
             (StatusCode::BAD_REQUEST, "a valid ISO 8601 time is required").into_response()
+        }
+        Ok(Err(UploadError::Deleted)) => {
+            (StatusCode::GONE, "this recording was deleted").into_response()
         }
         Ok(Err(UploadError::Io(err))) => route::faulted("upload write", &err),
         Ok(Err(UploadError::Db(err))) => route::faulted("upload register", &err),

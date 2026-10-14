@@ -492,7 +492,7 @@ impl DeletedUpload {
 /// so it is guarded to uploads by `require_upload`.
 ///
 /// Each deleted segment is remembered in `deleted_segments`, in the same
-/// transaction.
+/// transaction, so uploading it again is refused (`upload::was_deleted`).
 /// `clips`: the session's clip ids, from the ingest plane.
 pub fn delete_session(
     conn: &mut Connection,

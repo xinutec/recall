@@ -1,6 +1,6 @@
 import { TestBed } from '@angular/core/testing';
 import { provideZonelessChangeDetection } from '@angular/core';
-import { provideHttpClient } from '@angular/common/http';
+import { HttpErrorResponse, provideHttpClient } from '@angular/common/http';
 import { provideHttpClientTesting } from '@angular/common/http/testing';
 import { Router } from '@angular/router';
 import { MatSnackBar } from '@angular/material/snack-bar';
@@ -10,14 +10,14 @@ import { vi } from 'vitest';
 import { Sessions } from './sessions';
 import { RecallApi } from '../recall-api';
 
-function setup(createOk = true) {
+function setup(createOk = true, failure: Error = new Error('network')) {
   const navigate = vi.fn();
   const open = vi.fn();
   const createSession = vi.fn((...args: [File, string, string, string?]) => {
     void args;
     return createOk
       ? of({ id: 'meeting-20260703-1420', title: 'Meeting 2026-07-03 14:20' })
-      : throwError(() => new Error('network'));
+      : throwError(() => failure);
   });
   const renameSession = vi.fn(() => of({ ok: true }));
   const deleteSession = vi.fn(() => of({ ok: true }));
@@ -92,6 +92,14 @@ describe('Sessions', () => {
     c.onFile(fileInput(file));
     expect(c.uploading()).toBe(false); // error path resets the spinner
     expect(open).toHaveBeenCalled(); // and reports the failure
+  });
+
+  it('says a deleted recording stays deleted, not that the upload failed', () => {
+    const { c, open } = setup(false, new HttpErrorResponse({ status: 410 }));
+
+    c.onFile(fileInput(new File(['a'], 'x.mp3', { type: 'audio/mpeg' })));
+
+    expect(open.mock.calls[0][0]).toBe('That recording was deleted, and a deletion is final');
   });
 
   it('rename only fires with a non-empty title, then closes the editor', () => {
