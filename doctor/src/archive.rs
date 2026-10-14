@@ -166,7 +166,6 @@ pub fn registered_devices(events: &[capture_log::Event]) -> Vec<(String, SourceK
     latest
         .into_iter()
         .filter_map(|(id, kind)| Some((id.to_owned(), SourceKind::parse(kind)?)))
-        .filter(|(_, kind)| kind.is_device())
         .collect()
 }
 

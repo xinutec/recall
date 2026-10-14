@@ -170,7 +170,7 @@ fn main() {
         wanted += case.lines.iter().map(|(_, _, w)| w.len()).sum::<usize>();
         let mut base_language = None;
         for (i, (_, prompt)) in arms.iter().enumerate() {
-            let Ok(answer) = shim.transcribe_in(&audio, None, *prompt) else {
+            let Ok(answer) = shim.transcribe(&audio, None, *prompt) else {
                 continue;
             };
             let words = heard(&answer.reply);

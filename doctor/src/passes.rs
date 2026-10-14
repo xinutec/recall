@@ -18,11 +18,7 @@ const EXPECTED: &str = "passes end, and end clean, within three intervals (at le
 #[must_use]
 pub fn pass_checks(fetched: &Result<RecordHealth, String>, now: DateTime<Utc>) -> Vec<Check> {
     let passes = match fetched {
-        Ok(RecordHealth {
-            passes: Some(passes),
-            ..
-        }) => passes,
-        Ok(_) => return vec![skipped("the server is too old to report its passes")],
+        Ok(RecordHealth { passes, .. }) => passes,
         Err(why) => return vec![skipped(why)],
     };
     passes.iter().map(|p| grade(p, now)).collect()

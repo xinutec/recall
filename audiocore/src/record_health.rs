@@ -5,14 +5,13 @@ use serde::{Deserialize, Serialize};
 
 /// Since the window start: requests that failed on the server's side, and
 /// minutes a microphone shows twice. And how each background pass is doing
-/// now; `None` from a server too old to say.
+/// now.
 #[derive(Debug, Clone, PartialEq, Eq, Default, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct RecordHealth {
     pub faults: Faults,
     pub doubled: Doubled,
-    #[serde(default)]
-    pub passes: Option<Vec<Pass>>,
+    pub passes: Vec<Pass>,
 }
 
 /// One background pass of the server, as it last went. Instants are RFC 3339.

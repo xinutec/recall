@@ -28,7 +28,7 @@ fn view() -> Pass {
     }
 }
 
-fn graded(passes: Option<Vec<Pass>>) -> Vec<(String, Verdict, String)> {
+fn graded(passes: Vec<Pass>) -> Vec<(String, Verdict, String)> {
     let health = RecordHealth {
         passes,
         ..RecordHealth::default()
@@ -40,7 +40,7 @@ fn graded(passes: Option<Vec<Pass>>) -> Vec<(String, Verdict, String)> {
 }
 
 fn one(pass: Pass) -> (Verdict, String) {
-    let got = graded(Some(vec![pass]));
+    let got = graded(vec![pass]);
     assert_eq!(got.len(), 1, "{got:?}");
     (got[0].1, got[0].2.clone())
 }
@@ -146,22 +146,15 @@ fn a_pass_switched_off_skips_and_says_why() {
 }
 
 #[test]
-fn a_server_too_old_to_report_passes_skips_rather_than_passes() {
-    let got = graded(None);
-    assert_eq!(got.len(), 1);
-    assert_eq!(got[0].1, Verdict::Skip);
-}
-
-#[test]
 fn each_pass_is_its_own_check_with_a_stable_label() {
-    let got = graded(Some(vec![
+    let got = graded(vec![
         view(),
         Pass {
             name: "enrol".to_owned(),
             every_s: 600,
             ..view()
         },
-    ]));
+    ]);
     let labels: Vec<&str> = got.iter().map(|g| g.0.as_str()).collect();
     assert_eq!(labels, ["background pass: view", "background pass: enrol"]);
 }

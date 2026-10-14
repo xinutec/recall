@@ -152,7 +152,7 @@ fn a_dead_shim_is_reported_as_closed_so_the_caller_can_respawn() {
 }
 
 #[test]
-fn model_and_prompt_reach_the_shim_when_given() {
+fn language_and_prompt_reach_the_shim_when_given() {
     let dir = tempfile::tempdir().expect("tempdir");
     let (program, args) =
         stub_shim("print(json.dumps({'id': msg['id'], 'ok': True, 'result': msg}))");
@@ -160,10 +160,10 @@ fn model_and_prompt_reach_the_shim_when_given() {
     let clip = dir.path().join("a.flac");
     std::fs::write(&clip, b"x").expect("clip");
     let echoed = shim
-        .transcribe(&clip, Some("whisper-small"), Some("Oskar, Kat"))
+        .transcribe(&clip, Some("nl"), Some("Oskar, Kat"))
         .expect("transcribe");
     assert_eq!(echoed.raw["op"], "transcribe");
-    assert_eq!(echoed.raw["model"], "whisper-small");
+    assert_eq!(echoed.raw["language"], "nl");
     assert_eq!(echoed.raw["initial_prompt"], "Oskar, Kat");
     assert_eq!(echoed.raw["words"], true);
 }

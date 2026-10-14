@@ -16,9 +16,7 @@ fn the_default_is_lossless_because_a_wrong_default_cannot_be_taken_back() {
 #[test]
 fn a_lossless_codec_asks_for_no_bitrate_and_a_lossy_one_does() {
     assert_eq!(Codec::Flac.default_bitrate(), None);
-    assert_eq!(Codec::PcmS16le.default_bitrate(), None);
     assert_eq!(Codec::Libopus.default_bitrate(), Some("32k"));
-    assert_eq!(Codec::Aac.default_bitrate(), Some("32k"));
 }
 
 #[test]
@@ -69,8 +67,6 @@ fn opus_argv_matches_the_python_segmenter() {
 fn each_codec_names_its_container() {
     assert_eq!(Codec::Libopus.container_ext(), "opus");
     assert_eq!(Codec::Flac.container_ext(), "flac");
-    assert_eq!(Codec::PcmS16le.container_ext(), "wav");
-    assert_eq!(Codec::Aac.container_ext(), "m4a");
 }
 
 #[test]

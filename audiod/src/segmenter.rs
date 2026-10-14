@@ -9,9 +9,6 @@ use std::path::Path;
 pub enum Codec {
     Libopus,
     Flac,
-    PcmS16le,
-    PcmS24le,
-    Aac,
 }
 
 impl Codec {
@@ -20,9 +17,6 @@ impl Codec {
         match self {
             Codec::Libopus => "libopus",
             Codec::Flac => "flac",
-            Codec::PcmS16le => "pcm_s16le",
-            Codec::PcmS24le => "pcm_s24le",
-            Codec::Aac => "aac",
         }
     }
 
@@ -30,8 +24,8 @@ impl Codec {
     /// owns it, so a lossy one never silently gets ffmpeg's default.
     pub fn default_bitrate(self) -> Option<&'static str> {
         match self {
-            Codec::Libopus | Codec::Aac => Some("32k"),
-            Codec::Flac | Codec::PcmS16le | Codec::PcmS24le => None,
+            Codec::Libopus => Some("32k"),
+            Codec::Flac => None,
         }
     }
 
@@ -40,8 +34,6 @@ impl Codec {
         match self {
             Codec::Libopus => "opus",
             Codec::Flac => "flac",
-            Codec::PcmS16le | Codec::PcmS24le => "wav",
-            Codec::Aac => "m4a",
         }
     }
 }

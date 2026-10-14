@@ -322,17 +322,14 @@ pub fn live_check(
     .build()
 }
 
-/// The runner's pulse, stamped after each job and each empty poll. Without
-/// `finished` it reads as a pass still running; the runner always writes it.
+/// The runner's pulse, stamped after each job and each empty poll.
 #[derive(Debug, Clone, PartialEq, serde::Deserialize)]
 pub struct Beat {
     #[serde(deserialize_with = "audiocore::instant::de")]
     pub started: DateTime<Utc>,
-    #[serde(default, deserialize_with = "audiocore::instant::de_opt")]
-    pub finished: Option<DateTime<Utc>>,
-    #[serde(default)]
-    pub seconds: Option<f64>,
-    #[serde(default)]
+    #[serde(deserialize_with = "audiocore::instant::de")]
+    pub finished: DateTime<Utc>,
+    pub seconds: f64,
     pub rows: i64,
 }
 
@@ -368,21 +365,17 @@ pub fn worker_check(
         .build();
     };
 
-    let reference = beat.finished.unwrap_or(beat.started);
-    let since = now - reference;
-    let observed = if beat.finished.is_none() {
-        format!("a pass has been running {:.1} min", minutes(since))
+    let since = now - beat.finished;
+    let rows = if beat.rows == 0 {
+        "nothing to do".to_owned()
     } else {
-        let rows = if beat.rows == 0 {
-            "nothing to do".to_owned()
-        } else {
-            format!("{} row(s)", beat.rows)
-        };
-        let took = beat
-            .seconds
-            .map_or_else(String::new, |s| format!(" in {s:.1}s"));
-        format!("last pass {:.1} min ago — {rows}{took}", minutes(since))
+        format!("{} row(s)", beat.rows)
     };
+    let observed = format!(
+        "last pass {:.1} min ago — {rows} in {:.1}s",
+        minutes(since),
+        beat.seconds
+    );
 
     let verdict = if since >= stopped {
         Verdict::Fail

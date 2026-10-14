@@ -14,15 +14,11 @@ pub use capture_log::{INGEST_CONNECT, INGEST_DISCONNECT, PAUSE, PRODUCER_CYCLED,
 /// Say that `source` records here, and how (`coreaudio`, `tcp_pcm`). Written on
 /// every start and every connect; the doctor takes the latest per source.
 pub fn register(root: &Path, source: &str, kind: &str) {
-    write(root, capture_log::REGISTER, source, Some(kind));
+    record(root, capture_log::REGISTER, source, Some(kind));
 }
 
 /// Append one lifecycle event, stamped now.
 pub fn record(root: &Path, kind: &str, source: &str, detail: Option<&str>) {
-    write(root, kind, source, detail);
-}
-
-fn write(root: &Path, kind: &str, source: &str, detail: Option<&str>) {
     let event = Event {
         utc: Utc::now(),
         kind: kind.to_owned(),

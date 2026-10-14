@@ -29,7 +29,6 @@ fn the_requests_are_what_the_shims_read() {
     let transcribe = asr::Request {
         audio: "usb-20260906T090000.flac".to_owned(),
         words: true,
-        model: None,
         language: None,
         initial_prompt: Some("Alex, Sam".to_owned()),
     };

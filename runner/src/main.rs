@@ -206,7 +206,7 @@ fn one(queue: &Queue, shim: &mut Shim) -> Result<bool, Failed> {
     // Exhaustive: a new kind does not compile until it is given work here.
     let outcome = runner::renew::while_renewing(client, id, runner::renew::EVERY, || match kind {
         Kind::TranscribeSegment => shim
-            .transcribe_in(&clip, language.as_deref(), prompt)
+            .transcribe(&clip, language.as_deref(), prompt)
             .map(|a| (a.raw, a.reply.segments.len())),
         Kind::DiarizeSegment => shim.diarize(&clip).map(|a| (a.raw, a.reply.turns.len())),
         // One model call per named turn.

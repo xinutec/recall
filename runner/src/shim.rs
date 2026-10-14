@@ -198,32 +198,12 @@ impl Shim {
         self.ask(voices::EMBED, &request)
     }
 
-    /// Transcribe one clip.
-    ///
-    /// # Errors
-    /// Whatever [`Shim::ask`] reports.
-    pub fn transcribe(
-        &mut self,
-        audio: &Path,
-        model: Option<&str>,
-        initial_prompt: Option<&str>,
-    ) -> Result<Answer<asr::Reply>, Error> {
-        let request = asr::Request {
-            audio: audio.to_string_lossy().into_owned(),
-            words: true,
-            model: model.map(str::to_owned),
-            language: None,
-            initial_prompt: initial_prompt.map(str::to_owned),
-        };
-        self.ask(asr::OP, &request)
-    }
-
     /// Transcribe one clip with the default model, in `language` (`"nl"`) or,
     /// given `None`, whatever the model detects.
     ///
     /// # Errors
     /// Whatever [`Shim::ask`] reports.
-    pub fn transcribe_in(
+    pub fn transcribe(
         &mut self,
         audio: &Path,
         language: Option<&str>,
@@ -232,7 +212,6 @@ impl Shim {
         let request = asr::Request {
             audio: audio.to_string_lossy().into_owned(),
             words: true,
-            model: None,
             language: language.map(str::to_owned),
             initial_prompt: initial_prompt.map(str::to_owned),
         };

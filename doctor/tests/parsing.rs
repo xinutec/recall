@@ -4,20 +4,7 @@ use doctor::source::SourceKind;
 
 #[test]
 fn every_kind_round_trips_through_its_stored_spelling() {
-    for kind in [
-        SourceKind::CoreAudio,
-        SourceKind::TcpPcm,
-        SourceKind::Upload,
-        SourceKind::Derived,
-    ] {
+    for kind in [SourceKind::CoreAudio, SourceKind::TcpPcm] {
         assert_eq!(SourceKind::parse(kind.as_str()), Some(kind));
     }
-}
-
-#[test]
-fn only_the_recorderless_kinds_are_excluded_from_device_checks() {
-    assert!(SourceKind::CoreAudio.is_device());
-    assert!(SourceKind::TcpPcm.is_device());
-    assert!(!SourceKind::Upload.is_device());
-    assert!(!SourceKind::Derived.is_device());
 }

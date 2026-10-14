@@ -8,8 +8,8 @@
 //! while paused, exactly when the heartbeat is the only signal. It forwards
 //! and stores nothing, so Isis stays the one record.
 //!
-//! Hand-written HTTP: one route, a handful of requests a month; not worth axum
-//! and tokio in the capture daemon.
+//! Hand-written HTTP: one route is not worth axum and tokio in the capture
+//! daemon.
 
 use std::io::{BufRead, BufReader, Read, Write};
 use std::net::{TcpListener, TcpStream};

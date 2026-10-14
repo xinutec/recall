@@ -64,9 +64,12 @@ pub fn alsa_argv(
     // without it ALSA opens two channels and a mono microphone refuses:
     //
     //     [in#0] cannot set channel count to 2 (Invalid argument)
-    argv.splice(argv.len().., ["-channels".to_owned(), channels.to_string()]);
-    argv.push("-i".to_owned());
-    argv.push(device.unwrap_or("default").to_owned());
+    argv.extend([
+        "-channels".to_owned(),
+        channels.to_string(),
+        "-i".to_owned(),
+        device.unwrap_or("default").to_owned(),
+    ]);
     if let Some(seconds) = max_seconds {
         argv.extend(["-t".into(), seconds.to_string()]);
     }
@@ -209,7 +212,7 @@ impl Watchdog {
                 format!("{} silent segments", self.dead_streak)
             });
         }
-        if self.closed_live && !stalled {
+        if self.closed_live {
             mark_alive(&self.out_dir);
         }
         None
@@ -251,7 +254,7 @@ pub fn record(
     {
         Ok(child) => child,
         Err(err) => {
-            tracing::error!(error = %err, "capture: cannot start sox");
+            tracing::error!(error = %err, "capture: cannot start the producer");
             return Ended::ProducerEnded;
         }
     };
@@ -405,12 +408,12 @@ pub fn beat_body(source_id: &str, mic_ok: bool) -> serde_json::Value {
 }
 
 /// Beat until the process ends, on its own thread.
-fn spawn_beat(source_id: &str, url: &str, mic_ok: std::sync::Arc<std::sync::atomic::AtomicBool>) {
+fn spawn_beat(source_id: &str, url: &str, mic_ok: Arc<AtomicBool>) {
     let source_id = source_id.to_owned();
     let url = url.to_owned();
     std::thread::spawn(move || {
         loop {
-            let ok = mic_ok.load(std::sync::atomic::Ordering::Relaxed);
+            let ok = mic_ok.load(Ordering::Relaxed);
             crate::beat_relay::forward(&beat_body(&source_id, ok), &url);
             std::thread::sleep(BEAT_EVERY);
         }
@@ -438,7 +441,7 @@ pub fn serve_paused_aware(
         },
     );
     // True until an attempt fails.
-    let mic_ok = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(true));
+    let mic_ok = Arc::new(AtomicBool::new(true));
     if let Some(url) = beat_url {
         spawn_beat(source_id, url, mic_ok.clone());
     }
@@ -450,7 +453,7 @@ pub fn serve_paused_aware(
         let ended = record(root, source_id, device, producer_kind, config, max_seconds);
         // `Ended::Paused` is the only clean end. Anything else means the
         // producer stopped on its own, which is what the beat exists to carry.
-        mic_ok.store(ended == Ended::Paused, std::sync::atomic::Ordering::Relaxed);
+        mic_ok.store(ended == Ended::Paused, Ordering::Relaxed);
         if ended == Ended::Paused {
             events::record(root, events::PAUSE, source_id, None);
             continue;

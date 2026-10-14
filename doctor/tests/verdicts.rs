@@ -229,8 +229,8 @@ fn a_worker_that_never_ran_is_a_fault() {
 fn a_completed_pass_is_graded_from_when_it_finished() {
     let beat = Beat {
         started: at(0),
-        finished: Some(at(10)),
-        seconds: Some(600.0),
+        finished: at(10),
+        seconds: 600.0,
         rows: 0,
     };
     assert_eq!(
@@ -250,20 +250,6 @@ fn a_completed_pass_is_graded_from_when_it_finished() {
 }
 
 #[test]
-fn a_running_pass_is_graded_from_when_it_started_and_named_differently() {
-    // A pass that never returns points at the archive, not launchd.
-    let beat = Beat {
-        started: at(0),
-        finished: None,
-        seconds: None,
-        rows: 0,
-    };
-    let check = worker_check(Some(&beat), at(90), worker_slow(), worker_stopped());
-    assert_eq!(check.verdict, Verdict::Fail);
-    assert!(check.observed.starts_with("a pass has been running"));
-}
-
-#[test]
 fn the_worker_heartbeat_fixture_is_the_shape_the_runner_writes() {
     // `runner/tests/pulse.rs` checks the writer against the same fixture.
     let fixture = concat!(
@@ -273,11 +259,10 @@ fn the_worker_heartbeat_fixture_is_the_shape_the_runner_writes() {
     let text = std::fs::read_to_string(fixture).expect("the fixture is committed");
     let beat: Beat = serde_json::from_str(&text).expect("the shape the runner writes");
     assert_eq!(beat.rows, 0);
-    assert_eq!(beat.seconds, Some(17.567_348));
-    let finished = beat.finished.expect("a completed pass");
-    assert!(finished > beat.started);
+    assert!((beat.seconds - 17.567_348).abs() < 1e-9);
+    assert!(beat.finished > beat.started);
     assert_eq!(
-        worker_check(Some(&beat), finished, worker_slow(), worker_stopped()).verdict,
+        worker_check(Some(&beat), beat.finished, worker_slow(), worker_stopped()).verdict,
         Verdict::Pass
     );
 }

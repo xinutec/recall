@@ -11,7 +11,6 @@ pub const DEFAULT_INGEST_PORT: u16 = 9999;
 
 /// The PCM the pipeline speaks end to end: 48 kHz signed 16-bit little-endian.
 pub const SAMPLE_RATE: u32 = 48_000;
-pub const BYTES_PER_SAMPLE: u32 = 2;
 
 const DEFAULT_CHANNELS: u16 = 1;
 const MAX_HANDSHAKE_BYTES: usize = 8192;

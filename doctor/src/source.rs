@@ -8,10 +8,6 @@ pub enum SourceKind {
     CoreAudio,
     /// Raw s16le PCM over TCP, from the recall-mic app.
     TcpPcm,
-    /// Clips uploaded over HTTP; not captured here.
-    Upload,
-    /// A stream built rather than recorded (the retired room stream).
-    Derived,
 }
 
 impl SourceKind {
@@ -19,8 +15,6 @@ impl SourceKind {
         Some(match value {
             "coreaudio" => Self::CoreAudio,
             "tcp_pcm" => Self::TcpPcm,
-            "upload" => Self::Upload,
-            "derived" => Self::Derived,
             _ => return None,
         })
     }
@@ -29,14 +23,7 @@ impl SourceKind {
         match self {
             Self::CoreAudio => "coreaudio",
             Self::TcpPcm => "tcp_pcm",
-            Self::Upload => "upload",
-            Self::Derived => "derived",
         }
-    }
-
-    /// Kinds with a recorder that could stop or lose speech.
-    pub fn is_device(self) -> bool {
-        !matches!(self, Self::Upload | Self::Derived)
     }
 }
 

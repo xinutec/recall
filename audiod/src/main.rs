@@ -52,7 +52,7 @@ enum Mode {
         producer: ProducerArg,
         #[command(flatten)]
         codec: CodecArg,
-        /// The fleet's control plane, for the pause it reports.
+        /// The fleet, which this recorder beats to.
         #[arg(long)]
         url: Option<String>,
     },
@@ -297,11 +297,10 @@ fn run_capture_mirror(
         eprintln!("audiod: capture-mirror needs RECALL_SYNC_TOKEN or --token-file");
         return ExitCode::FAILURE;
     }
-    let interval = std::time::Duration::from_secs(5);
     if once {
-        return audiod::pause_mirror::exchange_once(root, url, &token, interval);
+        return audiod::pause_mirror::exchange_once(root, url, &token);
     }
-    audiod::pause_mirror::run_exchange(root, url, &token, interval)
+    audiod::pause_mirror::run_exchange(root, url, &token, std::time::Duration::from_secs(5))
 }
 
 /// One bounded upload pass. The token comes from a file or env, never argv,

@@ -123,6 +123,6 @@ pub fn measure(root: &Path, since: DateTime<Utc>) -> rusqlite::Result<RecordHeal
     Ok(RecordHealth {
         faults,
         doubled: doubled_minutes(&meaning, since)?,
-        passes: Some(crate::passes::PASSES.report()),
+        passes: crate::passes::PASSES.report(),
     })
 }

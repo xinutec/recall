@@ -36,14 +36,12 @@ fn fetch(agent: &ureq::Agent, url: &str) -> Result<Desired, String> {
     // desired.
     let running = body["desiredRunning"]
         .as_bool()
-        .or_else(|| body["running"].as_bool())
-        .ok_or("no running field")?;
+        .ok_or("no desiredRunning field")?;
     if running {
         return Ok(Desired::Running);
     }
     let until = body["desiredPausedUntil"]
         .as_str()
-        .or_else(|| body["pausedUntil"].as_str())
         .ok_or("paused with no bound")?;
     Ok(Desired::PausedUntil(until.to_owned()))
 }
@@ -252,12 +250,7 @@ pub fn run_exchange(root: &Path, url: &str, token: &str, interval: Duration) -> 
 
 /// One exchange, applied, then exit: for checking a real fleet by hand without
 /// a second mirror competing for the pause file. Prints what it saw and did.
-pub fn exchange_once(
-    root: &Path,
-    url: &str,
-    token: &str,
-    _interval: Duration,
-) -> std::process::ExitCode {
+pub fn exchange_once(root: &Path, url: &str, token: &str) -> std::process::ExitCode {
     let agent = ureq::AgentBuilder::new()
         .timeout_connect(Duration::from_secs(5))
         .timeout(Duration::from_secs(20))

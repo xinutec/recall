@@ -72,8 +72,6 @@ pub mod asr {
         /// Word timings, which alignment to speakers needs.
         pub words: bool,
         #[serde(default, skip_serializing_if = "Option::is_none")]
-        pub model: Option<String>,
-        #[serde(default, skip_serializing_if = "Option::is_none")]
         pub language: Option<String>,
         /// The household vocabulary, carried because a shim reads no database.
         #[serde(default, skip_serializing_if = "Option::is_none")]
