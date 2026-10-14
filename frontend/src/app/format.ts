@@ -1,7 +1,5 @@
 /** Presentation helpers for transcript fields. Pure, unit-testable. */
 
-import { Transcript } from './models';
-
 export function formatClock(iso: string): string {
   const d = new Date(iso);
   if (Number.isNaN(d.getTime())) {
@@ -14,14 +12,6 @@ export function formatClock(iso: string): string {
     hour: '2-digit',
     minute: '2-digit',
   });
-}
-
-export function formatDuration(t: Transcript): string {
-  const seconds = (new Date(t.end).getTime() - new Date(t.start).getTime()) / 1000;
-  if (!Number.isFinite(seconds) || seconds <= 0) {
-    return '';
-  }
-  return `${seconds.toFixed(1)}s`;
 }
 
 export function dayLabel(iso: string): string {
@@ -99,11 +89,4 @@ export function timeOfDaySeconds(iso: string): string {
     minute: '2-digit',
     second: '2-digit',
   });
-}
-
-export function formatConfidence(confidence: number | null): string {
-  if (confidence === null) {
-    return '';
-  }
-  return `${Math.round(confidence * 100)}%`;
 }

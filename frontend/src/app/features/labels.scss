@@ -1,16 +1,5 @@
-.page {
-  display: block;
-  max-inline-size: 700px;
-  margin-inline: auto;
-}
-
 .hint {
-  opacity: 0.75;
   margin: 0.25rem 0 1rem;
-
-  &.done {
-    opacity: 0.9;
-  }
 }
 
 .filter {
@@ -69,15 +58,23 @@
       margin-inline-end: 0.1rem;
     }
 
-    .remove {
+    .danger {
       margin-inline-start: auto;
-      color: var(--mat-sys-error);
     }
   }
 }
 
 .vocab {
   margin-block-end: 1rem;
+
+  h3 {
+    margin: 0;
+    font: var(--mat-sys-title-medium);
+  }
+
+  .hint {
+    margin: 0.25rem 0 0.75rem;
+  }
 
   .add-term {
     display: flex;
@@ -89,5 +86,4 @@
       flex: 1;
     }
   }
-
 }

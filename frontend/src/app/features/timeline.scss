@@ -1,9 +1,3 @@
-.page {
-  display: block;
-  max-inline-size: 760px;
-  margin-inline: auto;
-}
-
 .head {
   display: flex;
   flex-wrap: wrap;
@@ -24,15 +18,6 @@
 
 h2 {
   margin: 0;
-}
-
-.hint {
-  opacity: 0.7;
-
-  &.error {
-    color: var(--mat-sys-error);
-    opacity: 1;
-  }
 }
 
 .older,
@@ -60,11 +45,6 @@ h2 {
   font: var(--mat-sys-label-small);
   font-weight: 400;
   opacity: 0.5;
-
-  &.done {
-    color: var(--mat-sys-primary);
-    opacity: 0.9;
-  }
 }
 
 .convo {
@@ -134,7 +114,7 @@ h2 {
 }
 
 .turns {
-  padding: 0.5rem 0.75rem 0.5rem;
+  padding: 0.5rem 0.75rem;
 }
 
 .who.unknown {

@@ -16,16 +16,6 @@
         } @else {
           <mat-chip><mat-icon matChipAvatar>help</mat-icon>unknown</mat-chip>
         }
-        @if (t.language) {
-          <mat-chip>{{ t.language }}</mat-chip>
-        }
-        @if (duration(t)) {
-          <mat-chip>{{ duration(t) }}</mat-chip>
-        }
-        @if (confidence(t)) {
-          <mat-chip>conf {{ confidence(t) }}</mat-chip>
-        }
-        <mat-chip class="model">{{ t.model }}</mat-chip>
       </mat-chip-set>
     </div>
 

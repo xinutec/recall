@@ -19,15 +19,6 @@ html {
       density: 0,
     )
   );
-
-  // Angular maps the dialog to `surface`, the page's own colour, so on a dark
-  // theme it blends into the page. M3 specifies surface-container-high.
-  // (DL-ANGULAR-DIALOG-SURFACE)
-  @include mat.dialog-overrides(
-    (
-      container-color: var(--mat-sys-surface-container-high),
-    )
-  );
 }
 
 body {
@@ -53,6 +44,23 @@ body {
 // A snackbar is in the overlay container, outside `.with-bottom-nav`.
 body:has(.bottom-nav) .mat-mdc-snack-bar-container {
   margin-block-end: var(--bottom-nav-reserve);
+}
+
+// Every screen in one reading column. Here, not in the shell's styles: a routed
+// screen is not in the shell's template, so its scoped styles cannot reach it.
+.content > :not(router-outlet) {
+  display: block;
+  max-inline-size: 46rem;
+  margin-inline: auto;
+}
+
+// A screen's quiet line: loading, empty, failed.
+.hint {
+  color: var(--mat-sys-on-surface-variant);
+
+  &.error {
+    color: var(--mat-sys-error);
+  }
 }
 
 // M3 ignores `color="warn"`, so destructive buttons are tinted via tokens.

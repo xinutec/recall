@@ -13,7 +13,7 @@ import { RecallApi } from '../recall-api';
 function setup(createOk = true, failure: Error = new Error('network')) {
   const navigate = vi.fn();
   const open = vi.fn();
-  const createSession = vi.fn((...args: [File, string, string, string?]) => {
+  const createSession = vi.fn((...args: [File, string, string?]) => {
     void args;
     return createOk
       ? of({ id: 'meeting-20260703-1420', title: 'Meeting 2026-07-03 14:20' })
@@ -76,9 +76,8 @@ describe('Sessions', () => {
     c.onFile(fileInput(file));
 
     expect(createSession).toHaveBeenCalledTimes(1);
-    const [sent, title, start] = createSession.mock.calls[0];
+    const [sent, start] = createSession.mock.calls[0];
     expect(sent).toBe(file);
-    expect(title).toBe(''); // default title comes from the backend
     expect(start).toBe(new Date(file.lastModified).toISOString());
     expect(c.uploading()).toBe(false); // cleared on success
   });
@@ -132,11 +131,11 @@ describe('Sessions', () => {
     const { c, createSession } = setup();
     const file = new File(['a'], 'x.mp3', { type: 'audio/mpeg' });
     c.onFile(fileInput(file));
-    expect(createSession.mock.calls[0][3]).toBe('');
+    expect(createSession.mock.calls[0][2]).toBe('');
 
     c.uploadLanguage.set('nl');
     c.onFile(fileInput(file));
-    expect(createSession.mock.calls[1][3]).toBe('nl');
+    expect(createSession.mock.calls[1][2]).toBe('nl');
   });
 
   it('pins a session language, and Automatic unpins it', () => {

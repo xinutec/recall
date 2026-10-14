@@ -4,10 +4,10 @@ import { MatChipsModule } from '@angular/material/chips';
 import { MatIconModule } from '@angular/material/icon';
 
 import { Transcript } from '../models';
-import { formatClock, formatConfidence, formatDuration } from '../format';
+import { formatClock } from '../format';
 import { PlayButton } from './play-button';
 
-/** Read-only display of a single transcript turn with inline audio playback. */
+/** One line, read-only: who, when, its words and its audio. */
 @Component({
   selector: 'app-transcript-card',
   imports: [PlayButton, MatCardModule, MatChipsModule, MatIconModule],
@@ -19,6 +19,4 @@ export class TranscriptCard {
   readonly transcript = input.required<Transcript>();
 
   protected readonly clock = (t: Transcript): string => formatClock(t.start);
-  protected readonly duration = formatDuration;
-  protected readonly confidence = (t: Transcript): string => formatConfidence(t.confidence);
 }

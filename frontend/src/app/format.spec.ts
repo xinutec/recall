@@ -1,33 +1,4 @@
-import {
-  durationUntil,
-  formatConfidence,
-  formatDuration,
-  shortDay,
-  timeOfDaySeconds,
-} from './format';
-import { Transcript } from './models';
-
-function turn(start: string, end: string): Transcript {
-  return {
-    id: 1,
-    start,
-    end,
-    text: '',
-    language: null,
-    speaker: null,
-    speakerConfirmed: false,
-    wordsChecked: false,
-    speakerConfidence: null,
-    confidence: null,
-    model: 'live',
-    tier: 'live',
-    hidden: null,
-    hiddenAs: null,
-    audioUrl: '',
-    source: null,
-    cluster: null,
-  };
-}
+import { durationUntil, shortDay, timeOfDaySeconds } from './format';
 
 describe('format', () => {
   it('shortDay is short enough for a bar beside a time, and keeps the year', () => {
@@ -35,16 +6,6 @@ describe('format', () => {
     expect(day).toContain('2026');
     expect(day.length).toBeLessThanOrEqual(17);
     expect(shortDay('not a date')).toBe('not a date');
-  });
-
-  it('renders confidence as a rounded percentage', () => {
-    expect(formatConfidence(0.873)).toBe('87%');
-    expect(formatConfidence(null)).toBe('');
-  });
-
-  it('renders positive durations and nothing for degenerate spans', () => {
-    expect(formatDuration(turn('2026-06-13T10:00:00Z', '2026-06-13T10:00:03.5Z'))).toBe('3.5s');
-    expect(formatDuration(turn('2026-06-13T10:00:00Z', '2026-06-13T10:00:00Z'))).toBe('');
   });
 
   it('renders a to-the-second wall clock, and passes through junk', () => {

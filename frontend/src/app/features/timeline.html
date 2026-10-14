@@ -43,7 +43,7 @@
     <h3 class="day">
       {{ day.label }}
       @if (coverageLabel(day)) {
-        <span class="day-cov" [class.done]="coverageDone(day)">{{ coverageLabel(day) }}</span>
+        <span class="day-cov">{{ coverageLabel(day) }}</span>
       }
     </h3>
     @for (conv of day.conversations; track key(conv)) {

@@ -11,7 +11,8 @@
 
 .run {
   margin-bottom: 0.85rem;
-  border-left: 2px solid color-mix(in srgb, var(--c, var(--mat-sys-outline-variant)) 65%, transparent);
+  border-left: 2px solid
+    color-mix(in srgb, var(--c, var(--mat-sys-outline-variant)) 65%, transparent);
   padding-left: 0.65rem;
 
   .who {
@@ -47,7 +48,6 @@
 
   // A guess or an unnamed voice reads as provisional.
   &:not(.named) .who .name {
-    font-weight: 700;
     font-style: italic;
   }
 

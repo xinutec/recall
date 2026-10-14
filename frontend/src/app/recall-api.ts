@@ -41,23 +41,15 @@ export class RecallApi {
     return this.http.post<CaptureState>('/api/capture/resume', {});
   }
 
-  /** Turns grouped into conversations at silences of `gap` seconds. Page back
-   * with `before` (oldest start seen), forward with `after` (newest end seen). */
-  conversations(
-    limit: number,
-    before?: string,
-    after?: string,
-    gap?: number,
-  ): Observable<ConversationPage> {
+  /** Turns grouped into conversations at silences. Page back with `before`
+   * (oldest start seen), forward with `after` (newest end seen). */
+  conversations(limit: number, before?: string, after?: string): Observable<ConversationPage> {
     const params = new URLSearchParams({ limit: String(limit) });
     if (before) {
       params.set('before', before);
     }
     if (after) {
       params.set('after', after);
-    }
-    if (gap !== undefined) {
-      params.set('gap', String(gap));
     }
     return this.http.get<ConversationPage>(`/api/conversations?${params.toString()}`);
   }
@@ -135,19 +127,19 @@ export class RecallApi {
     return this.http.post<AssignResult>(`/api/sessions/${encodeURIComponent(source)}/assign`, body);
   }
 
-  /** Soft-remove a bad label from the corpus. */
+  /** Take a bad label out of the training set; the line itself stays. */
   hideCorrection(id: number): Observable<Ok> {
     return this.http.post<Ok>(`/api/correction/${id}/hide`, {});
   }
 
   /**
-   * Upload a recording as a new session. `start` is when it was recorded;
+   * Upload a recording as a new session, titled by its start. `start` is when it
+   * was recorded;
    * `language` ('nl', 'en') pins its transcription, empty leaves it to the model.
    */
-  createSession(file: File, title: string, start: string, language = ''): Observable<Session> {
+  createSession(file: File, start: string, language = ''): Observable<Session> {
     const form = new FormData();
     form.append('audio', file, file.name);
-    if (title) form.append('title', title);
     if (start) form.append('start', start);
     if (language) form.append('language', language);
     return this.http.post<Session>('/api/sessions', form);

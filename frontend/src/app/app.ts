@@ -27,12 +27,10 @@ interface NavItem {
 }
 
 // The server holds /api/capture?wait&known until the state changes, so these
-// only pace the edges: a pause between polls, a retry after an error, and a
-// plain poll when the answer has no stateToken.
+// only pace the edges: a pause between polls, and a retry after an error.
 const CAPTURE_WAIT_S = 25;
 const CAPTURE_REPOLL_MS = 250;
 const CAPTURE_RETRY_MS = 5_000;
-const CAPTURE_PLAIN_POLL_MS = 5_000;
 
 @Component({
   selector: 'app-root',
@@ -131,13 +129,13 @@ export class App {
     }
     const go = () => {
       this.api
-        .capture(this.capture().stateToken ?? '', CAPTURE_WAIT_S)
+        .capture(this.capture().stateToken, CAPTURE_WAIT_S)
         // The server answers within CAPTURE_WAIT_S; slower is a lost socket.
         .pipe(timeout({ first: (CAPTURE_WAIT_S + 10) * 1_000 }))
         .subscribe({
           next: (s) => {
             this.capture.set(s);
-            this.pollCapture(s.stateToken ? CAPTURE_REPOLL_MS : CAPTURE_PLAIN_POLL_MS);
+            this.pollCapture(CAPTURE_REPOLL_MS);
           },
           error: () => this.pollCapture(CAPTURE_RETRY_MS),
         });

@@ -5,14 +5,12 @@
   </p>
 
   <mat-card appearance="outlined" class="vocab">
-    <mat-card-header>
-      <mat-card-title>Vocabulary</mat-card-title>
-      <mat-card-subtitle>
-        Names, places and terms the transcriber should spell right — applied from
-        the next recording (speaker names are included automatically).
-      </mat-card-subtitle>
-    </mat-card-header>
     <mat-card-content>
+      <h3>Vocabulary</h3>
+      <p class="hint">
+        Names, places and terms the transcriber should spell right, from the next recording on.
+        Speaker names are included already.
+      </p>
       <mat-chip-set>
         @for (t of vocabTerms(); track t.id) {
           <mat-chip (removed)="removeTerm(t.id)">
@@ -34,13 +32,10 @@
             placeholder="e.g. a clinic, a street, a drug name"
           />
         </mat-form-field>
-        <button matButton="filled" (click)="addTerm()" [disabled]="!newTerm().trim()">
-          Add
-        </button>
+        <button matButton="filled" (click)="addTerm()" [disabled]="!newTerm().trim()">Add</button>
       </div>
     </mat-card-content>
   </mat-card>
-
 
   <div class="filter">
     <mat-chip-listbox aria-label="Show one voice" (change)="pick($event.value ?? '')">
@@ -96,7 +91,7 @@
               {{ name }}
             </button>
           }
-          <button matButton class="remove" (click)="remove(label.id)">
+          <button matButton class="danger" (click)="remove(label.id)">
             <mat-icon>delete</mat-icon> Remove
           </button>
         </div>
@@ -104,7 +99,7 @@
     </mat-card>
   } @empty {
     @if (!results.isLoading() && !results.error()) {
-      <p class="hint done">No labels here yet.</p>
+      <p class="hint">No labels here yet.</p>
     }
   }
 </section>

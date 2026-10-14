@@ -11,7 +11,7 @@
       </button>
       <button mat-button [matMenuTriggerFor]="uploadLang" aria-label="Language of the next upload">
         <mat-icon>translate</mat-icon>
-        {{ languageLabel(uploadLanguage()) }}
+        Language: {{ languageLabel(uploadLanguage()) }}
       </button>
       <mat-menu #uploadLang="matMenu">
         @for (l of languages; track l.code) {

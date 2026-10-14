@@ -85,7 +85,7 @@ export class Sessions {
     }
     this.uploading.set(true);
     const start = new Date(file.lastModified).toISOString();
-    this.api.createSession(file, '', start, this.uploadLanguage()).subscribe({
+    this.api.createSession(file, start, this.uploadLanguage()).subscribe({
       next: (s: Session) => {
         this.uploading.set(false);
         this.data.reload();

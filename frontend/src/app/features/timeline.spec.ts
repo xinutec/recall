@@ -136,10 +136,8 @@ describe('Timeline', () => {
     });
     await settle(fixture);
     const [done, partial] = c.days();
-    expect(c.coverageLabel(done)).toBe('diarized');
-    expect(c.coverageDone(done)).toBe(true);
-    expect(c.coverageLabel(partial)).toBe('33% diarized');
-    expect(c.coverageDone(partial)).toBe(false);
+    expect(c.coverageLabel(done)).toBe('');
+    expect(c.coverageLabel(partial)).toBe('speakers separated in 33%');
   });
 
   it('Load earlier prepends the older page and records the cursor in the URL', async () => {

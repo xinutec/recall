@@ -127,7 +127,7 @@ export class Labels {
   protected remove(id: number): void {
     this.api.hideCorrection(id).subscribe({
       next: () => {
-        this.snack.open('Removed from the corpus', undefined, { duration: 2000 });
+        this.snack.open('Removed from the training set', undefined, { duration: 2000 });
         this.results.reload();
       },
       error: () => this.snack.open('Could not remove', 'Dismiss', { duration: 4000 }),

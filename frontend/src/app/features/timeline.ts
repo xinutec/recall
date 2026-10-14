@@ -99,14 +99,13 @@ export class Timeline {
     });
   });
 
+  /** Said only while lines wait for speaker separation; a finished day says nothing. */
   protected coverageLabel = (day: Day): string => {
-    const total = day.diarized + day.pending;
-    if (total === 0) return '';
-    if (day.pending === 0) return 'diarized';
-    if (day.diarized === 0) return 'not yet diarized';
-    return Math.round((100 * day.diarized) / total) + '% diarized';
+    if (day.pending === 0) return '';
+    if (day.diarized === 0) return 'speakers not yet separated';
+    const share = Math.round((100 * day.diarized) / (day.diarized + day.pending));
+    return `speakers separated in ${share}%`;
   };
-  protected coverageDone = (day: Day): boolean => day.pending === 0 && day.diarized > 0;
 
   constructor() {
     this.roster.refresh();
