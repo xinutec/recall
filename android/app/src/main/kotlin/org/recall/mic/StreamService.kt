@@ -306,16 +306,13 @@ class StreamService : Service() {
      * does for a start from the background such as BOOT_COMPLETED.
      */
     private fun startInForeground(): Boolean {
-        val mgr = getSystemService(NotificationManager::class.java)
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            mgr.createNotificationChannel(
-                NotificationChannel(
-                    CHANNEL_ID,
-                    "Mic stream",
-                    NotificationManager.IMPORTANCE_LOW,
-                ),
-            )
-        }
+        getSystemService(NotificationManager::class.java).createNotificationChannel(
+            NotificationChannel(
+                CHANNEL_ID,
+                "Mic stream",
+                NotificationManager.IMPORTANCE_LOW,
+            ),
+        )
         lastNotificationText = "Starting…"
         val notification = buildNotification(lastNotificationText!!)
         return runCatching {
@@ -397,12 +394,7 @@ class StreamService : Service() {
         private const val INGEST_PORT = 9999
 
         fun start(ctx: Context) {
-            val intent = Intent(ctx, StreamService::class.java)
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-                ctx.startForegroundService(intent)
-            } else {
-                ctx.startService(intent)
-            }
+            ctx.startForegroundService(Intent(ctx, StreamService::class.java))
         }
 
         fun stop(ctx: Context) {

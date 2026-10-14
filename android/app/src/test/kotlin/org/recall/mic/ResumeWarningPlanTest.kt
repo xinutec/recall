@@ -20,6 +20,7 @@ class ResumeWarningPlanTest {
             desiredPausedUntil = desiredUntil,
             settled = true,
             micReachable = true,
+            stateToken = "t",
         )
 
     @Test
@@ -48,6 +49,7 @@ class ResumeWarningPlanTest {
                 desiredPausedUntil = "2026-07-05T08:30:00+00:00", // just pressed +24h
                 settled = false,
                 micReachable = true,
+                stateToken = "t",
             )
         val warn =
             planResumeWarning(extending, Instant.parse("2026-07-04T06:00:00Z"), lead)
@@ -65,6 +67,7 @@ class ResumeWarningPlanTest {
                 desiredPausedUntil = null,
                 settled = true,
                 micReachable = true,
+                stateToken = "t",
             )
         assertEquals(
             ResumeWarningPlan.Cancel,
@@ -84,6 +87,7 @@ class ResumeWarningPlanTest {
                 desiredPausedUntil = null,
                 settled = false,
                 micReachable = true,
+                stateToken = "t",
             )
         assertEquals(
             ResumeWarningPlan.Cancel,
@@ -167,6 +171,7 @@ class ResumeWarningPlanTest {
                 desiredPausedUntil = null,
                 settled = true,
                 micReachable = true,
+                stateToken = "t",
             )
         val warn =
             planResumeWarning(onlyConfirmed, Instant.parse("2026-07-04T06:00:00Z"), lead)

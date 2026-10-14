@@ -131,12 +131,12 @@ final class RecallController: ObservableObject {
                     try? await Task.sleep(nanoseconds: 5_000_000_000)
                     continue
                 }
-                // The server answers when the state changes. Without a stateToken
-                // (or on failure), a plain 5 s poll.
+                // The server answers when the state changes. After a failed read,
+                // a plain 5 s poll.
                 let known = self?.state.capture.stateToken
                 let cap = await CaptureApi.state(host: Prefs.controlHost, wait: 25, known: known)
                 self?.state.capture = cap
-                let pace: UInt64 = cap.stateToken != nil ? 250_000_000 : 5_000_000_000
+                let pace: UInt64 = cap.reachable ? 250_000_000 : 5_000_000_000
                 try? await Task.sleep(nanoseconds: pace)
             }
         }

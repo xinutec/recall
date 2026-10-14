@@ -6,7 +6,6 @@ import android.app.PendingIntent
 import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
-import android.os.Build
 import androidx.core.app.NotificationCompat
 import androidx.core.content.ContextCompat
 import java.time.Instant
@@ -23,17 +22,15 @@ class ResumeWarningReceiver : BroadcastReceiver() {
         val resumeAt = Instant.ofEpochMilli(millis)
 
         val mgr = context.getSystemService(NotificationManager::class.java)
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            mgr.createNotificationChannel(
-                NotificationChannel(
-                    CHANNEL_ID,
-                    "Resume warning",
-                    // Silent: no sound, vibration or peek, so a room phone never makes
-                    // a noise. Fixed once the channel exists.
-                    NotificationManager.IMPORTANCE_LOW,
-                ),
-            )
-        }
+        mgr.createNotificationChannel(
+            NotificationChannel(
+                CHANNEL_ID,
+                "Resume warning",
+                // Silent: no sound, vibration or peek, so a room phone never makes a
+                // noise. Fixed once the channel exists.
+                NotificationManager.IMPORTANCE_LOW,
+            ),
+        )
         mgr.notify(NotificationIds.RESUME_WARNING, build(context, resumeAt))
     }
 
@@ -44,8 +41,6 @@ class ResumeWarningReceiver : BroadcastReceiver() {
             .setContentText(resumeWarningText(resumeAt, Instant.now(), ZoneId.systemDefault()))
             .setSmallIcon(R.drawable.ic_mic)
             .setColor(ContextCompat.getColor(context, R.color.ic_launcher_background))
-            // Silent before Android 8 too.
-            .setPriority(NotificationCompat.PRIORITY_LOW)
             .setAutoCancel(true)
             // Gone at the resume even if the app never polls again; at once if the alarm
             // came late.

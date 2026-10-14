@@ -164,8 +164,8 @@ fun MicScreen(
         if (controlHost.isBlank()) return@LaunchedEffect
         delay(500) // debounce: typing restarts this effect per keystroke
         while (true) {
-            // A long poll: the server answers when the state changes. Without a
-            // stateToken in the answer, a plain 5 s poll.
+            // A long poll: the server answers when the state changes. After a
+            // failed read, a plain 5 s poll.
             val cap =
                 CaptureApi.state(
                     controlHost,
@@ -174,7 +174,7 @@ fun MicScreen(
                 )
             cap?.let { MicState.setCapture(it) }
             ResumeWarning.sync(context, cap, Instant.now())
-            delay(if (cap?.stateToken != null) 250 else 5_000)
+            delay(if (cap != null) 250 else 5_000)
         }
     }
 

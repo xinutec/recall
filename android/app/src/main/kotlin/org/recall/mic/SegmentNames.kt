@@ -23,6 +23,6 @@ object SegmentNames {
     private val stamp: DateTimeFormatter =
         DateTimeFormatter.ofPattern("yyyyMMdd'T'HHmmss").withZone(ZoneOffset.UTC)
 
-    fun segmentName(source: String, openedAt: Instant, ext: String = EXT): String =
-        "$source-${stamp.format(openedAt)}.$ext"
+    fun segmentName(source: String, openedAt: Instant): String =
+        "$source-${stamp.format(openedAt)}.$EXT"
 }

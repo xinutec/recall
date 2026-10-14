@@ -55,7 +55,7 @@ object MeetingState {
         _level.value = value
     }
 
-    fun setPending(value: Int) {
+    private fun setPending(value: Int) {
         if (value != _pending.value) Log.i(UI_LOG, "meeting uploads pending=$value")
         _pending.value = value
     }

@@ -13,7 +13,8 @@ class CaptureApiTest {
                 """{"running": true, "pausedUntil": null,
                     "desiredRunning": false,
                     "desiredPausedUntil": "2026-07-17T15:13:32+00:00",
-                    "settled": false, "micReachable": true}""",
+                    "settled": false, "micReachable": true,
+                    "stateToken": "abc123def456"}""",
             )!!
         assertEquals(true, state.running)
         assertNull(state.pausedUntil)
@@ -21,19 +22,7 @@ class CaptureApiTest {
         assertEquals("2026-07-17T15:13:32+00:00", state.desiredPausedUntil)
         assertEquals(false, state.settled)
         assertEquals(true, state.micReachable)
-    }
-
-    @Test
-    fun anOlderServersConfirmedOnlyAnswerReadsAsSettled() {
-        val state =
-            parseCaptureState(
-                """{"running": false, "pausedUntil": "2026-07-17T15:13:32+00:00"}""",
-            )!!
-        assertEquals(false, state.running)
-        assertEquals(false, state.desiredRunning)
-        assertEquals("2026-07-17T15:13:32+00:00", state.desiredPausedUntil)
-        assertEquals(true, state.settled)
-        assertEquals(true, state.micReachable)
+        assertEquals("abc123def456", state.stateToken)
     }
 
     @Test
@@ -42,7 +31,7 @@ class CaptureApiTest {
             parseCaptureState(
                 """{"running": false, "pausedUntil": "2026-07-17T15:13:32+00:00",
                     "desiredRunning": true, "desiredPausedUntil": null,
-                    "settled": false, "micReachable": true}""",
+                    "settled": false, "micReachable": true, "stateToken": "t"}""",
             )!!
         assertNull(state.desiredPausedUntil) // resuming: the target has no resume-by
         assertEquals(true, state.desiredRunning)
@@ -54,17 +43,7 @@ class CaptureApiTest {
     }
 
     @Test
-    fun parsesTheLongPollStateToken() {
-        val state =
-            parseCaptureState(
-                """{"running": true, "pausedUntil": null, "stateToken": "abc123def456"}""",
-            )!!
-        assertEquals("abc123def456", state.stateToken)
-    }
-
-    @Test
-    fun anOlderServerWithoutATokenReadsAsNull() {
-        val state = parseCaptureState("""{"running": true, "pausedUntil": null}""")!!
-        assertNull(state.stateToken)
+    fun anAnswerMissingAFieldIsNull() {
+        assertNull(parseCaptureState("""{"running": true, "pausedUntil": null}"""))
     }
 }

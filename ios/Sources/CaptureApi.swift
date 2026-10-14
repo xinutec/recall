@@ -61,22 +61,22 @@ enum CaptureApi {
     private static func parseCapture(_ data: Data?) -> CaptureState {
         guard
             let data,
-            let o = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
+            let o = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+            let running = o["running"] as? Bool,
+            let desiredRunning = o["desiredRunning"] as? Bool,
+            let settled = o["settled"] as? Bool,
+            let micReachable = o["micReachable"] as? Bool,
+            let stateToken = o["stateToken"] as? String
         else { return CaptureState(running: true, reachable: false, pausedUntil: nil) }
-        let running = o["running"] as? Bool ?? true
-        let until = (o["pausedUntil"] as? String).flatMap(parseISO)
         return CaptureState(
             running: running,
             reachable: true,
-            pausedUntil: until,
-            desiredRunning: o["desiredRunning"] as? Bool ?? running,
-            // absent (older server) = the confirmed view; present-but-null = running
-            desiredPausedUntil: o.keys.contains("desiredPausedUntil")
-                ? (o["desiredPausedUntil"] as? String).flatMap(parseISO)
-                : until,
-            settled: o["settled"] as? Bool ?? true,
-            micReachable: o["micReachable"] as? Bool ?? true,
-            stateToken: o["stateToken"] as? String)
+            pausedUntil: (o["pausedUntil"] as? String).flatMap(parseISO),
+            desiredRunning: desiredRunning,
+            desiredPausedUntil: (o["desiredPausedUntil"] as? String).flatMap(parseISO),
+            settled: settled,
+            micReachable: micReachable,
+            stateToken: stateToken)
     }
 
     private static func body(

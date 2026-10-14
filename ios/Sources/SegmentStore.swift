@@ -6,7 +6,7 @@ import Foundation
 ///   segments/open/       being written
 ///   segments/            closed, undelivered: what the uploader drains
 ///   segments/delivered/  on Isis, its receipt's sha-256 matching ours
-///   segments/conflict/   Isis holds different bytes under the name, or refused it
+///   segments/conflict/   Isis holds different bytes under the name
 ///
 /// Only `evict` deletes, and only from `delivered/`, oldest first, under cache
 /// pressure; never because the server asked (docs/architecture.md, decision 2).

@@ -35,7 +35,7 @@ class SegmentUpload(
         val ctx = applicationContext
         val base =
             ctx.getExternalFilesDir(android.os.Environment.DIRECTORY_MUSIC) ?: return Result.retry()
-        val url = Prefs.ingestBase(ctx)
+        val url = Prefs.INGEST_BASE
         val token = Prefs.ingestToken(ctx)
         var stuck = false
         for (segment in SegmentStore.undelivered(base)) {

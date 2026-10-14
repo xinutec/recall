@@ -18,14 +18,13 @@ data class CaptureState(
     val desiredPausedUntil: String?,
     val settled: Boolean,
     val micReachable: Boolean,
-    /** Sent back as `?known=` to long-poll; null means poll plainly. */
-    val stateToken: String? = null,
+    /** Sent back as `?known=` to long-poll. */
+    val stateToken: String,
 )
 
 /**
  * One recorder's liveness. [active]: someone is being recorded audibly, so a silent
- * room reads inactive. [recording]: audio is arriving, whatever is on it (#1428);
- * without the field it falls back to [active].
+ * room reads inactive. [recording]: audio is arriving, whatever is on it.
  */
 data class SourceStatus(
     val id: String,
@@ -37,25 +36,20 @@ data class SourceStatus(
     val lastDelivered: String?,
 )
 
-/** Parse `/api/capture`'s JSON. Without the desired fields, it reads as settled. */
+/** Parse `/api/capture`'s JSON; null if a flag or the token is missing. */
 fun parseCaptureState(body: String): CaptureState? =
     runCatching {
         val json = JSONObject(body)
-        val running = json.optBoolean("running", true)
-        val until = if (json.isNull("pausedUntil")) null else json.getString("pausedUntil")
+
+        fun instant(key: String) = if (json.isNull(key)) null else json.getString(key)
         CaptureState(
-            running = running,
-            pausedUntil = until,
-            desiredRunning = json.optBoolean("desiredRunning", running),
-            desiredPausedUntil =
-                when {
-                    !json.has("desiredPausedUntil") -> until
-                    json.isNull("desiredPausedUntil") -> null
-                    else -> json.getString("desiredPausedUntil")
-                },
-            settled = json.optBoolean("settled", true),
-            micReachable = json.optBoolean("micReachable", true),
-            stateToken = if (json.isNull("stateToken")) null else json.getString("stateToken"),
+            running = json.getBoolean("running"),
+            pausedUntil = instant("pausedUntil"),
+            desiredRunning = json.getBoolean("desiredRunning"),
+            desiredPausedUntil = instant("desiredPausedUntil"),
+            settled = json.getBoolean("settled"),
+            micReachable = json.getBoolean("micReachable"),
+            stateToken = json.getString("stateToken"),
         )
     }.getOrNull()
 
@@ -71,7 +65,7 @@ fun parseSources(body: String): List<SourceStatus> =
                 kind = o.getString("kind"),
                 active = o.optBoolean("active", false),
                 lastActive = if (o.isNull("lastActive")) null else o.optString("lastActive"),
-                recording = o.optBoolean("recording", o.optBoolean("active", false)),
+                recording = o.optBoolean("recording", false),
                 lastDelivered =
                     if (o.isNull("lastDelivered")) null else o.optString("lastDelivered"),
             )

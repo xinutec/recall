@@ -71,10 +71,6 @@ object Prefs {
         prefs(ctx).edit().putString(KEY_INGEST_TOKEN, token.trim()).apply()
     }
 
-    fun ingestBase(
-        @Suppress("UNUSED_PARAMETER") ctx: Context, // like the other readers
-    ): String = INGEST_BASE
-
     /** This phone's source id, sent in the handshake; made once and kept. The typed-in
      * id of older versions if there is one, else the model plus a random suffix. */
     fun deviceId(ctx: Context): String {

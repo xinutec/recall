@@ -49,15 +49,13 @@ class BootReceiver : BroadcastReceiver() {
 
     private fun promptToResume(context: Context) {
         val mgr = context.getSystemService(NotificationManager::class.java)
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            mgr.createNotificationChannel(
-                NotificationChannel(
-                    CHANNEL_ID,
-                    "Resume after reboot",
-                    NotificationManager.IMPORTANCE_HIGH,
-                ),
-            )
-        }
+        mgr.createNotificationChannel(
+            NotificationChannel(
+                CHANNEL_ID,
+                "Resume after reboot",
+                NotificationManager.IMPORTANCE_HIGH,
+            ),
+        )
         val launch =
             Intent(context, MainActivity::class.java).apply {
                 flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP
