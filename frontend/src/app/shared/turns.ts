@@ -102,7 +102,10 @@ export function blocksOf(
 /** Whether `t` can end a stretch that starts at `from`: the same recording,
  * and not before it. */
 export function canEnd(from: Transcript, t: Transcript): boolean {
-  return t.source === from.source && (t.start > from.start || (t.start === from.start && t.id >= from.id));
+  return (
+    t.source === from.source &&
+    (t.start > from.start || (t.start === from.start && t.id >= from.id))
+  );
 }
 
 const COLOURS = ['#8ab4f8', '#fbbc04', '#81c995', '#f28b82', '#c58af9', '#78d9ec', '#ff8bcb'];
@@ -119,6 +122,8 @@ export class Turns implements OnDestroy {
   readonly moments = input.required<readonly Moment[]>();
   /** Names to offer when nobody in these turns has one yet. */
   readonly roster = input<readonly string[]>([]);
+  /** A line to mark, as one opened from a search result. */
+  readonly focus = input<number | null>(null);
   /** Cluster to "Voice N", for a session's unnamed voices. */
   readonly voiceNames = input<ReadonlyMap<string, string>>(new Map());
   /** A write landed; the parent refetches. */

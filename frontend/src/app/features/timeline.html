@@ -2,7 +2,7 @@
   <header class="head">
     <h2>Timeline</h2>
     <div class="head-actions">
-      @if (before()) {
+      @if (before() || at()) {
         <button matButton (click)="jumpToLatest()">
           <mat-icon>vertical_align_bottom</mat-icon> Jump to latest
         </button>
@@ -78,6 +78,7 @@
             class="turns"
             [moments]="conv.moments"
             [roster]="speakers()"
+            [focus]="focus()"
             (changed)="refresh()"
           />
         }

@@ -52,7 +52,7 @@
             role="button"
             tabindex="0"
             [attr.data-id]="t.id"
-            [class.sel]="selected() === t.id"
+            [class.sel]="selected() === t.id || focus() === t.id"
             [class.provisional]="provisional(t)"
             [class.gone]="t.hidden"
             [class.disputed]="disputed(t)"

@@ -3,10 +3,15 @@
   <mat-card-content>
     <div class="meta">
       <app-play-button [url]="t.audioUrl" label="hear this line" />
-      <span class="clock">
+      <a
+        class="clock"
+        [routerLink]="['/']"
+        [queryParams]="{ at: t.start, line: t.id }"
+        aria-label="Open in the timeline"
+      >
         <mat-icon inline>schedule</mat-icon>
         {{ clock(t) }}
-      </span>
+      </a>
       <mat-chip-set aria-label="turn details">
         @if (t.speaker) {
           <mat-chip highlighted>

@@ -15,8 +15,13 @@
   align-items: center;
   gap: 0.25rem;
   font: var(--mat-sys-body-medium);
-  opacity: 0.75;
+  color: var(--mat-sys-primary);
+  text-decoration: none;
   white-space: nowrap;
+
+  &:hover {
+    text-decoration: underline;
+  }
 }
 
 .text {

@@ -48,6 +48,8 @@ const page = (items: Conversation[], hasMore = false): ConversationPage => ({ it
 function setup(
   opts: {
     before?: string;
+    at?: string;
+    line?: string;
     // eslint-disable-next-line @typescript-eslint/no-explicit-any -- a test payload of any shape
     conversations?: any;
   } = {},
@@ -74,6 +76,12 @@ function setup(
   const fixture = TestBed.createComponent(Timeline);
   if (opts.before !== undefined) {
     fixture.componentRef.setInput('before', opts.before);
+  }
+  if (opts.at !== undefined) {
+    fixture.componentRef.setInput('at', opts.at);
+  }
+  if (opts.line !== undefined) {
+    fixture.componentRef.setInput('line', opts.line);
   }
   // eslint-disable-next-line @typescript-eslint/no-explicit-any -- the component's private state, reached in a test
   const c = fixture.componentInstance as any;
@@ -104,6 +112,21 @@ describe('Timeline', () => {
     expect(c.convos()).toHaveLength(2);
     expect(c.isExpanded(newest)).toBe(true);
     expect(c.isExpanded(older)).toBe(false);
+  });
+
+  it('opens at a line: from an hour before it, with its conversation open and the line marked', async () => {
+    const before = conv(at('09:45'));
+    const its = conv(at('10:00'), at('10:45'));
+    const later = conv(at('11:00'));
+    const conversations = vi.fn(() => of(page([before, its, later], true)));
+    const { fixture, c } = setup({ at: at('10:30'), line: '7', conversations });
+    await settle(fixture);
+    expect(conversations).toHaveBeenCalledWith(200, undefined, '2026-06-13T09:30:00.000Z');
+    expect(c.isExpanded(its)).toBe(true);
+    expect(c.isExpanded(later)).toBe(false);
+    expect(c.focus()).toBe(7);
+    expect(c.hasOlder()).toBe(true);
+    expect(c.hasNewer()).toBe(true);
   });
 
   it('groups conversations by day', async () => {
@@ -166,7 +189,7 @@ describe('Timeline', () => {
     expect(navigate).toHaveBeenCalledWith(
       [],
       expect.objectContaining({
-        queryParams: { before: '2026-06-13T09:00:00.000Z' },
+        queryParams: { before: '2026-06-13T09:00:00.000Z', at: null, line: null },
         replaceUrl: true,
       }),
     );
@@ -199,7 +222,10 @@ describe('Timeline', () => {
     // …so the URL cursor is cleared — a reload now shows the latest window.
     expect(navigate).toHaveBeenCalledWith(
       [],
-      expect.objectContaining({ queryParams: { before: null }, replaceUrl: true }),
+      expect.objectContaining({
+        queryParams: { before: null, at: null, line: null },
+        replaceUrl: true,
+      }),
     );
   });
 
@@ -224,7 +250,7 @@ describe('Timeline', () => {
     expect(navigate).toHaveBeenCalledWith(
       [],
       expect.objectContaining({
-        queryParams: { before: '2026-06-13T12:30:00.000Z' },
+        queryParams: { before: '2026-06-13T12:30:00.000Z', at: null, line: null },
         replaceUrl: true,
       }),
     );
@@ -268,7 +294,10 @@ describe('Timeline', () => {
     c.jumpToLatest();
     expect(navigate).toHaveBeenCalledWith(
       [],
-      expect.objectContaining({ queryParams: { before: null }, replaceUrl: true }),
+      expect.objectContaining({
+        queryParams: { before: null, at: null, line: null },
+        replaceUrl: true,
+      }),
     );
   });
 

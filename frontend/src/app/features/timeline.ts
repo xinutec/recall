@@ -1,9 +1,11 @@
 import {
+  afterNextRender,
   ChangeDetectionStrategy,
   Component,
   computed,
   effect,
   inject,
+  Injector,
   input,
   signal,
   untracked,
@@ -33,13 +35,16 @@ interface Day {
 }
 
 const PAGE = 200;
+/** How much earlier than a line, opened from elsewhere, the window starts. */
+const LEAD_MS = 60 * 60 * 1000;
 
 /**
  * Everything said, as conversations grouped by day, newest at the bottom.
  *
  * Load earlier / Load later extend one list. `?before=` records the position
  * (replaceUrl: a position, not a history step), so a reload fetches that window
- * in one request.
+ * in one request. `?at=&line=`, from a search result, opens the window around
+ * that line with its conversation open and the line marked.
  */
 @Component({
   selector: 'app-timeline',
@@ -60,12 +65,18 @@ export class Timeline {
   private readonly router = inject(Router);
   private readonly route = inject(ActivatedRoute);
   protected readonly player = inject(Player);
+  private readonly injector = inject(Injector);
 
   /** Fetched, so real names stay out of the code. */
   private readonly roster = inject(Speakers);
   protected readonly speakers = this.roster.names;
 
   readonly before = input('', { transform: (value: string | undefined) => value ?? '' });
+  /** An instant to open at, with `line`, the id of the line said then. */
+  readonly at = input('', { transform: (value: string | undefined) => value ?? '' });
+  readonly line = input('', { transform: (value: string | undefined) => value ?? '' });
+  /** The line opened at, marked in its conversation. */
+  protected readonly focus = computed(() => Number(this.line()) || null);
 
   private readonly convos = signal<readonly Conversation[]>([]);
   protected readonly loading = signal(false);
@@ -111,8 +122,10 @@ export class Timeline {
     this.roster.refresh();
     effect(() => {
       const cursor = this.before();
+      const at = this.at();
       untracked(() => {
-        if (cursor !== this.lastSyncedCursor) void this.restore(cursor);
+        if (at) void this.openAt(at);
+        else if (cursor !== this.lastSyncedCursor) void this.restore(cursor);
       });
     });
   }
@@ -137,8 +150,34 @@ export class Timeline {
     }
   }
 
+  /** The window from an hour before `at`, with the conversation holding it open. */
+  private async openAt(at: string): Promise<void> {
+    const from = new Date(new Date(at).getTime() - LEAD_MS).toISOString();
+    this.loading.set(true);
+    this.failed.set(false);
+    try {
+      const page = await firstValueFrom(this.api.conversations(PAGE, undefined, from));
+      this.convos.set(page.items);
+      this.hasOlder.set(true);
+      this.hasNewer.set(page.hasMore);
+      const its = page.items.find((c) => c.start <= at && at <= c.end);
+      this.expanded.set(new Set(its ? [this.key(its)] : []));
+      afterNextRender(() => this.reveal(), { injector: this.injector });
+    } catch {
+      this.failed.set(true);
+    } finally {
+      this.loading.set(false);
+    }
+  }
+
+  /** Scroll the marked line into view. */
+  private reveal(): void {
+    document.querySelector(`[data-id="${this.focus()}"]`)?.scrollIntoView({ block: 'center' });
+  }
+
   protected refresh(): void {
-    void this.restore(this.before(), true);
+    if (this.at()) void this.openAt(this.at());
+    else void this.restore(this.before(), true);
   }
 
   protected async loadEarlier(): Promise<void> {
@@ -184,7 +223,7 @@ export class Timeline {
     this.lastSyncedCursor = cursor ?? '';
     void this.router.navigate([], {
       relativeTo: this.route,
-      queryParams: { before: cursor },
+      queryParams: { before: cursor, at: null, line: null },
       replaceUrl: true,
     });
   }
@@ -192,7 +231,7 @@ export class Timeline {
   protected jumpToLatest(): void {
     void this.router.navigate([], {
       relativeTo: this.route,
-      queryParams: { before: null },
+      queryParams: { before: null, at: null, line: null },
       replaceUrl: true,
     });
   }
