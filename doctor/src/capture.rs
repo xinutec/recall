@@ -128,30 +128,28 @@ pub fn capture_checks(
 
 /// When each microphone last wrote audio: the newest non-empty segment's
 /// mtime. Empty files are skipped: capture rolls them while a device delivers
-/// nothing, as in coreaudio's startup window.
+/// nothing, as in coreaudio's startup window. Names sort by their start, so
+/// only the newest are read, not every file the archive keeps.
 pub fn recorders_on_disk(root: &Path, sources: &[(String, SourceKind)]) -> Vec<Recorder> {
     sources
         .iter()
         .map(|(source_id, kind)| {
-            let mut newest: Option<std::time::SystemTime> = None;
-            if let Ok(entries) = std::fs::read_dir(root.join(source_id)) {
-                let prefix = format!("{source_id}-");
-                for entry in entries.flatten() {
-                    if !entry.file_name().to_string_lossy().starts_with(&prefix) {
-                        continue;
-                    }
-                    let Ok(meta) = entry.metadata() else { continue };
-                    if meta.len() == 0 {
-                        continue;
-                    }
-                    let Ok(modified) = meta.modified() else {
-                        continue;
-                    };
-                    if newest.is_none_or(|best| modified > best) {
-                        newest = Some(modified);
-                    }
-                }
-            }
+            let dir = root.join(source_id);
+            let prefix = format!("{source_id}-");
+            let mut names: Vec<String> = std::fs::read_dir(&dir)
+                .map(|entries| {
+                    entries
+                        .flatten()
+                        .map(|e| e.file_name().to_string_lossy().into_owned())
+                        .filter(|name| name.starts_with(&prefix))
+                        .collect()
+                })
+                .unwrap_or_default();
+            names.sort_unstable_by(|a, b| b.cmp(a));
+            let newest = names.iter().find_map(|name| {
+                let meta = dir.join(name).metadata().ok()?;
+                (meta.len() > 0).then(|| meta.modified().ok()).flatten()
+            });
             Recorder {
                 source_id: source_id.clone(),
                 kind: *kind,

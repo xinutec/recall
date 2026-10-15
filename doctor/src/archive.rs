@@ -169,8 +169,18 @@ pub fn registered_devices(events: &[capture_log::Event]) -> Vec<(String, SourceK
         .collect()
 }
 
+/// Longer than any segment: a file named earlier than this before `since`
+/// cannot reach it, so its metadata is never read. The archive keeps every
+/// file, and reading each one's at background I/O priority is what outran the
+/// child's bound.
+#[must_use]
+pub fn longest_segment() -> Duration {
+    Duration::hours(1)
+}
+
 /// `(start, end)` of each non-empty segment of `source` ending at or after
-/// `since`: the start from its name, the end from its mtime.
+/// `since`: the start from its name, the end from its mtime. Selected by name
+/// first ([`longest_segment`]).
 #[must_use]
 pub fn recorded_intervals(
     root: &Path,
@@ -186,6 +196,9 @@ pub fn recorded_intervals(
         let Some(start) = audiocore::names::parse_segment_start(&name.to_string_lossy()) else {
             continue;
         };
+        if start < since - longest_segment() {
+            continue;
+        }
         let Ok(meta) = entry.metadata() else { continue };
         let Ok(modified) = meta.modified() else {
             continue;

@@ -67,7 +67,8 @@ fn undelivered(out: &Path, handled: &BTreeSet<String>, now: DateTime<Utc>) -> Ve
         };
         let mut names: Vec<String> = files
             .flatten()
-            .filter(|e| e.path().is_file())
+            // The entry's own type, not a stat of every file the archive keeps.
+            .filter(|e| e.file_type().is_ok_and(|t| t.is_file()))
             .map(|e| e.file_name().to_string_lossy().into_owned())
             .filter(|name| audiocore::names::parse(&source, name).is_ok_and(|n| n.ext.recorded()))
             .collect();
