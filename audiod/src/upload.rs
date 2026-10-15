@@ -29,12 +29,15 @@ pub struct PassSummary {
     pub uploaded: usize,
     pub failed: usize,
     pub conflicted: usize,
+    /// Refused because an operator deleted the minute on the server.
+    pub gone: usize,
 }
 
 // --- delivery state ------------------------------------------------------------------
 
 /// The uploader's bookkeeping. `uploads`: verified receipts. `conflicts`:
-/// 409s, a name taken by different bytes, for a person to look at.
+/// 409s, a name taken by different bytes, for a person to look at. `gone`:
+/// 410s, a minute deleted on the server; the file stays, unsent.
 fn open_state(root: &Path) -> rusqlite::Result<rusqlite::Connection> {
     let conn = rusqlite::Connection::open(root.join("upload-state.sqlite"))?;
     conn.busy_timeout(Duration::from_secs(5))?;
@@ -51,6 +54,11 @@ fn open_state(root: &Path) -> rusqlite::Result<rusqlite::Connection> {
              source       TEXT NOT NULL,
              sha256       TEXT NOT NULL,
              noticed_utc  TEXT NOT NULL
+         );
+         CREATE TABLE IF NOT EXISTS gone (
+             filename     TEXT PRIMARY KEY,
+             source       TEXT NOT NULL,
+             noticed_utc  TEXT NOT NULL
          );",
     )?;
     Ok(conn)
@@ -60,6 +68,7 @@ fn already_handled(conn: &rusqlite::Connection, filename: &str) -> bool {
     let hit = |sql: &str| conn.query_row(sql, [filename], |_| Ok(())).is_ok();
     hit("SELECT 1 FROM uploads WHERE filename = ?1")
         || hit("SELECT 1 FROM conflicts WHERE filename = ?1")
+        || hit("SELECT 1 FROM gone WHERE filename = ?1")
 }
 
 // --- the pass ------------------------------------------------------------------------
@@ -111,6 +120,7 @@ fn scan(root: &Path, grace: Duration) -> std::io::Result<Vec<Candidate>> {
 enum Delivery {
     Verified { sha256: String, bytes: usize },
     Conflict { sha256: String },
+    Gone,
     Failed(String),
 }
 
@@ -134,6 +144,7 @@ fn deliver(config: &Config, candidate: &Candidate, agent: &ureq::Agent) -> Deliv
     let response = match request.send_bytes(&bytes) {
         Ok(response) => response,
         Err(ureq::Error::Status(409, _)) => return Delivery::Conflict { sha256 },
+        Err(ureq::Error::Status(410, _)) => return Delivery::Gone,
         Err(err) => return Delivery::Failed(err.to_string()),
     };
     let body = match response.into_string() {
@@ -184,7 +195,9 @@ pub fn run_pass(config: &Config) -> PassSummary {
         .timeout(Duration::from_mins(2))
         .build();
     for candidate in candidates {
-        if summary.uploaded + summary.failed + summary.conflicted >= config.max_per_pass {
+        if summary.uploaded + summary.failed + summary.conflicted + summary.gone
+            >= config.max_per_pass
+        {
             break;
         }
         if already_handled(&conn, &candidate.filename) {
@@ -231,6 +244,14 @@ pub fn run_pass(config: &Config) -> PassSummary {
                 );
                 summary.conflicted += 1;
             }
+            Delivery::Gone => {
+                tracing::warn!(file = %candidate.filename, "deleted on the server; not sent again");
+                let _ = conn.execute(
+                    "INSERT OR IGNORE INTO gone (filename, source, noticed_utc) VALUES (?1, ?2, ?3)",
+                    (&candidate.filename, &candidate.source, now_rfc3339()),
+                );
+                summary.gone += 1;
+            }
             Delivery::Failed(reason) => {
                 tracing::warn!(file = %candidate.filename, %reason, "upload failed; will retry next pass");
                 summary.failed += 1;
@@ -241,6 +262,7 @@ pub fn run_pass(config: &Config) -> PassSummary {
         uploaded = summary.uploaded,
         failed = summary.failed,
         conflicted = summary.conflicted,
+        gone = summary.gone,
         "upload pass complete"
     );
     summary

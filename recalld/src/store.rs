@@ -1,6 +1,5 @@
 //! The ingest plane's bookkeeping: one row per stored blob, in
-//! `<root>/ingest.sqlite`. Append-only, except [`forget_upload`] and the
-//! operator's [`crate::forget`].
+//! `<root>/ingest.sqlite`. Append-only, except [`forget_files`].
 
 use rusqlite::{Connection, OptionalExtension};
 use serde::Serialize;
@@ -8,15 +7,17 @@ use std::path::Path;
 use std::time::Duration;
 
 crate::statements! {
+    FILES_OF: Ingest = "SELECT filename FROM segments WHERE source = ?1";
+    /// `?1`: filenames as JSON.
     FORGET_SPEECH: Ingest =
-        "DELETE FROM segment_speech WHERE filename IN (SELECT filename FROM segments WHERE source = ?1)";
+        "DELETE FROM segment_speech WHERE filename IN (SELECT value FROM json_each(?1))";
     FORGET_LEVELS: Ingest =
-        "DELETE FROM segment_levels WHERE filename IN (SELECT filename FROM segments WHERE source = ?1)";
-    FORGET_JOBS: Ingest =
-        "DELETE FROM jobs WHERE filename IN (SELECT filename FROM segments WHERE source = ?1)";
+        "DELETE FROM segment_levels WHERE filename IN (SELECT value FROM json_each(?1))";
+    FORGET_JOBS: Ingest = "DELETE FROM jobs WHERE filename IN (SELECT value FROM json_each(?1))";
     FORGET_LEDGER: Ingest =
-        "DELETE FROM pass_ledger WHERE filename IN (SELECT filename FROM segments WHERE source = ?1)";
-    FORGET_SEGMENTS: Ingest = "DELETE FROM segments WHERE source = ?1";
+        "DELETE FROM pass_ledger WHERE filename IN (SELECT value FROM json_each(?1))";
+    FORGET_SEGMENTS: Ingest =
+        "DELETE FROM segments WHERE filename IN (SELECT value FROM json_each(?1))";
     INSERT: Ingest =
         "INSERT INTO segments
              (filename, source, start_utc, bytes, sha256, received_utc, sent_utc)
@@ -87,22 +88,35 @@ pub fn open(root: &Path) -> rusqlite::Result<Connection> {
     Ok(conn)
 }
 
-/// Remove every ingest-plane row of a deleted upload in one transaction: jobs,
-/// measurements, ledger, clips and segments. The plane's one deletion through
-/// a route; only a [`crate::sessions::DeletedUpload`] opens it, so a route
-/// cannot reach household capture ([`crate::forget`] is not a route).
+/// Remove every ingest-plane row of a deleted upload in one transaction. Only
+/// a [`crate::sessions::DeletedUpload`] opens it, so a route cannot reach
+/// household capture ([`crate::forget`] is not a route).
 pub fn forget_upload(
     conn: &mut Connection,
     deleted: &crate::sessions::DeletedUpload,
 ) -> rusqlite::Result<()> {
     let tx = crate::sql::write(conn)?;
-    let source = deleted.source();
-    for statement in [FORGET_SPEECH, FORGET_LEVELS, FORGET_JOBS, FORGET_LEDGER] {
-        statement.execute(&tx, [source])?;
-    }
-    crate::clips::forget_source(&tx, source)?;
-    FORGET_SEGMENTS.execute(&tx, [source])?;
+    let files: Vec<String> = {
+        let mut stmt = FILES_OF.prepare(&tx)?;
+        let rows = stmt.query_map([deleted.source()], |r| r.get(0))?;
+        rows.collect::<rusqlite::Result<_>>()?
+    };
+    forget_files(&tx, &files)?;
     tx.commit()
+}
+
+/// Every ingest-plane row of these files: measurements, jobs (which hold
+/// their words), ledger, clips and segments. The plane's one deletion, in the
+/// caller's transaction.
+pub(crate) fn forget_files(tx: &Connection, filenames: &[String]) -> rusqlite::Result<()> {
+    let files = serde_json::to_string(filenames)
+        .map_err(|e| rusqlite::Error::ToSqlConversionFailure(e.into()))?;
+    for statement in [FORGET_SPEECH, FORGET_LEVELS, FORGET_JOBS, FORGET_LEDGER] {
+        statement.execute(tx, [&files])?;
+    }
+    crate::clips::forget_files(tx, &files)?;
+    FORGET_SEGMENTS.execute(tx, [&files])?;
+    Ok(())
 }
 
 pub fn insert(conn: &Connection, row: &Row) -> rusqlite::Result<()> {

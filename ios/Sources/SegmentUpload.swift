@@ -3,8 +3,8 @@ import Foundation
 
 /// Delivers closed segments to recalld's ingest. A delivery counts only when the
 /// receipt's sha-256 matches the bytes sent (docs/architecture.md, decision 3). A
-/// 409 moves to `conflict/` for a person; anything else, a token refusal included,
-/// waits for the next pass.
+/// 409, or a 410 for a minute deleted on the server, moves to `conflict/` for a
+/// person; anything else, a token refusal included, waits for the next pass.
 ///
 /// An in-app task: the app runs while it records, and what it left behind is picked
 /// up at the next launch. Not on expensive networks.
@@ -68,7 +68,7 @@ enum SegmentUpload {
                     receipt["bytes"] as? Int == bytes.count
                 else { return .failed }
                 return .verified
-            case 409: return .conflict
+            case 409, 410: return .conflict
             default: return .failed
             }
         } catch {

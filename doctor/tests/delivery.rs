@@ -11,7 +11,8 @@ fn uploader_state(root: &Path, uploads: &[&str], conflicts: &[&str]) {
     let conn = rusqlite::Connection::open(root.join("upload-state.sqlite")).unwrap();
     conn.execute_batch(
         "CREATE TABLE uploads (filename TEXT PRIMARY KEY);
-         CREATE TABLE conflicts (filename TEXT PRIMARY KEY);",
+         CREATE TABLE conflicts (filename TEXT PRIMARY KEY);
+         CREATE TABLE gone (filename TEXT PRIMARY KEY);",
     )
     .unwrap();
     for name in uploads {
@@ -139,5 +140,22 @@ fn a_conflicted_name_does_not_also_read_as_undelivered() {
     assert_eq!(
         find(&checks, "no delivery conflicts").verdict,
         Verdict::Warn
+    );
+}
+
+#[test]
+fn a_minute_the_server_forgot_is_not_undelivered() {
+    let dir = tempfile::tempdir().unwrap();
+    segment(dir.path(), "usb", "usb-20260908T191122.flac", 7 * 60);
+    uploader_state(dir.path(), &[], &[]);
+    rusqlite::Connection::open(dir.path().join("upload-state.sqlite"))
+        .unwrap()
+        .execute("INSERT INTO gone VALUES ('usb-20260908T191122.flac')", [])
+        .unwrap();
+    let checks = delivery_checks(dir.path(), Utc::now());
+    assert_eq!(find(&checks, "delivery complete").verdict, Verdict::Pass);
+    assert_eq!(
+        find(&checks, "no delivery conflicts").verdict,
+        Verdict::Pass
     );
 }

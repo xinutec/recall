@@ -127,3 +127,40 @@ fn a_divergent_name_conflicts_through_the_real_409() {
         std::fs::read(server.path().join("ingest/usb/usb-20260905T120000.opus")).expect("blob");
     assert_eq!(stored, b"theirs");
 }
+
+#[test]
+fn a_minute_the_server_forgot_is_not_sent_again_and_stays_here() {
+    let archive = tempfile::tempdir().expect("archive");
+    let server = tempfile::tempdir().expect("server");
+    let url = serve(server.path(), "* tok\n");
+    recalld::work::open_write(server.path())
+        .expect("meaning")
+        .execute(
+            "INSERT INTO deleted_segments (source_id, start_utc, deleted_utc)
+             VALUES ('usb', '2026-09-05T12:00:00+00:00', '2026-09-06T00:00:00+00:00')",
+            [],
+        )
+        .expect("tombstone");
+    write_segment(
+        archive.path(),
+        "usb",
+        "usb-20260905T120000.opus",
+        b"forgotten",
+    );
+    write_segment(archive.path(), "usb", "usb-20260905T120100.opus", b"kept");
+    let config = Config {
+        root: archive.path().to_owned(),
+        base_url: url,
+        token: Some("tok".to_owned()),
+        max_per_pass: 500,
+        open_grace: Duration::ZERO,
+    };
+
+    let first = run_pass(&config);
+    let second = run_pass(&config);
+
+    assert_eq!((first.uploaded, first.gone, first.failed), (1, 1, 0));
+    assert_eq!((second.uploaded, second.gone, second.failed), (0, 0, 0));
+    // No recorder deletes because a server said so.
+    assert!(archive.path().join("usb/usb-20260905T120000.opus").exists());
+}

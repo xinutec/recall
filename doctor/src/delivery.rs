@@ -17,8 +17,8 @@ const _: () = assert!(OPEN_GRACE_MINUTES < WARN_MINUTES);
 const FAIL_HOURS: i64 = 6;
 const CONFLICTS_NAMED: usize = 3;
 
-/// The filenames the uploader has handled (conflicts included), and the
-/// conflicts.
+/// The filenames the uploader has handled (conflicts and minutes deleted on
+/// the server included), and the conflicts.
 fn uploader_state(state: &Path) -> rusqlite::Result<(BTreeSet<String>, Vec<String>)> {
     let conn = rusqlite::Connection::open_with_flags(
         state,
@@ -33,6 +33,11 @@ fn uploader_state(state: &Path) -> rusqlite::Result<(BTreeSet<String>, Vec<Strin
         .query_map([], |row| row.get::<_, String>(0))?
         .collect::<rusqlite::Result<_>>()?;
     handled.extend(conflicts.iter().cloned());
+    let gone = conn
+        .prepare("SELECT filename FROM gone")?
+        .query_map([], |row| row.get::<_, String>(0))?
+        .collect::<rusqlite::Result<Vec<String>>>()?;
+    handled.extend(gone);
     Ok((handled, conflicts))
 }
 

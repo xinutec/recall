@@ -96,9 +96,11 @@ and `audiod resume` are the break-glass when Isis cannot be reached.
 Deleting a span of capture (a test, say) is an operator act on Isis, pause
 first: `recalld --root /data forget-span --from <instant> --to <instant>` in
 the pod says what the span holds, and `--apply` deletes it. It leaves the
-recorders' own copies: on the Mac, delete the span's files under
-`/Volumes/Backup/recall/<source>/` before their rows in `upload-state.sqlite`,
-or `recall-upload` delivers them again (refused, 410, but retried every pass).
+recorders' own copies, which no recorder deletes because the server said so: a
+recorder still holding one is refused it (410) and stops sending it (`gone` in
+`upload-state.sqlite`; `conflict/` on a phone). Delete them by hand: on the
+Mac under `/Volumes/Backup/recall/<source>/`, on geb under
+`/var/lib/recall/geb/`.
 
 Phones: [android](../android/README.md), [ios](../ios/README.md); protocol and
 liveness: [devices.md](devices.md).

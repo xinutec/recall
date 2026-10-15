@@ -1,10 +1,10 @@
 //! Forgetting a span of the household capture: the operator's deletion, run as
 //! `recalld forget-span`, never a route (docs/architecture.md, principle 5).
 //!
-//! It removes what [`crate::sessions::delete_session`] and
-//! [`crate::store::forget_upload`] remove for a meeting, selected by time
-//! instead of by source, and leaves uploads to their own delete. Each minute
-//! is tombstoned, so a recorder delivering it again is refused.
+//! [`drop_recordings`] and [`crate::store::forget_files`] are what deleting a
+//! recording means in each plane; a meeting's delete
+//! ([`crate::sessions::delete_session`]) uses them too. Each recording is
+//! tombstoned, so delivering it again is refused.
 
 use audiocore::instant::{self, Stamp};
 use chrono::{DateTime, SecondsFormat, Utc};
@@ -55,16 +55,6 @@ crate::statements! {
     DROP_LIVE: Meaning = "DELETE FROM live_lines WHERE id IN (SELECT value FROM json_each(?1))";
     DROP_AUDIO: Meaning =
         "DELETE FROM audio_segments WHERE id IN (SELECT value FROM json_each(?1))";
-    /// `?1`: filenames as JSON.
-    FORGET_SPEECH: Ingest =
-        "DELETE FROM segment_speech WHERE filename IN (SELECT value FROM json_each(?1))";
-    FORGET_LEVELS: Ingest =
-        "DELETE FROM segment_levels WHERE filename IN (SELECT value FROM json_each(?1))";
-    FORGET_JOBS: Ingest = "DELETE FROM jobs WHERE filename IN (SELECT value FROM json_each(?1))";
-    FORGET_LEDGER: Ingest =
-        "DELETE FROM pass_ledger WHERE filename IN (SELECT value FROM json_each(?1))";
-    FORGET_SEGMENTS: Ingest =
-        "DELETE FROM segments WHERE filename IN (SELECT value FROM json_each(?1))";
 }
 
 /// `[from, to)`, in UTC.
@@ -148,6 +138,38 @@ fn count(r: &rusqlite::Row<'_>) -> rusqlite::Result<usize> {
     usize::try_from(n).map_err(|_| rusqlite::Error::IntegralValueOutOfRange(0, n))
 }
 
+/// One meaning-plane audio row.
+pub(crate) struct Recording {
+    pub id: i64,
+    pub source: String,
+    pub start_utc: String,
+    pub path: String,
+}
+
+/// Remove recordings from the meaning plane, in the caller's transaction:
+/// each tombstoned, its lines, its clips' rendering and edits, and its row.
+/// `clips` and `live` (live line ids) are theirs.
+pub(crate) fn drop_recordings(
+    tx: &Connection,
+    recordings: &[Recording],
+    clips: &[i64],
+    live: &[i64],
+    now: &Stamp,
+) -> rusqlite::Result<()> {
+    for r in recordings {
+        REMEMBER.execute(tx, (&r.source, &r.start_utc, now))?;
+    }
+    let ids: Vec<i64> = recordings.iter().map(|r| r.id).collect();
+    let (clips, ids, live) = (json(clips)?, json(&ids)?, json(live)?);
+    DROP_LINES.execute(tx, (&clips, &ids, &live))?;
+    DROP_RENDERED.execute(tx, [&clips])?;
+    DROP_EDITS.execute(tx, [&clips])?;
+    DROP_TRANSCRIBED_BEFORE_JOBS.execute(tx, [&ids])?;
+    DROP_LIVE.execute(tx, [&live])?;
+    DROP_AUDIO.execute(tx, [&ids])?;
+    Ok(())
+}
+
 /// Forget the household capture in `span`; with `apply` false, only say what
 /// it holds. The meaning plane commits first, then the ingest plane, then the
 /// files go: a failure part-way is finished by running it again.
@@ -172,10 +194,15 @@ pub fn span(
     };
     segments.retain(|(source, ..)| !uploads.contains(source));
     let (from, to) = span.meaning();
-    let audio: Vec<(i64, String, String, String)> = {
+    let audio: Vec<Recording> = {
         let mut stmt = AUDIO.prepare(meaning)?;
         let rows = stmt.query_map((&from, &to, json(&uploads)?), |r| {
-            Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?))
+            Ok(Recording {
+                id: r.get(0)?,
+                source: r.get(1)?,
+                start_utc: r.get(2)?,
+                path: r.get(3)?,
+            })
         })?;
         rows.collect::<rusqlite::Result<_>>()?
     };
@@ -190,8 +217,7 @@ pub fn span(
             clips.push(clip.id.stored());
         }
     }
-    let audio_ids: Vec<i64> = audio.iter().map(|a| a.0).collect();
-    let filenames: Vec<&str> = segments.iter().map(|s| s.1.as_str()).collect();
+    let audio_ids: Vec<i64> = audio.iter().map(|a| a.id).collect();
     let (clips_json, audio_json, live_json) = (json(&clips)?, json(&audio_ids)?, json(&live)?);
 
     let voiceprints: i64 =
@@ -211,7 +237,7 @@ pub fn span(
         sources: segments
             .iter()
             .map(|s| s.0.clone())
-            .chain(audio.iter().map(|a| a.1.clone()))
+            .chain(audio.iter().map(|a| a.source.clone()))
             .collect(),
         left_on_disk: Vec::new(),
     };
@@ -220,37 +246,25 @@ pub fn span(
     }
 
     let tx = crate::sql::write(meaning)?;
-    for (_, source, start, _) in &audio {
-        REMEMBER.execute(&tx, (source, start, now))?;
-    }
+    drop_recordings(&tx, &audio, &clips, &live, now)?;
     // A minute not yet in the meaning plane is tombstoned too.
     for (source, _, start) in &segments {
         if let Some(start) = Stamp::parse(start) {
             REMEMBER.execute(&tx, (source, &start, now))?;
         }
     }
-    DROP_LINES.execute(&tx, (&clips_json, &audio_json, &live_json))?;
-    DROP_RENDERED.execute(&tx, [&clips_json])?;
-    DROP_EDITS.execute(&tx, [&clips_json])?;
-    DROP_TRANSCRIBED_BEFORE_JOBS.execute(&tx, [&audio_json])?;
-    DROP_LIVE.execute(&tx, [&live_json])?;
-    DROP_AUDIO.execute(&tx, [&audio_json])?;
     tx.commit()?;
 
-    let files_json = json(&filenames)?;
+    let filenames: Vec<String> = segments.iter().map(|s| s.1.clone()).collect();
     let tx = crate::sql::write(ingest)?;
-    for statement in [FORGET_SPEECH, FORGET_LEVELS, FORGET_JOBS, FORGET_LEDGER] {
-        statement.execute(&tx, [&files_json])?;
-    }
-    crate::clips::forget_files(&tx, &files_json)?;
-    FORGET_SEGMENTS.execute(&tx, [&files_json])?;
+    crate::store::forget_files(&tx, &filenames)?;
     tx.commit()?;
 
     // Files only after the commits, as a meeting's delete.
     let files: BTreeSet<PathBuf> = segments
         .iter()
         .map(|(source, filename, ..)| crate::store::source_dir(root, source).join(filename))
-        .chain(audio.iter().map(|a| PathBuf::from(&a.3)))
+        .chain(audio.iter().map(|a| PathBuf::from(&a.path)))
         .collect();
     for file in files {
         if let Err(err) = std::fs::remove_file(&file)

@@ -45,23 +45,12 @@ crate::statements! {
          ORDER BY t.start_utc, t.id";
     SESSION_AUDIO: Meaning =
         "SELECT id, path, start_utc FROM audio_segments WHERE source_id = ?1";
-    REMEMBER_DELETED: Meaning =
-        "INSERT OR IGNORE INTO deleted_segments (source_id, start_utc, deleted_utc) \
-             VALUES (?1, ?2, ?3)";
-    DROP_TRANSCRIBED_BEFORE_JOBS: Meaning =
-        "DELETE FROM transcribed_before_jobs WHERE audio_segment_id = ?1";
-    DROP_AUDIO: Meaning =
-        "DELETE FROM audio_segments WHERE source_id = ?1";
     DROP_SOURCE: Meaning =
         "DELETE FROM sources WHERE id = ?1";
-    /// What people did to the session and its clips, retractions included:
-    /// each carries its target's clip or session. `?2`: the clip ids as JSON.
-    DROP_SESSION_EDITS: Meaning =
-        "DELETE FROM edits WHERE source_id = ?1
-            OR clip_id IN (SELECT value FROM json_each(?2))";
+    /// What people did to the session as a whole (its language, its voices'
+    /// names); what they did to its clips goes with them.
+    DROP_SESSION_EDITS: Meaning = "DELETE FROM edits WHERE source_id = ?1";
     DROP_SESSION_LINES: Meaning = "DELETE FROM rendered_lines WHERE source_id = ?1";
-    DROP_SESSION_RENDERED: Meaning =
-        "DELETE FROM rendered_clips WHERE clip_id IN (SELECT value FROM json_each(?1))";
 }
 
 const UPLOAD_KIND: &str = "upload";
@@ -502,28 +491,26 @@ pub fn delete_session(
 ) -> Result<DeletedUpload, SessionError> {
     require_upload(conn, source)?;
     let tx = crate::sql::write(conn)?;
-    let segments: Vec<(i64, String, String)> = {
+    let recordings: Vec<crate::forget::Recording> = {
         let mut stmt = SESSION_AUDIO.prepare(&tx)?;
-        let rows = stmt.query_map([source], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))?;
+        let rows = stmt.query_map([source], |r| {
+            Ok(crate::forget::Recording {
+                id: r.get(0)?,
+                source: source.to_owned(),
+                path: r.get(1)?,
+                start_utc: r.get(2)?,
+            })
+        })?;
         rows.collect::<rusqlite::Result<_>>()?
     };
-    for (_, _, start_utc) in &segments {
-        REMEMBER_DELETED.execute(&tx, (source, start_utc, now))?;
-    }
-    for (audio_id, _, _) in &segments {
-        DROP_TRANSCRIBED_BEFORE_JOBS.execute(&tx, [audio_id])?;
-    }
-    let clips = serde_json::to_string(clips)
-        .map_err(|e| rusqlite::Error::ToSqlConversionFailure(e.into()))?;
-    DROP_SESSION_EDITS.execute(&tx, (source, &clips))?;
+    crate::forget::drop_recordings(&tx, &recordings, clips, &[], now)?;
+    DROP_SESSION_EDITS.execute(&tx, [source])?;
     DROP_SESSION_LINES.execute(&tx, [source])?;
-    DROP_SESSION_RENDERED.execute(&tx, [&clips])?;
-    DROP_AUDIO.execute(&tx, [source])?;
     DROP_SOURCE.execute(&tx, [source])?;
     tx.commit()?;
     Ok(DeletedUpload {
         source: source.to_owned(),
-        paths: segments.into_iter().map(|(_, path, _)| path).collect(),
+        paths: recordings.into_iter().map(|r| r.path).collect(),
     })
 }
 
