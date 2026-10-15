@@ -107,6 +107,7 @@ pub const ALL: &[(&str, &[Sql])] = &[
     ("devices", crate::devices::STATEMENTS),
     ("edit_log", crate::edit_log::STATEMENTS),
     ("enrol", crate::enrol::STATEMENTS),
+    ("forget", crate::forget::STATEMENTS),
     ("identify", crate::identify::STATEMENTS),
     ("labels", crate::labels::STATEMENTS),
     ("labels_write", crate::labels_write::STATEMENTS),

@@ -20,6 +20,8 @@ crate::statements! {
     BY_PATH: Ingest =
         "SELECT id, source, start_us, filename, path FROM clips WHERE path = ?1";
     FORGET_SOURCE: Ingest = "DELETE FROM clips WHERE source = ?1";
+    /// `?1`: filenames as JSON.
+    FORGET_FILES: Ingest = "DELETE FROM clips WHERE filename IN (SELECT value FROM json_each(?1))";
     CENSUS_CLIPS: Ingest = "SELECT count(*) FROM clips";
     CENSUS_SEGMENTS_WITHOUT: Ingest =
         "SELECT count(*) FROM segments s WHERE NOT EXISTS (SELECT 1 FROM clips c WHERE c.filename = s.filename)";
@@ -151,6 +153,14 @@ fn relative<'a>(root: &Path, path: &'a str) -> Option<&'a str> {
 /// If the store refuses.
 pub fn forget_source(ingest: &Connection, source: &str) -> rusqlite::Result<usize> {
     FORGET_SOURCE.execute(ingest, [source])
+}
+
+/// Delete the clips of these files (`crate::forget`).
+///
+/// # Errors
+/// If the store refuses.
+pub fn forget_files(ingest: &Connection, filenames_json: &str) -> rusqlite::Result<usize> {
+    FORGET_FILES.execute(ingest, [filenames_json])
 }
 
 /// Whether every stored file and every meaning-plane audio row has a clip.

@@ -16,6 +16,7 @@ mod devices;
 mod edit_log;
 mod enrol;
 mod fixture;
+mod forget;
 mod http;
 mod identify_parity;
 mod ingest;

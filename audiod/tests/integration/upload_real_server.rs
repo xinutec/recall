@@ -14,6 +14,7 @@ use std::time::Duration;
 fn serve(server_root: &Path, tokens_text: &str) -> String {
     let tokens_path = server_root.join("tokens");
     std::fs::write(&tokens_path, tokens_text).expect("tokens");
+    recalld::app::prepare(server_root).expect("planes");
     let config = Arc::new(ServerConfig {
         root: server_root.to_owned(),
         tokens: Some(Tokens::load(&tokens_path).expect("parse")),

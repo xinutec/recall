@@ -179,6 +179,18 @@ fn browsing(
         .layer(axum::middleware::from_fn_with_state(st, webauth::gate))
 }
 
+/// Open both planes and bring the meaning schema up to date, or say what is
+/// wrong. Run before [`router`] serves: every route assumes those tables exist.
+pub fn prepare(root: &std::path::Path) -> Result<(), String> {
+    crate::store::open(root)
+        .map_err(|err| format!("cannot open {}/ingest.sqlite: {err}", root.display()))?;
+    let conn = crate::work::open_write(root)
+        .map_err(|err| format!("cannot open {}/recall.sqlite: {err}", root.display()))?;
+    crate::meaning_schema::ensure(&conn)
+        .map_err(|err| format!("cannot migrate {}/recall.sqlite: {err}", root.display()))?;
+    Ok(())
+}
+
 pub fn router(config: Arc<Config>) -> Router {
     let limit = config.max_body_bytes;
     let frontend = config.frontend.clone();

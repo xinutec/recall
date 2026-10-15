@@ -25,6 +25,7 @@ fn harness(tokens: Option<&str>, read_token: Option<&str>) -> Harness {
         std::fs::write(&path, text).expect("write tokens");
         Tokens::load(&path).expect("load tokens")
     });
+    recalld::app::prepare(dir.path()).expect("planes");
     let app = router(Arc::new(Config {
         root: dir.path().to_owned(),
         tokens,
@@ -120,6 +121,28 @@ async fn redelivery_of_identical_bytes_is_idempotent() {
     let second = send(&h.app, put("usb", "usb-20260905T120000.flac", audio, None)).await;
     assert_eq!(first, second);
     assert_eq!(first.0, StatusCode::OK);
+}
+
+#[tokio::test]
+async fn a_forgotten_minute_delivered_again_is_gone_and_nothing_is_stored() {
+    let h = harness(None, None);
+    let meaning = recalld::work::open_write(h.dir.path()).expect("meaning");
+    meaning
+        .execute(
+            "INSERT INTO deleted_segments (source_id, start_utc, deleted_utc)
+             VALUES ('usb', '2026-09-05T12:00:00+00:00', '2026-09-06T00:00:00+00:00')",
+            [],
+        )
+        .expect("tombstone");
+
+    let (status, _) = send_raw(
+        &h.app,
+        put("usb", "usb-20260905T120000.flac", b"audio", None),
+    )
+    .await;
+
+    assert_eq!(status, StatusCode::GONE);
+    assert!(!blob_path(h.dir.path(), "usb", "usb-20260905T120000.flac").exists());
 }
 
 #[tokio::test]

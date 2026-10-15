@@ -49,7 +49,7 @@ struct Args {
     task: Option<Task>,
 }
 
-#[derive(Clone, Copy, clap::Subcommand)]
+#[derive(Clone, clap::Subcommand)]
 enum Task {
     /// Give every stored file a clip and say whether all have one
     /// (`recalld::clips`).
@@ -60,23 +60,35 @@ enum Task {
     /// Whether every stored file matches the size and hash its row recorded,
     /// and every audio row names a file (`recalld::verify`). Reads every byte.
     Verify,
+    /// Delete the household capture recorded in `[from, to)` from both planes
+    /// and the disk, tombstoned so it cannot be delivered again
+    /// (`recalld::forget`). Uploads are left to their own delete. Without
+    /// `--apply` it only says what the span holds.
+    ForgetSpan {
+        #[arg(long)]
+        from: String,
+        #[arg(long)]
+        to: String,
+        #[arg(long)]
+        apply: bool,
+    },
 }
 
 /// Open both planes as the server does, run `report` over them, and print what
 /// it returns as JSON.
 fn report<T: serde::Serialize, E: std::fmt::Display>(
     root: &std::path::Path,
-    report: impl FnOnce(&rusqlite::Connection, &rusqlite::Connection) -> Result<T, E>,
+    report: impl FnOnce(&mut rusqlite::Connection, &mut rusqlite::Connection) -> Result<T, E>,
 ) -> ExitCode {
-    if let Err(complaint) = prepare_planes(root) {
+    if let Err(complaint) = recalld::app::prepare(root) {
         eprintln!("recalld: {complaint}");
         return ExitCode::FAILURE;
     }
     let done = recalld::work::open_write(root)
         .map_err(|err| err.to_string())
-        .and_then(|meaning| {
-            let ingest = recalld::store::open(root).map_err(|err| err.to_string())?;
-            report(&meaning, &ingest).map_err(|err| err.to_string())
+        .and_then(|mut meaning| {
+            let mut ingest = recalld::store::open(root).map_err(|err| err.to_string())?;
+            report(&mut meaning, &mut ingest).map_err(|err| err.to_string())
         })
         .and_then(|value| serde_json::to_string_pretty(&value).map_err(|err| err.to_string()));
     match done {
@@ -103,6 +115,16 @@ fn run_task(root: &std::path::Path, task: Task) -> ExitCode {
         Task::Verify => report(root, |meaning, ingest| {
             recalld::verify::run(meaning, ingest, root)
         }),
+        Task::ForgetSpan { from, to, apply } => {
+            let Some(span) = recalld::forget::Span::parse(&from, &to) else {
+                eprintln!("recalld: --from and --to must be instants, --from first");
+                return ExitCode::FAILURE;
+            };
+            let now = audiocore::instant::Stamp::now();
+            report(root, |meaning, ingest| {
+                recalld::forget::span(meaning, ingest, root, &span, &now, apply)
+            })
+        }
     }
 }
 
@@ -157,18 +179,6 @@ fn keep_faults(root: &std::path::Path) -> Result<(), String> {
     Ok(())
 }
 
-/// Open both planes and bring the meaning schema up to date, or say what is
-/// wrong. Every read route assumes those tables exist.
-fn prepare_planes(root: &std::path::Path) -> Result<(), String> {
-    recalld::store::open(root)
-        .map_err(|err| format!("cannot open {}/ingest.sqlite: {err}", root.display()))?;
-    let conn = recalld::work::open_write(root)
-        .map_err(|err| format!("cannot open {}/recall.sqlite: {err}", root.display()))?;
-    recalld::meaning_schema::ensure(&conn)
-        .map_err(|err| format!("cannot migrate {}/recall.sqlite: {err}", root.display()))?;
-    Ok(())
-}
-
 fn main() -> ExitCode {
     tracing_subscriber::fmt()
         .with_env_filter(
@@ -215,7 +225,7 @@ fn main() -> ExitCode {
     let Some(trusted_proxies) = trusted_proxies() else {
         return ExitCode::FAILURE;
     };
-    if let Err(complaint) = prepare_planes(&root) {
+    if let Err(complaint) = recalld::app::prepare(&root) {
         eprintln!("recalld: {complaint}");
         return ExitCode::FAILURE;
     }

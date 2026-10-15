@@ -10,6 +10,7 @@ pub mod conversations;
 pub mod devices;
 pub mod edit_log;
 pub mod enrol;
+pub mod forget;
 pub mod identify;
 pub mod ingest;
 pub mod ingest_schema;

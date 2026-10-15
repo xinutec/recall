@@ -105,6 +105,14 @@ const DIVERGENT: &str = "a different segment already holds this name";
 
 /// The blocking half of a PUT. 400: fix the name; 409: the name is taken;
 /// 500: retry.
+/// Whether an operator forgot this minute (`crate::forget`).
+fn was_forgotten(root: &FsPath, name: &SegmentName) -> rusqlite::Result<bool> {
+    let Some(started) = audiocore::instant::parse_utc(&name.start_utc) else {
+        return Ok(false);
+    };
+    crate::upload::was_deleted(&crate::reads::open(root)?, &name.source, started)
+}
+
 fn store_segment(
     config: &Config,
     name: &SegmentName,
@@ -126,6 +134,14 @@ fn store_segment(
         Ok(None) => {}
         Err(err) => {
             tracing::error!(%err, "row lookup failed");
+            return error(StatusCode::INTERNAL_SERVER_ERROR, "bookkeeping unavailable");
+        }
+    }
+    match was_forgotten(&config.root, name) {
+        Ok(false) => {}
+        Ok(true) => return error(StatusCode::GONE, "this minute was deleted"),
+        Err(err) => {
+            tracing::error!(%err, "tombstone lookup failed");
             return error(StatusCode::INTERNAL_SERVER_ERROR, "bookkeeping unavailable");
         }
     }

@@ -1,6 +1,6 @@
 //! The ingest plane's bookkeeping: one row per stored blob, in
-//! `<root>/ingest.sqlite`. Append-only, except
-//! [`forget_upload`].
+//! `<root>/ingest.sqlite`. Append-only, except [`forget_upload`] and the
+//! operator's [`crate::forget`].
 
 use rusqlite::{Connection, OptionalExtension};
 use serde::Serialize;
@@ -88,8 +88,9 @@ pub fn open(root: &Path) -> rusqlite::Result<Connection> {
 }
 
 /// Remove every ingest-plane row of a deleted upload in one transaction: jobs,
-/// measurements, ledger, clips and segments. The plane's one deletion; only a
-/// [`crate::sessions::DeletedUpload`] opens it, so household capture cannot.
+/// measurements, ledger, clips and segments. The plane's one deletion through
+/// a route; only a [`crate::sessions::DeletedUpload`] opens it, so a route
+/// cannot reach household capture ([`crate::forget`] is not a route).
 pub fn forget_upload(
     conn: &mut Connection,
     deleted: &crate::sessions::DeletedUpload,
