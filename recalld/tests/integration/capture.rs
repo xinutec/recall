@@ -436,10 +436,7 @@ fn the_audit_write_cannot_refuse_the_control_action() {
 async fn the_capture_routes_are_reachable_through_the_real_router() {
     let dir = tempfile::tempdir().expect("tmp");
     let root = dir.path().to_path_buf();
-    recalld::store::open(&root).expect("ingest db");
-    let conn = recalld::work::open_write(&root).expect("recall db");
-    recalld::meaning_schema::ensure(&conn).expect("schema");
-    drop(conn);
+    recalld::app::prepare(&root).expect("planes");
 
     let app = recalld::app::router(std::sync::Arc::new(recalld::app::Config {
         root,

@@ -180,11 +180,7 @@ fn the_reply_is_camel_case_and_null_when_running() {
 async fn serve(token: Option<&str>) -> (tempfile::TempDir, String) {
     let dir = tempfile::tempdir().expect("tmp");
     let root = dir.path().to_path_buf();
-    recalld::store::open(&root).expect("ingest db");
-    // The real migration ladder.
-    let conn = recalld::work::open_write(&root).expect("recall db");
-    recalld::meaning_schema::ensure(&conn).expect("schema");
-    drop(conn);
+    recalld::app::prepare(&root).expect("planes");
 
     let app = recalld::app::router(std::sync::Arc::new(recalld::app::Config {
         root,

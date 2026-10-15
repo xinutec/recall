@@ -284,6 +284,7 @@ fn gate_state() -> GateState {
 }
 
 fn app(root: &std::path::Path, webauth: Option<GateState>) -> axum::Router {
+    recalld::app::prepare(root).expect("planes");
     router(Arc::new(Config {
         root: root.to_path_buf(),
         tokens: None,

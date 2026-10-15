@@ -397,6 +397,7 @@ async fn the_route_is_mounted_and_answers_without_a_session() {
     )
     .unwrap();
     drop(conn);
+    recalld::app::prepare(&root).expect("planes");
 
     let app = recalld::app::router(std::sync::Arc::new(recalld::app::Config {
         root,
