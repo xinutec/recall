@@ -1,5 +1,6 @@
 //! Telling a deliberate pause from lost speech.
 
+use audiocore::record_health::ForgottenMinute;
 use chrono::{DateTime, Duration, Utc};
 use doctor::check::Verdict;
 use doctor::loss::{
@@ -214,8 +215,14 @@ fn gap(source: &str, start: i64, end: i64) -> Gap {
 }
 
 /// Every minute of `from..to` forgotten on the server.
-fn forgotten(source: &str, from: i64, to: i64) -> Vec<(String, DateTime<Utc>)> {
-    (from..to).map(|m| (source.to_owned(), at(m))).collect()
+fn forgotten(source: &str, from: i64, to: i64) -> Vec<ForgottenMinute> {
+    let source = transcript::SourceId::parse(source).expect("a source id");
+    (from..to)
+        .map(|m| ForgottenMinute {
+            source: source.clone(),
+            start_utc: at(m),
+        })
+        .collect()
 }
 
 #[test]

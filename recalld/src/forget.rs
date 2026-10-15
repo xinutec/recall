@@ -7,11 +7,13 @@
 //! tombstoned, so delivering it again is refused.
 
 use audiocore::instant::{self, Stamp};
-use chrono::{DateTime, SecondsFormat, Utc};
+use audiocore::names::SegmentStart;
+use chrono::{DateTime, Utc};
 use rusqlite::Connection;
 use serde::Serialize;
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
+use transcript::{ClipId, SourceId};
 
 crate::statements! {
     UPLOADS: Meaning = "SELECT id FROM sources WHERE kind = 'upload'";
@@ -72,10 +74,8 @@ impl Span {
         (from < to).then_some(Self { from, to })
     }
 
-    /// The ingest plane's spelling: `Z`, whole seconds.
-    fn ingest(&self) -> (String, String) {
-        let spell = |t: DateTime<Utc>| t.to_rfc3339_opts(SecondsFormat::Secs, true);
-        (spell(self.from), spell(self.to))
+    fn ingest(&self) -> (SegmentStart, SegmentStart) {
+        (SegmentStart::of(self.from), SegmentStart::of(self.to))
     }
 
     fn meaning(&self) -> (Stamp, Stamp) {
@@ -93,7 +93,7 @@ pub struct Forgotten {
     pub lines: usize,
     pub live_lines: usize,
     pub edits: usize,
-    pub sources: BTreeSet<String>,
+    pub sources: BTreeSet<SourceId>,
     /// Files that would not unlink, rows already gone; empty when all did.
     pub left_on_disk: Vec<PathBuf>,
 }
@@ -141,9 +141,16 @@ fn count(r: &rusqlite::Row<'_>) -> rusqlite::Result<usize> {
 /// One meaning-plane audio row.
 pub(crate) struct Recording {
     pub id: i64,
-    pub source: String,
-    pub start_utc: String,
+    pub source: SourceId,
+    pub start: Stamp,
     pub path: String,
+}
+
+/// One ingest-plane file, its start respelled for the meaning plane.
+struct Segment {
+    source: SourceId,
+    filename: String,
+    start: Stamp,
 }
 
 /// Remove recordings from the meaning plane, in the caller's transaction:
@@ -152,12 +159,12 @@ pub(crate) struct Recording {
 pub(crate) fn drop_recordings(
     tx: &Connection,
     recordings: &[Recording],
-    clips: &[i64],
+    clips: &[ClipId],
     live: &[i64],
     now: &Stamp,
 ) -> rusqlite::Result<()> {
     for r in recordings {
-        REMEMBER.execute(tx, (&r.source, &r.start_utc, now))?;
+        REMEMBER.execute(tx, (r.source.as_str(), &r.start, now))?;
     }
     let ids: Vec<i64> = recordings.iter().map(|r| r.id).collect();
     let (clips, ids, live) = (json(clips)?, json(&ids)?, json(live)?);
@@ -181,26 +188,32 @@ pub fn span(
     now: &Stamp,
     apply: bool,
 ) -> Result<Forgotten, ForgetError> {
-    let uploads: Vec<String> = {
+    let uploads: Vec<SourceId> = {
         let mut stmt = UPLOADS.prepare(meaning)?;
-        let rows = stmt.query_map([], |r| r.get(0))?;
+        let rows = stmt.query_map([], |r| crate::sql::source_id(r, 0))?;
         rows.collect::<rusqlite::Result<_>>()?
     };
     let (from, to) = span.ingest();
-    let mut segments: Vec<(String, String, String)> = {
+    let mut segments: Vec<Segment> = {
         let mut stmt = SEGMENTS.prepare(ingest)?;
-        let rows = stmt.query_map([&from, &to], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))?;
+        let rows = stmt.query_map((&from, &to), |r| {
+            Ok(Segment {
+                source: crate::sql::source_id(r, 0)?,
+                filename: r.get(1)?,
+                start: r.get(2)?,
+            })
+        })?;
         rows.collect::<rusqlite::Result<_>>()?
     };
-    segments.retain(|(source, ..)| !uploads.contains(source));
+    segments.retain(|s| !uploads.contains(&s.source));
     let (from, to) = span.meaning();
     let audio: Vec<Recording> = {
         let mut stmt = AUDIO.prepare(meaning)?;
         let rows = stmt.query_map((&from, &to, json(&uploads)?), |r| {
             Ok(Recording {
                 id: r.get(0)?,
-                source: r.get(1)?,
-                start_utc: r.get(2)?,
+                source: crate::sql::source_id(r, 1)?,
+                start: r.get(2)?,
                 path: r.get(3)?,
             })
         })?;
@@ -211,10 +224,10 @@ pub fn span(
         let rows = stmt.query_map((&from, &to), |r| r.get(0))?;
         rows.collect::<rusqlite::Result<_>>()?
     };
-    let mut clips: Vec<i64> = Vec::new();
-    for (_, filename, _) in &segments {
-        if let Some(clip) = crate::clips::by_filename(ingest, filename)? {
-            clips.push(clip.id.stored());
+    let mut clips: Vec<ClipId> = Vec::new();
+    for segment in &segments {
+        if let Some(clip) = crate::clips::by_filename(ingest, &segment.filename)? {
+            clips.push(clip.id);
         }
     }
     let audio_ids: Vec<i64> = audio.iter().map(|a| a.id).collect();
@@ -236,7 +249,7 @@ pub fn span(
         edits,
         sources: segments
             .iter()
-            .map(|s| s.0.clone())
+            .map(|s| s.source.clone())
             .chain(audio.iter().map(|a| a.source.clone()))
             .collect(),
         left_on_disk: Vec::new(),
@@ -248,14 +261,12 @@ pub fn span(
     let tx = crate::sql::write(meaning)?;
     drop_recordings(&tx, &audio, &clips, &live, now)?;
     // A minute not yet in the meaning plane is tombstoned too.
-    for (source, _, start) in &segments {
-        if let Some(start) = Stamp::parse(start) {
-            REMEMBER.execute(&tx, (source, &start, now))?;
-        }
+    for segment in &segments {
+        REMEMBER.execute(&tx, (segment.source.as_str(), &segment.start, now))?;
     }
     tx.commit()?;
 
-    let filenames: Vec<String> = segments.iter().map(|s| s.1.clone()).collect();
+    let filenames: Vec<String> = segments.iter().map(|s| s.filename.clone()).collect();
     let tx = crate::sql::write(ingest)?;
     crate::store::forget_files(&tx, &filenames)?;
     tx.commit()?;
@@ -263,7 +274,7 @@ pub fn span(
     // Files only after the commits, as a meeting's delete.
     let files: BTreeSet<PathBuf> = segments
         .iter()
-        .map(|(source, filename, ..)| crate::store::source_dir(root, source).join(filename))
+        .map(|s| crate::store::source_dir(root, s.source.as_str()).join(&s.filename))
         .chain(audio.iter().map(|a| PathBuf::from(&a.path)))
         .collect();
     for file in files {

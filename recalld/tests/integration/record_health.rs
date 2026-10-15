@@ -177,7 +177,8 @@ fn forgotten_minutes_since_the_window_start_are_named() {
 
     let health = measure(dir.path(), at("2026-09-28T00:00:00Z")).expect("measured");
 
-    let named: Vec<(String, String)> = health
+    let usb = transcript::SourceId::parse("usb").expect("a source id");
+    let named: Vec<(transcript::SourceId, DateTime<Utc>)> = health
         .forgotten
         .into_iter()
         .map(|m| (m.source, m.start_utc))
@@ -185,8 +186,8 @@ fn forgotten_minutes_since_the_window_start_are_named() {
     assert_eq!(
         named,
         [
-            ("usb".to_owned(), "2026-09-28T08:29:00+00:00".to_owned()),
-            ("usb".to_owned(), "2026-09-28T08:30:00+00:00".to_owned()),
+            (usb.clone(), at("2026-09-28T08:29:00Z")),
+            (usb, at("2026-09-28T08:30:00Z")),
         ]
     );
 }

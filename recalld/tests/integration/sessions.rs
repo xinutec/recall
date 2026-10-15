@@ -430,8 +430,13 @@ fn deleting_a_meeting_removes_every_derived_row_and_returns_its_files() {
     )
     .expect("what people did and what it shows");
 
-    let deleted =
-        delete_session(&mut conn, "meeting-1", &[7], &crate::stamp(NOW)).expect("deleted");
+    let deleted = delete_session(
+        &mut conn,
+        "meeting-1",
+        &[transcript::ClipId::from_stored(7)],
+        &crate::stamp(NOW),
+    )
+    .expect("deleted");
 
     assert_eq!(deleted.paths(), ["/data/meeting-1/clip.flac".to_owned()]);
     for table in [

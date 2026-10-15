@@ -110,6 +110,12 @@ impl Stamp {
     pub fn as_str(&self) -> &str {
         &self.0
     }
+
+    /// The instant it spells.
+    #[must_use]
+    pub fn utc(&self) -> DateTime<Utc> {
+        parse_utc(&self.0).expect("a Stamp is built only from an instant")
+    }
 }
 
 impl From<DateTime<Utc>> for Stamp {

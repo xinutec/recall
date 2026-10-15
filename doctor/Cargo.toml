@@ -40,5 +40,7 @@ ureq = { version = "2", default-features = false, features = ["tls", "json"] }
 
 [dev-dependencies]
 tempfile = "3"
+# A forgotten minute names its source with transcript's type.
+transcript = { path = "../transcript" }
 # The delivery check grades segments by mtime; tests age them with this.
 filetime = "0.2"

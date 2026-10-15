@@ -131,7 +131,7 @@ fn live_checks(
     config: &Config,
     now: DateTime<Utc>,
     paused_until: Option<DateTime<Utc>>,
-) -> (Vec<Check>, Vec<(String, DateTime<Utc>)>) {
+) -> (Vec<Check>, Vec<audiocore::record_health::ForgottenMinute>) {
     let token = std::env::var("RECALL_SYNC_TOKEN").ok();
     let Some(fleet) = live::Fleet::new(config.fleet.as_deref(), token.as_deref()) else {
         let mut checks = live::unconfigured();

@@ -3,7 +3,7 @@
 //! went unnoticed for days.
 
 use crate::check::{Check, Verdict, check};
-use audiocore::record_health::RecordHealth;
+use audiocore::record_health::{ForgottenMinute, RecordHealth};
 use chrono::{DateTime, Duration, Utc};
 
 /// How far back a failed request counts, so it clears once the cause is fixed.
@@ -48,22 +48,10 @@ pub fn fetch(fleet: &crate::live::Fleet, now: DateTime<Utc>) -> Result<RecordHea
 /// The minutes the server says were deleted on purpose; none if it did not
 /// answer, so the loss it would explain still shows.
 #[must_use]
-pub fn forgotten(fetched: &Result<RecordHealth, String>) -> Vec<(String, DateTime<Utc>)> {
-    fetched.as_ref().map_or_else(
-        |_| Vec::new(),
-        |health| {
-            health
-                .forgotten
-                .iter()
-                .filter_map(|m| {
-                    Some((
-                        m.source.clone(),
-                        audiocore::instant::parse_utc(&m.start_utc)?,
-                    ))
-                })
-                .collect()
-        },
-    )
+pub fn forgotten(fetched: &Result<RecordHealth, String>) -> Vec<ForgottenMinute> {
+    fetched
+        .as_ref()
+        .map_or_else(|_| Vec::new(), |health| health.forgotten.clone())
 }
 
 #[must_use]

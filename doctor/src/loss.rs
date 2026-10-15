@@ -5,6 +5,7 @@
 use crate::capture::{ALWAYS_ON, minutes};
 use crate::check::{Check, Verdict, check, worst};
 use crate::source::SourceKind;
+use audiocore::record_health::ForgottenMinute;
 use chrono::{DateTime, Duration, Utc};
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -139,17 +140,13 @@ pub fn uncovered_loss(
 /// are taken out: each covers a minute from its start, on its own source.
 /// A remainder shorter than `min_loss` is boundary slop.
 #[must_use]
-pub fn unexplained(
-    gaps: Vec<Gap>,
-    forgotten: &[(String, DateTime<Utc>)],
-    min_loss: Duration,
-) -> Vec<Gap> {
+pub fn unexplained(gaps: Vec<Gap>, forgotten: &[ForgottenMinute], min_loss: Duration) -> Vec<Gap> {
     let mut left = Vec::new();
     for gap in gaps {
         let deleted: Vec<(DateTime<Utc>, DateTime<Utc>)> = forgotten
             .iter()
-            .filter(|(source, _)| *source == gap.source_id)
-            .map(|(_, start)| (*start, *start + Duration::minutes(1)))
+            .filter(|m| m.source.as_str() == gap.source_id)
+            .map(|m| (m.start_utc, m.start_utc + Duration::minutes(1)))
             .collect();
         let mut cursor = gap.start;
         let mut pieces = Vec::new();

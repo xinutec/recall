@@ -486,19 +486,20 @@ impl DeletedUpload {
 pub fn delete_session(
     conn: &mut Connection,
     source: &str,
-    clips: &[i64],
+    clips: &[transcript::ClipId],
     now: &Stamp,
 ) -> Result<DeletedUpload, SessionError> {
     require_upload(conn, source)?;
+    let id = transcript::SourceId::parse(source).ok_or(SessionError::Missing)?;
     let tx = crate::sql::write(conn)?;
     let recordings: Vec<crate::forget::Recording> = {
         let mut stmt = SESSION_AUDIO.prepare(&tx)?;
         let rows = stmt.query_map([source], |r| {
             Ok(crate::forget::Recording {
                 id: r.get(0)?,
-                source: source.to_owned(),
+                source: id.clone(),
                 path: r.get(1)?,
-                start_utc: r.get(2)?,
+                start: r.get(2)?,
             })
         })?;
         rows.collect::<rusqlite::Result<_>>()?
@@ -536,10 +537,10 @@ pub async fn delete_route(
     let now = audiocore::instant::Stamp::now();
     let done = tokio::task::spawn_blocking(move || -> Result<(), SessionError> {
         let mut ingest = crate::store::open(&root)?;
-        let clips: Vec<i64> = crate::clips::of_source(&ingest, &source)
+        let clips: Vec<transcript::ClipId> = crate::clips::of_source(&ingest, &source)
             .map_err(crate::labels_write::WriteError::from)?
             .iter()
-            .map(|c| c.id.stored())
+            .map(|c| c.id)
             .collect();
         let deleted = {
             let mut conn = work::open_write(&root)?;

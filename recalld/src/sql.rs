@@ -98,6 +98,19 @@ macro_rules! statements {
     };
 }
 
+/// Column `index` as a source id: a stored id outside the grammar is an
+/// error, not a string passed on.
+pub fn source_id(row: &rusqlite::Row<'_>, index: usize) -> rusqlite::Result<transcript::SourceId> {
+    let raw: String = row.get(index)?;
+    transcript::SourceId::parse(&raw).ok_or_else(|| {
+        rusqlite::Error::FromSqlConversionFailure(
+            index,
+            rusqlite::types::Type::Text,
+            format!("not a source id: {raw:?}").into(),
+        )
+    })
+}
+
 /// Every module's statements, by module name; the schema test also checks
 /// that each module with a `statements!` block is here.
 pub const ALL: &[(&str, &[Sql])] = &[

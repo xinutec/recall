@@ -21,8 +21,12 @@ pub struct RecordHealth {
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ForgottenMinute {
-    pub source: String,
-    pub start_utc: String,
+    pub source: transcript::SourceId,
+    #[serde(
+        serialize_with = "crate::instant::ser",
+        deserialize_with = "crate::instant::de"
+    )]
+    pub start_utc: chrono::DateTime<chrono::Utc>,
 }
 
 /// One background pass of the server, as it last went. Instants are RFC 3339.

@@ -410,6 +410,7 @@ dependencies = [
  "serde",
  "serde_json",
  "tempfile",
+ "transcript",
  "ureq",
 ]
 

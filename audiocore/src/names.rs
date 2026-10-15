@@ -62,6 +62,32 @@ impl Extension {
     }
 }
 
+/// A segment's start in the ingest plane's spelling: UTC, whole seconds, `Z`
+/// (`2026-09-05T12:00:00Z`). The meaning plane spells instants otherwise
+/// ([`crate::instant::Stamp`]); both are compared as text, so the type keeps a
+/// bound of one from meeting a column of the other.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct SegmentStart(String);
+
+impl SegmentStart {
+    /// `when`, its fraction of a second dropped as a name drops it.
+    #[must_use]
+    pub fn of(when: DateTime<Utc>) -> Self {
+        Self(when.format("%Y-%m-%dT%H:%M:%SZ").to_string())
+    }
+
+    #[must_use]
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+impl rusqlite::ToSql for SegmentStart {
+    fn to_sql(&self) -> rusqlite::Result<rusqlite::types::ToSqlOutput<'_>> {
+        Ok(self.0.as_str().into())
+    }
+}
+
 /// A validated segment name, decomposed.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SegmentName {
@@ -116,7 +142,7 @@ pub fn parse(source: &str, filename: &str) -> Result<SegmentName, NameError> {
         NaiveDateTime::parse_from_str(stamp, "%Y%m%dT%H%M%S").map_err(|_| NameError::BadStamp)?;
     Ok(SegmentName {
         source: source.to_owned(),
-        start_utc: parsed.format("%Y-%m-%dT%H:%M:%SZ").to_string(),
+        start_utc: SegmentStart::of(parsed.and_utc()).0,
         ext,
     })
 }

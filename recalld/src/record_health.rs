@@ -120,9 +120,10 @@ pub fn forgotten_minutes(
 ) -> rusqlite::Result<Vec<ForgottenMinute>> {
     let mut stmt = FORGOTTEN.prepare(meaning)?;
     let rows = stmt.query_map([audiocore::instant::Stamp::of(since)], |r| {
+        let start: audiocore::instant::Stamp = r.get(1)?;
         Ok(ForgottenMinute {
-            source: r.get(0)?,
-            start_utc: r.get(1)?,
+            source: crate::sql::source_id(r, 0)?,
+            start_utc: start.utc(),
         })
     })?;
     rows.collect()
