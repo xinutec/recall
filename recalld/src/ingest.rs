@@ -30,6 +30,12 @@ fn error(status: StatusCode, message: &str) -> Response {
     (status, axum::Json(json!({ "error": message }))).into_response()
 }
 
+/// A 500 in this plane's shape, kept in the fault log the doctor counts.
+fn fault(what: &str, err: &dyn std::fmt::Display, message: &str) -> Response {
+    crate::route::record(what, err);
+    error(StatusCode::INTERNAL_SERVER_ERROR, message)
+}
+
 fn bearer(headers: &HeaderMap) -> Option<&str> {
     headers
         .get(header::AUTHORIZATION)?
@@ -103,16 +109,15 @@ fn receipt(sha256: &str, bytes: usize) -> Response {
 
 const DIVERGENT: &str = "a different segment already holds this name";
 
-/// The blocking half of a PUT. 400: fix the name; 409: the name is taken;
-/// 500: retry.
 /// Whether an operator forgot this minute (`crate::forget`).
 fn was_forgotten(root: &FsPath, name: &SegmentName) -> rusqlite::Result<bool> {
-    let Some(started) = audiocore::instant::parse_utc(&name.start_utc) else {
-        return Ok(false);
-    };
+    let started = audiocore::instant::parse_utc(&name.start_utc)
+        .expect("names::parse spells the start it validated");
     crate::upload::was_deleted(&crate::reads::open(root)?, &name.source, started)
 }
 
+/// The blocking half of a PUT. 400: fix the name; 409: the name is taken;
+/// 500: retry.
 fn store_segment(
     config: &Config,
     name: &SegmentName,
@@ -124,8 +129,7 @@ fn store_segment(
     let conn = match store::open(&config.root) {
         Ok(conn) => conn,
         Err(err) => {
-            tracing::error!(%err, "ingest.sqlite unavailable");
-            return error(StatusCode::INTERNAL_SERVER_ERROR, "bookkeeping unavailable");
+            return fault("ingest open", &err, "bookkeeping unavailable");
         }
     };
     match store::lookup(&conn, filename) {
@@ -133,16 +137,14 @@ fn store_segment(
         Ok(Some(_)) => return error(StatusCode::CONFLICT, DIVERGENT),
         Ok(None) => {}
         Err(err) => {
-            tracing::error!(%err, "row lookup failed");
-            return error(StatusCode::INTERNAL_SERVER_ERROR, "bookkeeping unavailable");
+            return fault("ingest row lookup", &err, "bookkeeping unavailable");
         }
     }
     match was_forgotten(&config.root, name) {
         Ok(false) => {}
         Ok(true) => return error(StatusCode::GONE, "this minute was deleted"),
         Err(err) => {
-            tracing::error!(%err, "tombstone lookup failed");
-            return error(StatusCode::INTERNAL_SERVER_ERROR, "bookkeeping unavailable");
+            return fault("ingest tombstone lookup", &err, "bookkeeping unavailable");
         }
     }
     let dir = store::source_dir(&config.root, &name.source);
@@ -152,8 +154,7 @@ fn store_segment(
         Ok(WriteOutcome::Written | WriteOutcome::AlreadyIdentical) => {}
         Ok(WriteOutcome::AlreadyDivergent) => return error(StatusCode::CONFLICT, DIVERGENT),
         Err(err) => {
-            tracing::error!(%err, "blob write failed");
-            return error(StatusCode::INTERNAL_SERVER_ERROR, "blob write failed");
+            return fault("ingest blob write", &err, "blob write failed");
         }
     }
     let row = Row {
@@ -171,8 +172,7 @@ fn store_segment(
         match store::lookup(&conn, filename) {
             Ok(Some(existing)) if existing.sha256 == sha256 => {}
             _ => {
-                tracing::error!(%err, "row insert failed after blob write");
-                return error(StatusCode::INTERNAL_SERVER_ERROR, "bookkeeping failed");
+                return fault("ingest row insert", &err, "bookkeeping failed");
             }
         }
     }
@@ -243,10 +243,7 @@ pub async fn put_segment(
     });
     match handle.await {
         Ok(response) => response,
-        Err(err) => {
-            tracing::error!(%err, "store task failed");
-            error(StatusCode::INTERNAL_SERVER_ERROR, "store task failed")
-        }
+        Err(err) => fault("ingest store task", &err, "store task failed"),
     }
 }
 
@@ -282,14 +279,8 @@ pub async fn list_segments(
     });
     match handle.await {
         Ok(Ok(rows)) => (StatusCode::OK, axum::Json(json!({ "segments": rows }))).into_response(),
-        Ok(Err(err)) => {
-            tracing::error!(%err, "listing failed");
-            error(StatusCode::INTERNAL_SERVER_ERROR, "listing failed")
-        }
-        Err(err) => {
-            tracing::error!(%err, "listing task failed");
-            error(StatusCode::INTERNAL_SERVER_ERROR, "listing failed")
-        }
+        Ok(Err(err)) => fault("ingest listing", &err, "listing failed"),
+        Err(err) => fault("ingest listing task", &err, "listing failed"),
     }
 }
 
@@ -320,14 +311,8 @@ pub async fn liveness(State(config): State<Arc<Config>>, headers: HeaderMap) -> 
                 .collect();
             (StatusCode::OK, axum::Json(json!({ "sources": sources }))).into_response()
         }
-        Ok(Err(err)) => {
-            tracing::error!(%err, "liveness query failed");
-            error(StatusCode::INTERNAL_SERVER_ERROR, "liveness failed")
-        }
-        Err(err) => {
-            tracing::error!(%err, "liveness task failed");
-            error(StatusCode::INTERNAL_SERVER_ERROR, "liveness failed")
-        }
+        Ok(Err(err)) => fault("ingest liveness", &err, "liveness failed"),
+        Err(err) => fault("ingest liveness task", &err, "liveness failed"),
     }
 }
 
@@ -362,14 +347,8 @@ pub async fn get_blob(
         Ok(Err(err)) if err.kind() == std::io::ErrorKind::NotFound => {
             error(StatusCode::NOT_FOUND, "no such segment")
         }
-        Ok(Err(err)) => {
-            tracing::error!(%err, "blob read failed");
-            error(StatusCode::INTERNAL_SERVER_ERROR, "blob read failed")
-        }
-        Err(err) => {
-            tracing::error!(%err, "blob task failed");
-            error(StatusCode::INTERNAL_SERVER_ERROR, "blob read failed")
-        }
+        Ok(Err(err)) => fault("ingest blob read", &err, "blob read failed"),
+        Err(err) => fault("ingest blob task", &err, "blob read failed"),
     }
 }
 

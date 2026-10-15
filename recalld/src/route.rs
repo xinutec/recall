@@ -24,8 +24,9 @@ pub fn keep_faults_in(path: std::path::PathBuf) {
 }
 
 /// Log a fault, and keep it where the doctor looks. A fault log that cannot
-/// be written is only logged.
-fn record(what: &str, err: &dyn std::fmt::Display) {
+/// be written is only logged. For a plane that answers in its own shape;
+/// otherwise [`faulted`].
+pub(crate) fn record(what: &str, err: &dyn std::fmt::Display) {
     tracing::warn!("{what} failed: {err}");
     let Some(path) = KEPT_IN.get() else {
         return;

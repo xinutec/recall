@@ -90,8 +90,18 @@ where
 ///
 /// Built only from a real instant, so a writer taking one cannot be handed a
 /// placeholder or another spelling; a string parameter accepted `"now"`.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
+/// Read from any spelling [`parse`] takes, re-spelled; refused otherwise.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, serde::Deserialize)]
+#[serde(try_from = "String")]
 pub struct Stamp(String);
+
+impl TryFrom<String> for Stamp {
+    type Error = String;
+
+    fn try_from(raw: String) -> Result<Self, Self::Error> {
+        Self::parse(&raw).ok_or_else(|| format!("not an instant: {raw:?}"))
+    }
+}
 
 impl Stamp {
     pub fn of(when: DateTime<Utc>) -> Self {

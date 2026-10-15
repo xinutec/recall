@@ -332,9 +332,9 @@ pub fn best_colocated_guess(
 // --- the HTTP surface -------------------------------------------------------
 
 use crate::{reads, route};
+use audiocore::instant::Stamp;
 use axum::extract::Query;
-use axum::http::StatusCode;
-use axum::response::{IntoResponse, Response};
+use axum::response::Response;
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 
@@ -516,8 +516,9 @@ pub fn fold(segments: &[reads::Segment], gap_seconds: f64, limit: i64) -> Conver
 pub struct ConversationsQuery {
     #[serde(default = "default_limit")]
     limit: i64,
-    before: Option<String>,
-    after: Option<String>,
+    /// Instants, re-spelled as stored: a bad one is a 400 from the extractor.
+    before: Option<Stamp>,
+    after: Option<Stamp>,
     #[serde(default = "default_gap")]
     gap: f64,
     source: Option<String>,
@@ -538,14 +539,6 @@ pub async fn conversations_route(
     axum::extract::State(st): axum::extract::State<Arc<reads::State>>,
     Query(q): Query<ConversationsQuery>,
 ) -> Response {
-    // A malformed cursor is a 400, not a silently dropped filter.
-    for (name, value) in [("before", &q.before), ("after", &q.after)] {
-        if let Some(value) = value
-            && DateTime::parse_from_rfc3339(value).is_err()
-        {
-            return (StatusCode::BAD_REQUEST, format!("{name} must be ISO-8601")).into_response();
-        }
-    }
     let root = st.root.clone();
     let limit = q.limit.clamp(0, 1000);
     route::json("conversations", move || {
@@ -554,8 +547,8 @@ pub async fn conversations_route(
             &conn,
             limit,
             reads::Window {
-                before: q.before.as_deref(),
-                after: q.after.as_deref(),
+                before: q.before.as_ref(),
+                after: q.after.as_ref(),
                 source: q.source.as_deref(),
                 hidden: q.hidden,
             },

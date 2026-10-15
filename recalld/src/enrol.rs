@@ -296,16 +296,14 @@ fn enrol_one(
     print: &Print,
     now: &Stamp,
 ) -> rusqlite::Result<()> {
+    // An error, never a stand-in: an empty print matches everyone.
+    let vector = serde_json::to_string(&print.vector)
+        .map_err(|err| rusqlite::Error::ToSqlConversionFailure(err.into()))?;
     ADD_SPEAKER.execute(meaning, [person])?;
     let speaker_id: i64 = SPEAKER_ID.query_row(meaning, [person], |r| r.get(0))?;
     ADD_EMBEDDING.execute(
         meaning,
-        rusqlite::params![
-            speaker_id,
-            serde_json::to_string(&print.vector).unwrap_or_else(|_| "[]".to_owned()),
-            now,
-            print.segment_id
-        ],
+        rusqlite::params![speaker_id, vector, now, print.segment_id],
     )?;
     Ok(())
 }

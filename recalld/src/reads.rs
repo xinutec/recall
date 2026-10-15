@@ -7,6 +7,7 @@ use std::path::Path;
 use std::time::Duration;
 
 use crate::line::{HiddenKind, Stage};
+use audiocore::instant::Stamp;
 
 /// The shown lines, and the lines of a stretch a person excluded, which the
 /// app folds into one row with its undo; with `?1`, every hidden line too.
@@ -275,10 +276,12 @@ pub fn review(conn: &Connection, max_confidence: f64, limit: i64) -> rusqlite::R
 /// Which slice of the stream to read. `before` takes the newest page older than
 /// the cursor, newest first; `after` the oldest page newer, oldest first, so a
 /// forward page joins what the caller holds.
+/// The cursors are [`Stamp`]s: they compare with stored instants as text, so
+/// they must be spelled as those are.
 #[derive(Debug, Default, Clone, Copy)]
 pub struct Window<'a> {
-    pub before: Option<&'a str>,
-    pub after: Option<&'a str>,
+    pub before: Option<&'a Stamp>,
+    pub after: Option<&'a Stamp>,
     pub source: Option<&'a str>,
     /// Hidden turns too, with their reason, so a hide can be taken back.
     pub hidden: bool,
@@ -329,7 +332,11 @@ pub fn recent(conn: &Connection, limit: i64, window: Window) -> rusqlite::Result
 
 /// One page of the timeline older than `before` (or the newest page), in
 /// conversation order.
-pub fn timeline(conn: &Connection, limit: i64, before: Option<&str>) -> rusqlite::Result<PageOut> {
+pub fn timeline(
+    conn: &Connection,
+    limit: i64,
+    before: Option<&Stamp>,
+) -> rusqlite::Result<PageOut> {
     let mut segments = recent(
         conn,
         limit,
@@ -364,7 +371,7 @@ pub struct State {
 pub struct TimelineQuery {
     #[serde(default = "default_timeline_limit")]
     limit: i64,
-    before: Option<String>,
+    before: Option<Stamp>,
 }
 
 const fn default_timeline_limit() -> i64 {
@@ -393,7 +400,7 @@ pub async fn timeline_route(
 ) -> Response {
     let root = st.root.clone();
     route::json("timeline", move || {
-        timeline(&open(&root)?, clamp(q.limit), q.before.as_deref())
+        timeline(&open(&root)?, clamp(q.limit), q.before.as_ref())
     })
     .await
 }

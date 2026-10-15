@@ -214,7 +214,8 @@ fn a_page_boundary_never_splits_turns_that_share_an_instant() {
     assert!(page.has_more, "an extended page still has more behind it");
 
     // Paging on from the tie's instant reaches the older turn exactly once.
-    let next = reads::timeline(&conn, 2, Some("2026-09-01T10:00:05+00:00")).expect("next");
+    let cursor = audiocore::instant::Stamp::parse("2026-09-01T10:00:05+00:00").expect("instant");
+    let next = reads::timeline(&conn, 2, Some(&cursor)).expect("next");
     assert_eq!(next.items.len(), 1);
     assert_eq!(next.items[0].text, "older");
 }
@@ -412,6 +413,58 @@ async fn a_limit_is_clamped_rather_than_trusted() {
         200,
         "a huge limit must still answer, clamped"
     );
+}
+
+/// A cursor compares with stored instants as text, so it must be re-spelled as
+/// they are: `…Z` sorts after `…+00:00`, and a line at the cursor's very
+/// instant read as older than it, showing on two pages.
+#[tokio::test]
+async fn a_cursor_in_another_spelling_still_excludes_its_own_instant() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let conn = Connection::open(dir.path().join("recall.sqlite")).expect("db");
+    schema(&conn);
+    turn(&conn, 1, "2026-09-01T10:00:00+00:00", "older", &[]);
+    turn(
+        &conn,
+        2,
+        "2026-09-01T10:00:01+00:00",
+        "the cursor's own",
+        &[],
+    );
+    drop(conn);
+    let token = webauth::make_session_cookie(
+        SECRET,
+        &webauth::Session {
+            user_id: "p".into(),
+            display_name: "P".into(),
+        },
+        NOW,
+    )
+    .expect("sign");
+
+    let resp = app(dir.path(), Some(gate_state()))
+        .oneshot(
+            Request::get("/api/conversations?before=2026-09-01T10:00:01.000Z")
+                .header("cookie", format!("{COOKIE_NAME}={token}"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .expect("call");
+
+    assert_eq!(resp.status(), 200);
+    let body = axum::body::to_bytes(resp.into_body(), 1 << 20)
+        .await
+        .expect("body");
+    let page: serde_json::Value = serde_json::from_slice(&body).expect("json");
+    let texts: Vec<&str> = page["items"]
+        .as_array()
+        .expect("items")
+        .iter()
+        .flat_map(|c| c["moments"].as_array().expect("moments").iter())
+        .map(|m| m["primary"]["text"].as_str().expect("text"))
+        .collect();
+    assert_eq!(texts, ["older"]);
 }
 
 #[test]

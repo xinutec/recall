@@ -324,12 +324,11 @@ fn spawn_view(root: PathBuf) {
         let mut all = true;
         loop {
             let pass_root = root.clone();
-            let job = move || {
+            let job = move || -> Result<_, recalld::view::ViewError> {
                 let meaning = recalld::work::open_write(&pass_root)?;
                 let ingest = recalld::store::open(&pass_root)?;
                 ingest.busy_timeout(std::time::Duration::from_mins(2))?;
                 recalld::view::refresh(&meaning, &ingest, &pass_root, all)
-                    .map_err(|err| rusqlite::Error::ToSqlConversionFailure(err.into()))
             };
             if let Some(done) = PASSES.run("view", job, view_problem).await {
                 if all || done.written > 0 || !done.unreadable.is_empty() || !done.failed.is_empty()

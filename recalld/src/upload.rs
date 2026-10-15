@@ -48,6 +48,8 @@ pub enum UploadError {
     Deleted,
     Io(std::io::Error),
     Db(rusqlite::Error),
+    /// Pinning the language the uploader chose failed.
+    Pin(crate::labels_write::WriteError),
 }
 
 impl From<std::io::Error> for UploadError {
@@ -438,9 +440,7 @@ pub async fn create_session_route(
         // Before the ingest row, so the first transcription leases with it.
         if let (Some(language), Some(id)) = (language, transcript::SourceId::parse(&source)) {
             crate::labels_write::pin_language(&meaning, &ingest, &root, &id, Some(language))
-                .map_err(|err| {
-                    UploadError::Db(rusqlite::Error::ToSqlConversionFailure(err.into()))
-                })?;
+                .map_err(UploadError::Pin)?;
         }
         deliver(
             &ingest,
@@ -467,6 +467,7 @@ pub async fn create_session_route(
         }
         Ok(Err(UploadError::Io(err))) => route::faulted("upload write", &err),
         Ok(Err(UploadError::Db(err))) => route::faulted("upload register", &err),
+        Ok(Err(UploadError::Pin(err))) => route::faulted("upload language", &err),
         Err(err) => route::faulted("upload task", &err),
     }
 }
