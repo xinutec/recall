@@ -2,11 +2,15 @@
 
 use std::fmt;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, serde::Serialize, serde::Deserialize,
+)]
 pub enum SourceKind {
     /// A macOS input device.
+    #[serde(rename = "coreaudio")]
     CoreAudio,
     /// Raw s16le PCM over TCP, from the recall-mic app.
+    #[serde(rename = "tcp_pcm")]
     TcpPcm,
 }
 

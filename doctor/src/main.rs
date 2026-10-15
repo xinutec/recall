@@ -8,7 +8,9 @@
 use chrono::{DateTime, Utc};
 use clap::Parser;
 use doctor::check::{Check, Verdict};
-use doctor::{agents, archive, bounded, capture, deaf, fleetwatch, live, passes, reach, record};
+use doctor::{
+    agents, archive, bounded, capture, deaf, fleetwatch, live, loss, passes, reach, record,
+};
 use std::path::{Path, PathBuf};
 use std::time::Instant;
 
@@ -41,6 +43,7 @@ struct FromArchive {
     /// Whether and how fast the archive answered; reported either way.
     answered: Check,
     paused_until: Option<DateTime<Utc>>,
+    loss: Option<archive::Loss>,
 }
 
 impl FromArchive {
@@ -49,6 +52,7 @@ impl FromArchive {
             checks: Vec::new(),
             answered,
             paused_until: None,
+            loss: None,
         }
     }
 }
@@ -109,6 +113,7 @@ fn read_archive_checks(out: &Path) -> FromArchive {
                 .paused_until
                 .as_deref()
                 .and_then(audiocore::instant::parse_utc),
+            loss: Some(report.loss),
         },
         Err(_) => FromArchive::unanswered(archive::archive_check(
             Some(answer.seconds),
@@ -119,19 +124,20 @@ fn read_archive_checks(out: &Path) -> FromArchive {
 
 /// The checks whose evidence is on the server: the live tier's two, the deaf
 /// microphone, the record's faults, its background passes and whether it
-/// answers at all. In the parent, since behind the child's bound a slow server
-/// would read as a stalled disk.
+/// answers at all; and the minutes it says were deleted on purpose. In the
+/// parent, since behind the child's bound a slow server would read as a
+/// stalled disk.
 fn live_checks(
     config: &Config,
     now: DateTime<Utc>,
     paused_until: Option<DateTime<Utc>>,
-) -> Vec<Check> {
+) -> (Vec<Check>, Vec<(String, DateTime<Utc>)>) {
     let token = std::env::var("RECALL_SYNC_TOKEN").ok();
     let Some(fleet) = live::Fleet::new(config.fleet.as_deref(), token.as_deref()) else {
         let mut checks = live::unconfigured();
         checks.push(deaf::unconfigured());
         checks.extend(record::unconfigured());
-        return checks;
+        return (checks, Vec::new());
     };
     let fetched = live::fetch(&fleet, now, capture::live_lag_window());
     let mut checks = live::live_checks(&fetched, now, paused_until);
@@ -149,7 +155,7 @@ fn live_checks(
         now,
         &answer,
     ));
-    checks
+    (checks, record::forgotten(&record))
 }
 
 /// An unreachable fleetwatch is logged, not failed: it shows the missing report
@@ -185,8 +191,8 @@ fn main() {
         let volume = archive::volume_check(&config.out);
         eprintln!("doctor: {} — {}", volume.label, volume.observed);
         let paused_until = agents::paused_until(&config.out);
-        let checks = match archive::archive_checks(&config.out, now, volume, paused_until) {
-            Ok(checks) => checks,
+        let (checks, loss) = match archive::archive_checks(&config.out, now, volume, paused_until) {
+            Ok(found) => found,
             Err(err) => {
                 // The parent reports the last stderr line.
                 eprintln!("{err}");
@@ -197,6 +203,7 @@ fn main() {
             seconds: started.elapsed().as_secs_f64(),
             checks,
             paused_until: paused_until.map(audiocore::instant::python_isoformat_utc),
+            loss,
         };
         println!(
             "{}",
@@ -209,7 +216,17 @@ fn main() {
     let mut checks = vec![archive.answered];
     checks.extend(archive.checks);
     checks.extend(capture::agent_checks(&agents::agent_health(&home())));
-    checks.extend(live_checks(&config, now, archive.paused_until));
+    let (server, forgotten) = live_checks(&config, now, archive.paused_until);
+    // Graded here, where the server's word on what was deleted is.
+    if let Some(found) = archive.loss {
+        let gaps = loss::unexplained(found.gaps, &forgotten, archive::loss_min());
+        checks.extend(loss::loss_checks(
+            &gaps,
+            &found.sources,
+            archive::loss_window(),
+        ));
+    }
+    checks.extend(server);
 
     for check in &checks {
         println!(

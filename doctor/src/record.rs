@@ -36,12 +36,34 @@ pub fn fetch(fleet: &crate::live::Fleet, now: DateTime<Utc>) -> Result<RecordHea
             .map_err(|e| format!("the fleet's answer did not parse ({e})"))
     };
     let recent = ask(now - fault_window())?;
-    let doubled = ask(now - doubled_window())?.doubled;
+    let fortnight = ask(now - doubled_window())?;
     Ok(RecordHealth {
         faults: recent.faults,
-        doubled,
+        doubled: fortnight.doubled,
         passes: recent.passes,
+        forgotten: fortnight.forgotten,
     })
+}
+
+/// The minutes the server says were deleted on purpose; none if it did not
+/// answer, so the loss it would explain still shows.
+#[must_use]
+pub fn forgotten(fetched: &Result<RecordHealth, String>) -> Vec<(String, DateTime<Utc>)> {
+    fetched.as_ref().map_or_else(
+        |_| Vec::new(),
+        |health| {
+            health
+                .forgotten
+                .iter()
+                .filter_map(|m| {
+                    Some((
+                        m.source.clone(),
+                        audiocore::instant::parse_utc(&m.start_utc)?,
+                    ))
+                })
+                .collect()
+        },
+    )
 }
 
 #[must_use]

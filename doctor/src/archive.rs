@@ -240,10 +240,20 @@ pub struct Collected {
     pub checks: Vec<Check>,
     /// The pause file's instant, for the parent's checks.
     pub paused_until: Option<String>,
+    /// Graded by the parent, which asks the server what was deleted on purpose.
+    pub loss: Loss,
 }
 
-/// Every check the child reports. `volume` is probed by the caller and printed
-/// first, so a child that hangs here has still said whether the disk answered.
+/// The always-on mics' uncovered stretches, and the sources they are graded by.
+#[derive(Debug, serde::Serialize, serde::Deserialize)]
+pub struct Loss {
+    pub gaps: Vec<Gap>,
+    pub sources: Vec<(String, SourceKind)>,
+}
+
+/// Every check the child reports, and the speech loss it found. `volume` is
+/// probed by the caller and printed first, so a child that hangs here has still
+/// said whether the disk answered.
 ///
 /// # Errors
 /// If the capture log exists and cannot be read.
@@ -252,7 +262,7 @@ pub fn archive_checks(
     now: DateTime<Utc>,
     volume: Check,
     paused_until: Option<DateTime<Utc>>,
-) -> std::io::Result<Vec<Check>> {
+) -> std::io::Result<(Vec<Check>, Loss)> {
     let log = capture_log::read(root)?;
     // Registered recorders, not whatever directories exist.
     let sources = registered_devices(&log);
@@ -268,7 +278,6 @@ pub fn archive_checks(
         paused_until,
         capture::silent_after(),
     ));
-    checks.extend(loss::loss_checks(&losses, &sources, loss_window()));
     checks.push(capture::worker_check(
         beat.as_ref(),
         now,
@@ -276,7 +285,13 @@ pub fn archive_checks(
         capture::worker_stopped(),
     ));
     checks.extend(crate::delivery::delivery_checks(root, now));
-    Ok(checks)
+    Ok((
+        checks,
+        Loss {
+            gaps: losses,
+            sources,
+        },
+    ))
 }
 
 /// The runner's pulse, in the archive root.

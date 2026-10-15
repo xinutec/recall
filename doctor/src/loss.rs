@@ -25,10 +25,18 @@ pub struct Span {
 }
 
 /// An uncovered stretch on one source.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct Gap {
     pub source_id: String,
+    #[serde(
+        serialize_with = "audiocore::instant::ser",
+        deserialize_with = "audiocore::instant::de"
+    )]
     pub start: DateTime<Utc>,
+    #[serde(
+        serialize_with = "audiocore::instant::ser",
+        deserialize_with = "audiocore::instant::de"
+    )]
     pub end: DateTime<Utc>,
 }
 
@@ -125,6 +133,53 @@ pub fn uncovered_loss(
     }
     losses.sort_by_key(|g| g.start);
     losses
+}
+
+/// What is left of `gaps` once the minutes an operator deleted on the server
+/// are taken out: each covers a minute from its start, on its own source.
+/// A remainder shorter than `min_loss` is boundary slop.
+#[must_use]
+pub fn unexplained(
+    gaps: Vec<Gap>,
+    forgotten: &[(String, DateTime<Utc>)],
+    min_loss: Duration,
+) -> Vec<Gap> {
+    let mut left = Vec::new();
+    for gap in gaps {
+        let deleted: Vec<(DateTime<Utc>, DateTime<Utc>)> = forgotten
+            .iter()
+            .filter(|(source, _)| *source == gap.source_id)
+            .map(|(_, start)| (*start, *start + Duration::minutes(1)))
+            .collect();
+        let mut cursor = gap.start;
+        let mut pieces = Vec::new();
+        for (start, end) in merged(&deleted) {
+            if end <= cursor {
+                continue;
+            }
+            if start >= gap.end {
+                break;
+            }
+            if start > cursor {
+                pieces.push((cursor, start));
+            }
+            cursor = cursor.max(end);
+        }
+        if gap.end > cursor {
+            pieces.push((cursor, gap.end));
+        }
+        left.extend(
+            pieces
+                .into_iter()
+                .filter(|(start, end)| *end - *start >= min_loss)
+                .map(|(start, end)| Gap {
+                    source_id: gap.source_id.clone(),
+                    start,
+                    end,
+                }),
+        );
+    }
+    left
 }
 
 const LOSS_EXPECTED: &str = "every gap explained by a deliberate pause";

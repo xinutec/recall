@@ -2,7 +2,9 @@
 
 use chrono::{DateTime, Duration, Utc};
 use doctor::check::Verdict;
-use doctor::loss::{Event, Gap, PAUSE, RESUME, active_spans, loss_checks, uncovered_loss};
+use doctor::loss::{
+    Event, Gap, PAUSE, RESUME, active_spans, loss_checks, uncovered_loss, unexplained,
+};
 use doctor::source::SourceKind;
 
 fn at(minute: i64) -> DateTime<Utc> {
@@ -201,4 +203,47 @@ fn a_repeated_resume_does_not_reopen_an_already_open_span() {
     let spans = active_spans(&[event(RESUME, 10), event(RESUME, 20)], at(100));
     assert_eq!(spans.len(), 1);
     assert_eq!(spans[0].start, at(10));
+}
+
+fn gap(source: &str, start: i64, end: i64) -> Gap {
+    Gap {
+        source_id: source.to_owned(),
+        start: at(start),
+        end: at(end),
+    }
+}
+
+/// Every minute of `from..to` forgotten on the server.
+fn forgotten(source: &str, from: i64, to: i64) -> Vec<(String, DateTime<Utc>)> {
+    (from..to).map(|m| (source.to_owned(), at(m))).collect()
+}
+
+#[test]
+fn a_span_deleted_on_the_server_is_not_loss() {
+    let left = unexplained(
+        vec![gap("usb", 10, 47)],
+        &forgotten("usb", 10, 47),
+        Duration::minutes(2),
+    );
+    assert!(left.is_empty(), "{left:?}");
+}
+
+#[test]
+fn what_the_deletion_does_not_cover_is_still_loss() {
+    let left = unexplained(
+        vec![gap("usb", 10, 47)],
+        &forgotten("usb", 10, 30),
+        Duration::minutes(2),
+    );
+    assert_eq!(left, [gap("usb", 30, 47)]);
+}
+
+#[test]
+fn another_mics_deletion_explains_nothing() {
+    let left = unexplained(
+        vec![gap("usb", 10, 47)],
+        &forgotten("pixel5", 10, 47),
+        Duration::minutes(2),
+    );
+    assert_eq!(left, [gap("usb", 10, 47)]);
 }

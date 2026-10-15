@@ -1,17 +1,23 @@
 //! The record's own faults, for the doctor: requests that failed on our side
-//! ([`crate::route`] keeps them), minutes a microphone shows twice, and how
-//! each background pass is doing ([`crate::passes`]).
+//! ([`crate::route`] keeps them), minutes a microphone shows twice, minutes an
+//! operator deleted ([`crate::forget`]), and how each background pass is doing
+//! ([`crate::passes`]).
 //!
 //! The fleet measures, the doctor grades (`doctor/src/record.rs`), as for the
 //! live tier.
 
 use crate::same_speech::{COPY_SECONDS, same_span};
-use audiocore::record_health::{Doubled, DoubledMinute, Fault, Faults, RecordHealth};
+use audiocore::record_health::{
+    Doubled, DoubledMinute, Fault, Faults, ForgottenMinute, RecordHealth,
+};
 use chrono::{DateTime, Utc};
 use rusqlite::Connection;
 use std::path::Path;
 
 crate::statements! {
+    /// Tombstoned minutes recorded since ?1, oldest first.
+    FORGOTTEN: Meaning =
+        "SELECT source_id, start_utc FROM deleted_segments WHERE start_utc >= ?1 ORDER BY start_utc";
     /// Pairs of one mic's clips since ?1 starting within ?2 seconds of each
     /// other, both with lines showing: the candidates [`doubled_minutes`]
     /// holds to [`same_span`]. Newest first.
@@ -104,7 +110,25 @@ pub fn doubled_minutes(meaning: &Connection, since: DateTime<Utc>) -> rusqlite::
     })
 }
 
-/// Both, for the route.
+/// Minutes deleted on purpose, recorded since `since`.
+///
+/// # Errors
+/// If the database refuses.
+pub fn forgotten_minutes(
+    meaning: &Connection,
+    since: DateTime<Utc>,
+) -> rusqlite::Result<Vec<ForgottenMinute>> {
+    let mut stmt = FORGOTTEN.prepare(meaning)?;
+    let rows = stmt.query_map([audiocore::instant::Stamp::of(since)], |r| {
+        Ok(ForgottenMinute {
+            source: r.get(0)?,
+            start_utc: r.get(1)?,
+        })
+    })?;
+    rows.collect()
+}
+
+/// All of it, for the route.
 ///
 /// # Errors
 /// If the database refuses.
@@ -124,5 +148,6 @@ pub fn measure(root: &Path, since: DateTime<Utc>) -> rusqlite::Result<RecordHeal
         faults,
         doubled: doubled_minutes(&meaning, since)?,
         passes: crate::passes::PASSES.report(),
+        forgotten: forgotten_minutes(&meaning, since)?,
     })
 }

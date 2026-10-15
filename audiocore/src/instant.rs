@@ -51,6 +51,17 @@ pub fn parse_utc(value: &str) -> Option<DateTime<Utc>> {
     parse(value).map(|t| t.with_timezone(&Utc))
 }
 
+/// A serde writer for an instant, in the stored spelling; [`de`] reads it.
+///
+/// # Errors
+/// As the serializer's.
+pub fn ser<S>(when: &DateTime<Utc>, serializer: S) -> Result<S::Ok, S::Error>
+where
+    S: serde::Serializer,
+{
+    serializer.serialize_str(&python_isoformat_utc(*when))
+}
+
 /// A serde reader for a stored instant.
 pub fn de<'de, D>(deserializer: D) -> Result<DateTime<Utc>, D::Error>
 where

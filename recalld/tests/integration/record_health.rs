@@ -158,3 +158,35 @@ fn a_fault_log_that_cannot_be_read_is_itself_a_fault() {
         "reading the fault log"
     );
 }
+
+/// A span an operator forgot (`recalld forget-span`) is no loss: the doctor is
+/// told each forgotten minute since the window start.
+#[test]
+fn forgotten_minutes_since_the_window_start_are_named() {
+    let dir = tempfile::tempdir().expect("tmp");
+    let conn = recalld::work::open_write(dir.path()).expect("recall db");
+    recalld::meaning_schema::ensure(&conn).expect("schema");
+    conn.execute_batch(
+        "INSERT INTO deleted_segments (source_id, start_utc, deleted_utc) VALUES
+         ('usb', '2026-09-27T23:59:00+00:00', '2026-09-28T10:00:00+00:00'),
+         ('usb', '2026-09-28T08:29:00+00:00', '2026-09-28T10:00:00+00:00'),
+         ('usb', '2026-09-28T08:30:00+00:00', '2026-09-28T10:00:00+00:00');",
+    )
+    .expect("tombstones");
+    drop(conn);
+
+    let health = measure(dir.path(), at("2026-09-28T00:00:00Z")).expect("measured");
+
+    let named: Vec<(String, String)> = health
+        .forgotten
+        .into_iter()
+        .map(|m| (m.source, m.start_utc))
+        .collect();
+    assert_eq!(
+        named,
+        [
+            ("usb".to_owned(), "2026-09-28T08:29:00+00:00".to_owned()),
+            ("usb".to_owned(), "2026-09-28T08:30:00+00:00".to_owned()),
+        ]
+    );
+}

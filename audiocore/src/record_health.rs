@@ -3,15 +3,26 @@
 
 use serde::{Deserialize, Serialize};
 
-/// Since the window start: requests that failed on the server's side, and
-/// minutes a microphone shows twice. And how each background pass is doing
-/// now.
+/// Since the window start: requests that failed on the server's side,
+/// minutes a microphone shows twice, and minutes an operator deleted. And how
+/// each background pass is doing now.
 #[derive(Debug, Clone, PartialEq, Eq, Default, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct RecordHealth {
     pub faults: Faults,
     pub doubled: Doubled,
     pub passes: Vec<Pass>,
+    /// Recorded since the window start and deleted since (`recalld
+    /// forget-span`), oldest first: deliberate, so not lost.
+    pub forgotten: Vec<ForgottenMinute>,
+}
+
+/// One deleted minute of a microphone, by the instant its recording began.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ForgottenMinute {
+    pub source: String,
+    pub start_utc: String,
 }
 
 /// One background pass of the server, as it last went. Instants are RFC 3339.

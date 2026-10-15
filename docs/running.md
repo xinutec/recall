@@ -46,8 +46,10 @@ come from other writers on the volume (#1412).
 
 ### The doctor asks Isis how it is
 
-`GET /sync/record/health` answers with failed requests, minutes shown twice and
-each background pass: when it last ended, and since when it has been failing.
+`GET /sync/record/health` answers with failed requests, minutes shown twice,
+minutes deleted on purpose (`forget-span`; speech-loss counts them as
+explained) and each background pass: when it last ended, and since when it has
+been failing.
 A pass failing or quiet past three of its intervals (at least 10 min), or one
 run past an hour, fails. Every other server check skips when Isis does not
 answer, and with capture paused nothing else goes red, so the doctor keeps
