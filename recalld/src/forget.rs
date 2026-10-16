@@ -57,6 +57,12 @@ crate::statements! {
     DROP_LIVE: Meaning = "DELETE FROM live_lines WHERE id IN (SELECT value FROM json_each(?1))";
     DROP_AUDIO: Meaning =
         "DELETE FROM audio_segments WHERE id IN (SELECT value FROM json_each(?1))";
+    SOURCE_KIND: Meaning = "SELECT kind FROM sources WHERE id = ?1";
+    SOURCE_SEGMENTS: Ingest = "SELECT source, filename, start_utc FROM segments WHERE source = ?1";
+    SOURCE_AUDIO: Meaning =
+        "SELECT id, source_id, start_utc, path FROM audio_segments WHERE source_id = ?1";
+    DROP_TOMBSTONES: Meaning = "DELETE FROM deleted_segments WHERE source_id = ?1";
+    DROP_SOURCE: Meaning = "DELETE FROM sources WHERE id = ?1";
 }
 
 /// `[from, to)`, in UTC.
@@ -105,6 +111,8 @@ pub enum ForgetError {
     /// A voiceprint was learnt from audio in the span: forgetting it would
     /// leave the voiceprint without its source.
     Voiceprint,
+    /// Only a derived source can be retired: anything else is a recording.
+    NotDerived(SourceId),
 }
 
 impl From<rusqlite::Error> for ForgetError {
@@ -125,6 +133,7 @@ impl std::fmt::Display for ForgetError {
             Self::Db(err) => write!(f, "{err}"),
             Self::Clip(err) => write!(f, "{err}"),
             Self::Voiceprint => f.write_str("a voiceprint was learnt from audio in the span"),
+            Self::NotDerived(source) => write!(f, "{source} is not a derived source: refused"),
         }
     }
 }
@@ -166,6 +175,16 @@ pub(crate) fn drop_recordings(
     for r in recordings {
         REMEMBER.execute(tx, (r.source.as_str(), &r.start, now))?;
     }
+    drop_rows(tx, recordings, clips, live)
+}
+
+/// [`drop_recordings`] without the tombstones.
+fn drop_rows(
+    tx: &Connection,
+    recordings: &[Recording],
+    clips: &[ClipId],
+    live: &[i64],
+) -> rusqlite::Result<()> {
     let ids: Vec<i64> = recordings.iter().map(|r| r.id).collect();
     let (clips, ids, live) = (json(clips)?, json(&ids)?, json(live)?);
     DROP_LINES.execute(tx, (&clips, &ids, &live))?;
@@ -274,6 +293,102 @@ pub fn span(
     tx.commit()?;
 
     // Files only after the commits, as a meeting's delete.
+    let files: BTreeSet<PathBuf> = segments
+        .iter()
+        .map(|s| crate::store::source_dir(root, s.source.as_str()).join(&s.filename))
+        .chain(audio.iter().map(|a| PathBuf::from(&a.path)))
+        .collect();
+    for file in files {
+        if let Err(err) = std::fs::remove_file(&file)
+            && err.kind() != std::io::ErrorKind::NotFound
+        {
+            forgotten.left_on_disk.push(file);
+        }
+    }
+    Ok(forgotten)
+}
+
+/// Retire a derived source: every row it has in both planes, its files, its
+/// tombstones and its `sources` row. A stream built from the microphones is
+/// not the record (they are), so nothing is tombstoned, and a source that was
+/// recorded is refused. With `apply` false, only say what it holds.
+pub fn retire_source(
+    meaning: &mut Connection,
+    ingest: &mut Connection,
+    root: &Path,
+    source: &SourceId,
+    apply: bool,
+) -> Result<Forgotten, ForgetError> {
+    let kind: Option<crate::sources::SourceKind> = {
+        use rusqlite::OptionalExtension as _;
+        SOURCE_KIND
+            .query_row(meaning, [source.as_str()], |r| r.get(0))
+            .optional()?
+    };
+    if kind != Some(crate::sources::SourceKind::Derived) {
+        return Err(ForgetError::NotDerived(source.clone()));
+    }
+    let segments: Vec<Segment> = {
+        let mut stmt = SOURCE_SEGMENTS.prepare(ingest)?;
+        let rows = stmt.query_map([source.as_str()], |r| {
+            Ok(Segment {
+                source: crate::sql::source_id(r, 0)?,
+                filename: r.get(1)?,
+                start: r.get(2)?,
+            })
+        })?;
+        rows.collect::<rusqlite::Result<_>>()?
+    };
+    let audio: Vec<Recording> = {
+        let mut stmt = SOURCE_AUDIO.prepare(meaning)?;
+        let rows = stmt.query_map([source.as_str()], |r| {
+            Ok(Recording {
+                id: r.get(0)?,
+                source: crate::sql::source_id(r, 1)?,
+                start: r.get(2)?,
+                path: r.get(3)?,
+            })
+        })?;
+        rows.collect::<rusqlite::Result<_>>()?
+    };
+    let mut clips: Vec<ClipId> = Vec::new();
+    for segment in &segments {
+        if let Some(clip) = crate::clips::by_filename(ingest, &segment.filename)? {
+            clips.push(clip.id);
+        }
+    }
+    let audio_ids: Vec<i64> = audio.iter().map(|a| a.id).collect();
+    let (clips_json, audio_json) = (json(&clips)?, json(&audio_ids)?);
+    let voiceprints: i64 =
+        VOICEPRINTS.query_row(meaning, (&audio_json, &clips_json), |r| r.get(0))?;
+    if voiceprints > 0 {
+        return Err(ForgetError::Voiceprint);
+    }
+    let mut forgotten = Forgotten {
+        applied: apply,
+        segments: segments.len(),
+        audio_rows: audio.len(),
+        lines: COUNT_LINES.query_row(meaning, (&clips_json, "[]"), count)?,
+        live_lines: 0,
+        edits: COUNT_EDITS.query_row(meaning, [&clips_json], count)?,
+        sources: std::iter::once(source.clone()).collect(),
+        left_on_disk: Vec::new(),
+    };
+    if !apply {
+        return Ok(forgotten);
+    }
+
+    let tx = crate::sql::write(meaning)?;
+    drop_rows(&tx, &audio, &clips, &[])?;
+    DROP_TOMBSTONES.execute(&tx, [source.as_str()])?;
+    DROP_SOURCE.execute(&tx, [source.as_str()])?;
+    tx.commit()?;
+
+    let filenames: Vec<String> = segments.iter().map(|s| s.filename.clone()).collect();
+    let tx = crate::sql::write(ingest)?;
+    crate::store::forget_files(&tx, &filenames)?;
+    tx.commit()?;
+
     let files: BTreeSet<PathBuf> = segments
         .iter()
         .map(|s| crate::store::source_dir(root, s.source.as_str()).join(&s.filename))

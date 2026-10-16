@@ -72,6 +72,14 @@ enum Task {
         #[arg(long)]
         apply: bool,
     },
+    /// Remove a derived source (one built from the mics, not recorded) from
+    /// both planes and the disk. Refused for anything recorded.
+    RetireSource {
+        #[arg(long)]
+        source: String,
+        #[arg(long)]
+        apply: bool,
+    },
 }
 
 /// Open both planes as the server does, run `report` over them, and print what
@@ -123,6 +131,15 @@ fn run_task(root: &std::path::Path, task: Task) -> ExitCode {
             let now = audiocore::instant::Stamp::now();
             report(root, |meaning, ingest| {
                 recalld::forget::span(meaning, ingest, root, &span, &now, apply)
+            })
+        }
+        Task::RetireSource { source, apply } => {
+            let Some(source) = transcript::SourceId::parse(&source) else {
+                eprintln!("recalld: --source must be a source id");
+                return ExitCode::FAILURE;
+            };
+            report(root, |meaning, ingest| {
+                recalld::forget::retire_source(meaning, ingest, root, &source, apply)
             })
         }
     }

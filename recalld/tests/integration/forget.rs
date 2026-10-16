@@ -189,3 +189,118 @@ fn a_backwards_span_is_not_a_span() {
     assert!(Span::parse("2026-10-15T09:10:00Z", "2026-10-15T08:28:00Z").is_none());
     assert!(Span::parse("yesterday", "2026-10-15T08:28:00Z").is_none());
 }
+
+// --- retiring a derived source (`recalld retire-source`) ---------------------
+
+fn retire(
+    fleet: &mut Fleet,
+    source: &str,
+    apply: bool,
+) -> Result<recalld::forget::Forgotten, ForgetError> {
+    let root = fleet.dir.path().to_owned();
+    let source = transcript::SourceId::parse(source).expect("source id");
+    recalld::forget::retire_source(&mut fleet.meaning, &mut fleet.ingest, &root, &source, apply)
+}
+
+/// The usb mic, and a stream built from it.
+fn fleet_with_room() -> Fleet {
+    let fleet = Fleet::new();
+    for (source, kind) in [("usb", "coreaudio"), ("room", "derived")] {
+        fleet.clip(
+            source,
+            kind,
+            INSIDE,
+            &[(1.0, 3.0, "the quick brown fox")],
+            None,
+        );
+        let dir = recalld::store::source_dir(fleet.root(), source);
+        std::fs::create_dir_all(&dir).expect("dir");
+        std::fs::write(dir.join(format!("{source}-{INSIDE}.flac")), b"audio").expect("file");
+    }
+    fleet.refresh();
+    fleet
+}
+
+#[test]
+fn a_recorded_source_cannot_be_retired() {
+    let mut fleet = fleet_with_room();
+
+    assert!(matches!(
+        retire(&mut fleet, "usb", true),
+        Err(ForgetError::NotDerived(_))
+    ));
+    assert!(file(&fleet, "usb", INSIDE).exists());
+    assert_eq!(
+        count(
+            &fleet.ingest,
+            "SELECT count(*) FROM segments WHERE source = 'usb'"
+        ),
+        1
+    );
+}
+
+#[test]
+fn retiring_a_derived_source_empties_both_planes_and_the_disk_of_it_alone() {
+    let mut fleet = fleet_with_room();
+
+    let retired = retire(&mut fleet, "room", true).expect("retired");
+
+    assert_eq!((retired.segments, retired.audio_rows), (1, 1));
+    assert!(!file(&fleet, "room", INSIDE).exists());
+    for (conn, sql) in [
+        (
+            &fleet.ingest,
+            "SELECT count(*) FROM segments WHERE source = 'room'",
+        ),
+        (
+            &fleet.ingest,
+            "SELECT count(*) FROM clips WHERE source = 'room'",
+        ),
+        (
+            &fleet.ingest,
+            "SELECT count(*) FROM jobs WHERE filename LIKE 'room-%'",
+        ),
+        (
+            &fleet.meaning,
+            "SELECT count(*) FROM audio_segments WHERE source_id = 'room'",
+        ),
+        (
+            &fleet.meaning,
+            "SELECT count(*) FROM sources WHERE id = 'room'",
+        ),
+        (&fleet.meaning, "SELECT count(*) FROM deleted_segments"),
+    ] {
+        assert_eq!(count(conn, sql), 0, "{sql}");
+    }
+    assert!(
+        file(&fleet, "usb", INSIDE).exists(),
+        "the mic it was built from is the record"
+    );
+    assert_eq!(
+        count(
+            &fleet.meaning,
+            "SELECT count(*) FROM audio_segments WHERE source_id = 'usb'"
+        ),
+        1
+    );
+}
+
+#[test]
+fn retiring_without_apply_reports_and_changes_nothing() {
+    let mut fleet = fleet_with_room();
+
+    let seen = retire(&mut fleet, "room", false).expect("report");
+
+    assert_eq!(
+        (seen.applied, seen.segments, seen.audio_rows),
+        (false, 1, 1)
+    );
+    assert!(file(&fleet, "room", INSIDE).exists());
+    assert_eq!(
+        count(
+            &fleet.meaning,
+            "SELECT count(*) FROM sources WHERE id = 'room'"
+        ),
+        1
+    );
+}
