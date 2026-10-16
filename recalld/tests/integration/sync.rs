@@ -650,3 +650,14 @@ async fn the_record_health_answers_the_doctor_and_nobody_else() {
     assert_eq!(health, audiocore::record_health::RecordHealth::default());
     assert_eq!(refused, 401);
 }
+
+/// The token is checked before anything in the request is read, so an
+/// unauthenticated caller cannot probe a route's parameters by its 400s.
+#[tokio::test]
+async fn a_sync_route_refuses_before_it_reads_the_request() {
+    let (_dir, addr) = serve(Some("sekrit")).await;
+    for path in ["/sync/heard", "/sync/live/health", "/sync/record/health"] {
+        let (status, _) = get(&addr, path, None).await;
+        assert_eq!(status, 401, "{path} without its query or a token");
+    }
+}

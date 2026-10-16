@@ -41,6 +41,19 @@ fn authorised(gate: &Gate, headers: &axum::http::HeaderMap) -> Result<(), Respon
     check(bearer(presented), &gate.expected).map_err(IntoResponse::into_response)
 }
 
+/// Every sync route's gate, before anything in the request is read: a route
+/// added to [`routes`] cannot forget it.
+async fn require_token(
+    State(gate): State<Arc<Gate>>,
+    request: axum::extract::Request,
+    next: axum::middleware::Next,
+) -> Response {
+    if let Err(refusal) = authorised(&gate, request.headers()) {
+        return refusal;
+    }
+    next.run(request).await
+}
+
 /// Authorise a sync request in constant time, or say what to answer.
 pub fn check(presented: Option<&str>, expected: &str) -> Result<(), (StatusCode, &'static str)> {
     let ok = presented.is_some_and(|p| {
@@ -59,14 +72,7 @@ use crate::capture::{WAIT_CAP, WAIT_SLICE};
 /// `POST /sync/capture`: the Mac reports what it applied and reads back the
 /// intent, in one round trip. The report is recorded once, before the hang:
 /// recording inside it would keep a Mac that died mid-hang looking alive.
-pub async fn capture_route(
-    State(st): State<Arc<Gate>>,
-    headers: axum::http::HeaderMap,
-    body: axum::body::Bytes,
-) -> Response {
-    if let Err(refusal) = authorised(&st, &headers) {
-        return refusal;
-    }
+pub async fn capture_route(State(st): State<Arc<Gate>>, body: axum::body::Bytes) -> Response {
     let Ok(body) = serde_json::from_slice::<Applied>(&body) else {
         return (StatusCode::UNPROCESSABLE_ENTITY, "bad capture report").into_response();
     };
@@ -121,30 +127,19 @@ pub async fn capture_route(
 }
 
 /// Authorise, then answer a read of the meaning plane.
-async fn gated_read<T, F>(
-    st: &Arc<Gate>,
-    headers: &axum::http::HeaderMap,
-    what: &'static str,
-    read: F,
-) -> Response
+async fn gated_read<T, F>(st: &Arc<Gate>, what: &'static str, read: F) -> Response
 where
     F: FnOnce(&rusqlite::Connection) -> rusqlite::Result<T> + Send + 'static,
     T: serde::Serialize + Send + 'static,
 {
-    if let Err(refusal) = authorised(st, headers) {
-        return refusal;
-    }
     let root = st.root.clone();
     crate::route::json(what, move || read(&crate::reads::open(&root)?)).await
 }
 
 /// `GET /sync/vocabulary/prompt`: the glossary as an ASR prompt, for the
 /// runner to hand to the model shim.
-pub async fn vocabulary_prompt_route(
-    State(st): State<Arc<Gate>>,
-    headers: axum::http::HeaderMap,
-) -> Response {
-    gated_read(&st, &headers, "sync vocabulary prompt", |conn| {
+pub async fn vocabulary_prompt_route(State(st): State<Arc<Gate>>) -> Response {
+    gated_read(&st, "sync vocabulary prompt", |conn| {
         Ok(Prompt {
             prompt: crate::labels::initial_prompt(conn)?,
         })
@@ -154,17 +149,14 @@ pub async fn vocabulary_prompt_route(
 
 /// `GET /sync/devices/heartbeats`: each mic app's last beat, for fleetwatch's
 /// mic check (`xinutec-infra/mac-mini/recall_mics.py`).
-pub async fn heartbeats_route(
-    State(st): State<Arc<Gate>>,
-    headers: axum::http::HeaderMap,
-) -> Response {
-    gated_read(&st, &headers, "sync heartbeats", crate::devices::beats_out).await
+pub async fn heartbeats_route(State(st): State<Arc<Gate>>) -> Response {
+    gated_read(&st, "sync heartbeats", crate::devices::beats_out).await
 }
 
 /// `GET /sync/devices/outbox`: what each phone last said it still holds, for
 /// fleetwatch's upload check (`xinutec-infra/mac-mini/recall_uploads.py`).
-pub async fn outbox_route(State(st): State<Arc<Gate>>, headers: axum::http::HeaderMap) -> Response {
-    gated_read(&st, &headers, "sync outboxes", crate::devices::reports_out).await
+pub async fn outbox_route(State(st): State<Arc<Gate>>) -> Response {
+    gated_read(&st, "sync outboxes", crate::devices::reports_out).await
 }
 
 /// The windows to measure over; no defaults, the doctor owns them.
@@ -178,12 +170,8 @@ pub struct LiveHealthQuery {
 /// `GET /sync/live/health`: the live feed's numbers, for the doctor on the Mac.
 pub async fn live_health_route(
     State(st): State<Arc<Gate>>,
-    headers: axum::http::HeaderMap,
     Query(q): Query<LiveHealthQuery>,
 ) -> Response {
-    if let Err(refusal) = authorised(&st, &headers) {
-        return refusal;
-    }
     // Parsed here, so a bad bound is a 400 rather than a text comparison
     // against something that only looks like a timestamp.
     let (Some(lag_since), Some(window_since), Some(window_until)) = (
@@ -214,12 +202,8 @@ pub struct RecordHealthQuery {
 /// `GET /sync/record/health`: server faults and doubled minutes since `since`.
 pub async fn record_health_route(
     State(st): State<Arc<Gate>>,
-    headers: axum::http::HeaderMap,
     Query(q): Query<RecordHealthQuery>,
 ) -> Response {
-    if let Err(refusal) = authorised(&st, &headers) {
-        return refusal;
-    }
     let Some(since) = audiocore::instant::parse(&q.since) else {
         return (StatusCode::BAD_REQUEST, "unparseable window bound").into_response();
     };
@@ -239,14 +223,7 @@ pub struct HeardQuery {
 
 /// `GET /sync/heard`: per device source, audio delivered and speech in it, for
 /// the doctor's deaf-microphone check.
-pub async fn heard_route(
-    State(st): State<Arc<Gate>>,
-    headers: axum::http::HeaderMap,
-    Query(q): Query<HeardQuery>,
-) -> Response {
-    if let Err(refusal) = authorised(&st, &headers) {
-        return refusal;
-    }
+pub async fn heard_route(State(st): State<Arc<Gate>>, Query(q): Query<HeardQuery>) -> Response {
     let (Some(since), Some(until)) = (
         audiocore::instant::parse_utc(&q.since),
         audiocore::instant::parse_utc(&q.until),
@@ -262,14 +239,7 @@ pub async fn heard_route(
 
 /// `POST /sync/live`: the live feed. Best effort: the archive pass transcribes
 /// the minute again, so a dropped push loses no word.
-pub async fn live_route(
-    State(st): State<Arc<Gate>>,
-    headers: axum::http::HeaderMap,
-    body: axum::body::Bytes,
-) -> Response {
-    if let Err(refusal) = authorised(&st, &headers) {
-        return refusal;
-    }
+pub async fn live_route(State(st): State<Arc<Gate>>, body: axum::body::Bytes) -> Response {
     let Ok(body) = serde_json::from_slice::<LiveTurns>(&body) else {
         return (StatusCode::UNPROCESSABLE_ENTITY, "bad live turns").into_response();
     };
@@ -304,5 +274,9 @@ pub fn routes(gate: Arc<Gate>) -> Router {
             "/sync/record/health",
             axum::routing::get(record_health_route),
         )
+        .route_layer(axum::middleware::from_fn_with_state(
+            gate.clone(),
+            require_token,
+        ))
         .with_state(gate)
 }
