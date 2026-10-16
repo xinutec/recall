@@ -580,33 +580,22 @@ fn session_clips(ingest: &Connection, source: &str) -> Result<Vec<ClipId>, Write
         .collect())
 }
 
-/// Name a diarized voice across a session, or with `None` take the name back.
-/// Returns whether anything changed.
-///
-/// # Errors
-/// If a store refuses.
-pub fn name_voice(
+/// File `act` for `source`'s whole session, or with `None` retract every act
+/// of its kind (`same`) still in force. Returns whether anything was filed.
+fn replace_session_act(
     meaning: &Connection,
     ingest: &Connection,
     root: &FsPath,
     source: &transcript::SourceId,
-    cluster: &str,
-    name: Option<&str>,
+    act: Option<Act>,
+    same: impl Fn(&Act) -> bool,
 ) -> Result<bool, WriteError> {
-    let current: Vec<EditId> = in_force(meaning, source.as_str())?
-        .into_iter()
-        .filter(|e| matches!(&e.act, Act::Voice { cluster: c, .. } if c == cluster))
-        .map(|e| e.id)
-        .collect();
-    let acts: Vec<Act> = match name.and_then(Name::new) {
-        Some(name) => vec![Act::Voice {
-            source: source.clone(),
-            cluster: cluster.to_owned(),
-            name,
-        }],
-        None => current
+    let acts: Vec<Act> = match act {
+        Some(act) => vec![act],
+        None => in_force(meaning, source.as_str())?
             .into_iter()
-            .map(|edit| Act::Retract { edit })
+            .filter(|e| same(&e.act))
+            .map(|e| Act::Retract { edit: e.id })
             .collect(),
     };
     if acts.is_empty() {
@@ -622,6 +611,34 @@ pub fn name_voice(
     Ok(true)
 }
 
+/// Name a diarized voice across a session, or with `None` take the name back.
+/// Returns whether anything changed.
+///
+/// # Errors
+/// If a store refuses.
+pub fn name_voice(
+    meaning: &Connection,
+    ingest: &Connection,
+    root: &FsPath,
+    source: &transcript::SourceId,
+    cluster: &str,
+    name: Option<&str>,
+) -> Result<bool, WriteError> {
+    let act = name.and_then(Name::new).map(|name| Act::Voice {
+        source: source.clone(),
+        cluster: cluster.to_owned(),
+        name,
+    });
+    replace_session_act(
+        meaning,
+        ingest,
+        root,
+        source,
+        act,
+        |a| matches!(a, Act::Voice { cluster: c, .. } if c == cluster),
+    )
+}
+
 /// Pin `source`'s language, or with `None` leave it to the model.
 ///
 /// # Errors
@@ -633,31 +650,13 @@ pub fn pin_language(
     source: &transcript::SourceId,
     language: Option<transcript::Language>,
 ) -> Result<(), WriteError> {
-    let current: Vec<EditId> = in_force(meaning, source.as_str())?
-        .into_iter()
-        .filter(|e| matches!(e.act, Act::Language { .. }))
-        .map(|e| e.id)
-        .collect();
-    let acts: Vec<Act> = match language {
-        Some(language) => vec![Act::Language {
-            source: source.clone(),
-            language,
-        }],
-        None => current
-            .into_iter()
-            .map(|edit| Act::Retract { edit })
-            .collect(),
-    };
-    if acts.is_empty() {
-        return Ok(());
-    }
-    file(
-        meaning,
-        ingest,
-        root,
-        &acts,
-        &session_clips(ingest, source.as_str())?,
-    )?;
+    let act = language.map(|language| Act::Language {
+        source: source.clone(),
+        language,
+    });
+    replace_session_act(meaning, ingest, root, source, act, |a| {
+        matches!(a, Act::Language { .. })
+    })?;
     Ok(())
 }
 
