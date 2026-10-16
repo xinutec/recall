@@ -89,7 +89,7 @@ fn at(stamp: &str) -> chrono::DateTime<chrono::Utc> {
         .into()
 }
 
-fn health(root: &Path) -> recalld::live_tier::LiveHealth {
+fn health(root: &Path) -> audiocore::live_tier::LiveHealth {
     live_health(root, at(WINDOW_SINCE), at(WINDOW_SINCE), at(WINDOW_UNTIL)).expect("health")
 }
 

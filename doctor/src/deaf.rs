@@ -11,40 +11,12 @@
 //! 0.0. A case between them is a new finding, not a reason to tune.
 
 use crate::check::{Check, Verdict, check};
+use audiocore::live_tier::Heard;
 
-/// Speech a source recorded against the audio it delivered. A rate, not
-/// clock-minute buckets: recorders cut segments out of phase.
-#[derive(Debug, Clone, PartialEq, serde::Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct Heard {
-    pub source: String,
-    pub delivered_s: f64,
-    pub speech_s: f64,
-}
-
-impl Heard {
-    #[must_use]
-    pub fn new(source: &str, delivered_s: f64, speech_s: f64) -> Self {
-        Self {
-            source: source.to_owned(),
-            delivered_s,
-            speech_s,
-        }
-    }
-
-    /// Speech per minute of delivered audio; zero if nothing was delivered.
-    #[must_use]
-    pub fn per_minute(&self) -> f64 {
-        if self.delivered_s <= 0.0 {
-            return 0.0;
-        }
-        self.speech_s * 60.0 / self.delivered_s
-    }
-
-    #[must_use]
-    pub fn comparable(&self) -> bool {
-        self.delivered_s >= MIN_DELIVERED_S
-    }
+/// Whether a source delivered enough audio for its rate to count.
+#[must_use]
+pub fn comparable(heard: &Heard) -> bool {
+    heard.delivered_s >= MIN_DELIVERED_S
 }
 
 /// How far back the comparison looks. Longer dilutes a conversation below
@@ -86,14 +58,14 @@ pub fn deaf_sources(heard: &[Heard]) -> Vec<String> {
     }
     heard
         .iter()
-        .filter(|h| h.comparable() && h.per_minute() <= DEAF_PER_MIN)
+        .filter(|h| comparable(h) && h.per_minute() <= DEAF_PER_MIN)
         .map(|h| h.source.clone())
         .collect()
 }
 
 #[must_use]
 pub fn deaf_check(heard: &[Heard]) -> Check {
-    let usable: Vec<&Heard> = heard.iter().filter(|h| h.comparable()).collect();
+    let usable: Vec<&Heard> = heard.iter().filter(|h| comparable(h)).collect();
     let talking = usable
         .iter()
         .filter(|h| h.per_minute() >= CONVERSATION_PER_MIN)

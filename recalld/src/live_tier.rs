@@ -2,9 +2,9 @@
 //! the doctor judges and names the windows.
 
 use crate::store;
+use audiocore::live_tier::{Heard, LiveHealth};
 use chrono::{DateTime, Utc};
 use rusqlite::{Connection, OptionalExtension};
-use serde::Serialize;
 use std::collections::HashMap;
 use std::path::Path;
 
@@ -19,23 +19,6 @@ crate::statements! {
            AND start_utc >= ?2 AND start_utc < ?3";
     SPEECH_SECONDS: Ingest =
         "SELECT speech_seconds FROM segment_speech WHERE filename = ?1 AND speech_seconds >= 0";
-}
-
-#[derive(Debug, Clone, Serialize, PartialEq)]
-#[serde(rename_all = "camelCase")]
-pub struct LiveHealth {
-    /// Median seconds between a live turn's end and its arrival.
-    pub lag_median_s: Option<f64>,
-    /// How many turns that median is over; a handful is noise.
-    pub lag_samples: usize,
-    /// The newest live turn's start, however old.
-    pub newest_turn_utc: Option<String>,
-    /// Seconds of audio the device recorders delivered in the window.
-    pub delivered_s: f64,
-    /// Seconds of that audio the speech scanner has measured.
-    pub scanned_s: f64,
-    /// Seconds of speech found within the scanned part.
-    pub speech_s: f64,
 }
 
 /// What the doctor's live checks need, from both planes.
@@ -77,16 +60,6 @@ pub fn live_health(
         }
     }
     Ok(out)
-}
-
-/// What one device source delivered and heard in a window. Only measured clips
-/// count: otherwise a lagging scanner looks like a deaf microphone.
-#[derive(Debug, Clone, Serialize, PartialEq)]
-#[serde(rename_all = "camelCase")]
-pub struct Heard {
-    pub source: String,
-    pub delivered_s: f64,
-    pub speech_s: f64,
 }
 
 /// Per device source with measured audio, for the doctor's deaf check.

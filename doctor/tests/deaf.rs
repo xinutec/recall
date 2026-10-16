@@ -1,7 +1,8 @@
 //! The deaf-microphone check (see `doctor::deaf`).
 
+use audiocore::live_tier::Heard;
 use doctor::check::Verdict;
-use doctor::deaf::{Heard, deaf_check};
+use doctor::deaf::deaf_check;
 
 /// Measured: four mics, the same minutes, one room.
 fn measured() -> Vec<Heard> {

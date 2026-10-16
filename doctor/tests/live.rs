@@ -1,9 +1,10 @@
 //! Grading the live tier from the server's measurements, including when the
 //! server does not answer.
 
+use audiocore::live_tier::LiveHealth;
 use chrono::{TimeZone, Utc};
 use doctor::check::Verdict;
-use doctor::live::{Fleet, LiveHealth, live_checks, unconfigured};
+use doctor::live::{Fleet, live_checks, unconfigured};
 
 fn now() -> chrono::DateTime<Utc> {
     Utc.with_ymd_and_hms(2026, 9, 21, 12, 0, 0).unwrap()

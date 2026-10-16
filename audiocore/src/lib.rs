@@ -9,6 +9,7 @@ pub mod capture_log;
 pub mod decode;
 pub mod instant;
 pub mod job;
+pub mod live_tier;
 pub mod names;
 pub mod record_health;
 pub mod shim;

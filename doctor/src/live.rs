@@ -6,6 +6,7 @@
 
 use crate::capture::{self, WindowAudio};
 use crate::check::{Check, Verdict, check};
+use audiocore::live_tier::LiveHealth;
 use chrono::{DateTime, Duration, Utc};
 
 /// Fewer turns than this get no lag verdict: the median would be noise.
@@ -27,18 +28,6 @@ impl Fleet {
             token: token.filter(|t| !t.is_empty())?.to_owned(),
         })
     }
-}
-
-/// `GET /sync/live/health`.
-#[derive(Debug, Clone, serde::Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct LiveHealth {
-    pub lag_median_s: Option<f64>,
-    pub lag_samples: usize,
-    pub newest_turn_utc: Option<String>,
-    pub delivered_s: f64,
-    pub scanned_s: f64,
-    pub speech_s: f64,
 }
 
 /// Short: these reads run in the reporting process, so a hung one would stall
