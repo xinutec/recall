@@ -10,7 +10,6 @@ use audiocore::instant::IngestStamp;
 use chrono::{DateTime, Datelike, SubsecRound, TimeZone, Timelike, Utc};
 use chrono_tz::Europe::London;
 use rusqlite::Connection;
-use sha2::{Digest, Sha256};
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
@@ -32,10 +31,6 @@ pub const AUDIO_SUFFIXES: &[&str] = &[
 ];
 
 const S16_BYTES_PER_SAMPLE: usize = 2;
-
-fn sha256_hex(bytes: &[u8]) -> String {
-    hex::encode(Sha256::digest(bytes))
-}
 
 #[derive(Debug)]
 pub enum UploadError {
@@ -290,10 +285,7 @@ pub fn started_at(raw: &str) -> Result<DateTime<Utc>, UploadError> {
     let started = if raw.is_empty() {
         Utc::now()
     } else {
-        let normalised = instant::respell_utc(raw).ok_or(UploadError::BadStart)?;
-        DateTime::parse_from_rfc3339(&normalised)
-            .map(|t| t.with_timezone(&Utc))
-            .map_err(|_| UploadError::BadStart)?
+        instant::parse_utc(raw).ok_or(UploadError::BadStart)?
     };
     Ok(started.trunc_subsecs(0))
 }
@@ -459,7 +451,7 @@ pub async fn create_session_route(
                 &path,
                 started,
                 form.bytes.len(),
-                &sha256_hex(&form.bytes),
+                &crate::ingest::sha256_hex(&form.bytes),
                 Utc::now(),
             )?;
             Ok(created(&source, &name, started, media.duration_s, language))

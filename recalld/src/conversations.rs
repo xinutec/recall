@@ -406,26 +406,6 @@ fn turns_of(segments: &[reads::Segment]) -> (Vec<Turn>, Vec<usize>) {
     (turns, kept)
 }
 
-/// The index whose `pick` is the extreme; the first on a tie.
-fn extreme(
-    turns: &[Turn],
-    indices: &[usize],
-    pick: impl Fn(&Turn) -> DateTime<Utc>,
-    want_max: bool,
-) -> Option<usize> {
-    let mut best: Option<usize> = None;
-    for &i in indices {
-        let better = best.is_none_or(|b| {
-            let (this, that) = (pick(&turns[i]), pick(&turns[b]));
-            if want_max { this > that } else { this < that }
-        });
-        if better {
-            best = Some(i);
-        }
-    }
-    best
-}
-
 fn moment_out(
     segments: &[reads::Segment],
     turns: &[Turn],
@@ -477,7 +457,12 @@ fn conversation_out(
             .first()
             .map(|&i| row(i).start_utc.to_string())
             .unwrap_or_default(),
-        end: extreme(turns, group, |t| t.end, true)
+        // The latest end, the first on a tie: `max_by_key` keeps the last.
+        end: group
+            .iter()
+            .rev()
+            .copied()
+            .max_by_key(|&i| turns[i].end)
             .map(|i| row(i).end_utc.to_string())
             .unwrap_or_default(),
         turn_count: shown.len(),

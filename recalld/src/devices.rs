@@ -10,17 +10,9 @@
 use audiocore::devices::Heartbeat;
 use audiocore::instant;
 use chrono::{DateTime, Utc};
-use rusqlite::{Connection, OptionalExtension};
+use rusqlite::Connection;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
-
-crate::statements! {
-    SETTING: Meaning =
-        "SELECT value FROM settings WHERE key = ?1";
-    SET_SETTING: Meaning =
-        "INSERT INTO settings (key, value) VALUES (?1, ?2) \
-         ON CONFLICT(key) DO UPDATE SET value = excluded.value";
-}
 
 /// The `settings` keys the two lists live under.
 pub const BEATS: &str = "device_mic_heartbeats";
@@ -74,13 +66,8 @@ pub struct Report {
 }
 
 fn get_setting(conn: &Connection, key: &str) -> rusqlite::Result<Option<String>> {
-    let raw: Option<String> = SETTING.query_row(conn, [key], |r| r.get(0)).optional()?;
+    let raw = crate::settings::get(conn, key)?;
     Ok(raw.map(|v| v.trim().to_owned()).filter(|v| !v.is_empty()))
-}
-
-fn set_setting(conn: &Connection, key: &str, value: &str) -> rusqlite::Result<()> {
-    SET_SETTING.execute(conn, (key, value))?;
-    Ok(())
 }
 
 /// A beat as stored, under its device's id: [`Beat`] without the key.
@@ -151,7 +138,7 @@ fn store(
     entries: &BTreeMap<String, serde_json::Value>,
 ) -> rusqlite::Result<()> {
     let json = serde_json::to_string(entries).expect("a map of JSON values serialises");
-    set_setting(conn, key, &json)
+    crate::settings::set(conn, key, &json)
 }
 
 /// Forget one device's row, to undo a stray write. Returns whether it was

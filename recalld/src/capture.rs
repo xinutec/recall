@@ -5,18 +5,14 @@
 //! intended, and `settled` when they agree. A pause nobody can confirm is
 //! worthless, hence the two halves.
 
+use crate::settings;
 use audiocore::capture::CaptureState;
 use chrono::{DateTime, Duration, Utc};
-use rusqlite::{Connection, OptionalExtension};
+use rusqlite::Connection;
 use sha2::{Digest, Sha256};
 use std::collections::BTreeMap;
 
 crate::statements! {
-    SETTING: Meaning =
-        "SELECT value FROM settings WHERE key = ?1";
-    SET_SETTING: Meaning =
-        "INSERT INTO settings (key, value) VALUES (?1, ?2)
-         ON CONFLICT(key) DO UPDATE SET value = excluded.value";
     RECORD_EVENT: Meaning =
         "INSERT INTO capture_events (utc, kind, source_id, detail) VALUES (?1, ?2, NULL, ?3)";
 }
@@ -64,17 +60,11 @@ pub struct Reported {
     pub paused_until: Option<String>,
 }
 
-fn setting(conn: &Connection, key: &str) -> rusqlite::Result<Option<String>> {
-    SETTING
-        .query_row(conn, [key], |row| row.get::<_, String>(0))
-        .optional()
-}
-
 /// The desired resume-by, or `None` when running. An elapsed or unreadable
 /// intent reads as running. Returns the stored spelling: the Mac echoes it and
 /// `settled` compares strings.
 pub fn intent_until(conn: &Connection, now: DateTime<Utc>) -> rusqlite::Result<Option<String>> {
-    let Some(raw) = setting(conn, INTENT_KEY)? else {
+    let Some(raw) = settings::get(conn, INTENT_KEY)? else {
         return Ok(None);
     };
     if raw.is_empty() {
@@ -91,7 +81,7 @@ pub fn intent_until(conn: &Connection, now: DateTime<Utc>) -> rusqlite::Result<O
 
 /// Whether the Mac reported within [`report_fresh`] of `now`.
 fn report_is_fresh(conn: &Connection, now: DateTime<Utc>) -> rusqlite::Result<bool> {
-    Ok(setting(conn, REPORTED_AT_KEY)?
+    Ok(settings::get(conn, REPORTED_AT_KEY)?
         .as_deref()
         .and_then(audiocore::instant::parse)
         .is_some_and(|at| now - at.with_timezone(&Utc) <= report_fresh()))
@@ -99,7 +89,7 @@ fn report_is_fresh(conn: &Connection, now: DateTime<Utc>) -> rusqlite::Result<bo
 
 /// The Mac's last report if fresh.
 pub fn reported_state(conn: &Connection, now: DateTime<Utc>) -> rusqlite::Result<Option<Reported>> {
-    let Some(running) = setting(conn, REPORTED_RUNNING_KEY)? else {
+    let Some(running) = settings::get(conn, REPORTED_RUNNING_KEY)? else {
         return Ok(None);
     };
     if !report_is_fresh(conn, now)? {
@@ -107,7 +97,7 @@ pub fn reported_state(conn: &Connection, now: DateTime<Utc>) -> rusqlite::Result
     }
     Ok(Some(Reported {
         running: running == "1",
-        paused_until: setting(conn, REPORTED_PAUSED_KEY)?.filter(|s| !s.is_empty()),
+        paused_until: settings::get(conn, REPORTED_PAUSED_KEY)?.filter(|s| !s.is_empty()),
     }))
 }
 
@@ -120,14 +110,14 @@ pub fn record_reported(
     paused_until: Option<&str>,
     source_liveness: &BTreeMap<String, String>,
 ) -> rusqlite::Result<()> {
-    set_setting(conn, REPORTED_RUNNING_KEY, if running { "1" } else { "0" })?;
-    set_setting(conn, REPORTED_PAUSED_KEY, paused_until.unwrap_or(""))?;
-    set_setting(
+    settings::set(conn, REPORTED_RUNNING_KEY, if running { "1" } else { "0" })?;
+    settings::set(conn, REPORTED_PAUSED_KEY, paused_until.unwrap_or(""))?;
+    settings::set(
         conn,
         REPORTED_AT_KEY,
         &audiocore::instant::python_isoformat_utc(now),
     )?;
-    set_setting(
+    settings::set(
         conn,
         REPORTED_LIVENESS_KEY,
         &serde_json::to_string(source_liveness).expect("a string map serialises"),
@@ -143,7 +133,7 @@ pub fn reported_source_liveness(
     if !report_is_fresh(conn, now)? {
         return Ok(None);
     }
-    let Some(raw) = setting(conn, REPORTED_LIVENESS_KEY)?.filter(|s| !s.is_empty()) else {
+    let Some(raw) = settings::get(conn, REPORTED_LIVENESS_KEY)?.filter(|s| !s.is_empty()) else {
         return Ok(Some(std::collections::HashMap::new()));
     };
     let Ok(parsed) = serde_json::from_str::<serde_json::Map<String, serde_json::Value>>(&raw)
@@ -211,11 +201,6 @@ pub fn compute_resume_by(now: DateTime<Utc>, minutes: Option<i64>) -> DateTime<U
     now + span.max(Duration::zero())
 }
 
-fn set_setting(conn: &Connection, key: &str, value: &str) -> rusqlite::Result<()> {
-    SET_SETTING.execute(conn, [key, value])?;
-    Ok(())
-}
-
 /// Record a bounded pause as the intent and return its resume-by, as stored.
 pub fn intent_pause(
     conn: &Connection,
@@ -224,14 +209,14 @@ pub fn intent_pause(
 ) -> rusqlite::Result<String> {
     let until = compute_resume_by(now, minutes);
     let iso = audiocore::instant::python_isoformat_utc(until);
-    set_setting(conn, INTENT_KEY, &iso)?;
+    settings::set(conn, INTENT_KEY, &iso)?;
     notify_intent_changed();
     Ok(iso)
 }
 
 /// Record "run" as the intent: an empty value, not a deleted row.
 pub fn intent_resume(conn: &Connection) -> rusqlite::Result<()> {
-    set_setting(conn, INTENT_KEY, "")?;
+    settings::set(conn, INTENT_KEY, "")?;
     notify_intent_changed();
     Ok(())
 }

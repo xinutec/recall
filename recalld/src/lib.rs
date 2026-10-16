@@ -33,6 +33,7 @@ pub mod retranscribe;
 pub mod route;
 pub mod same_speech;
 pub mod sessions;
+pub mod settings;
 pub mod sources;
 pub mod spa;
 pub mod speech;
