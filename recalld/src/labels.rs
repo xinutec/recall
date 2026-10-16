@@ -4,6 +4,7 @@
 use crate::audio::{self, clip_window};
 use crate::reads;
 use crate::route;
+use audiocore::instant::Stamp;
 use axum::extract::{Query, State};
 use axum::response::Response;
 use rusqlite::Connection;
@@ -122,7 +123,6 @@ pub fn list_corrections(
     speaker: Option<&str>,
     limit: i64,
 ) -> rusqlite::Result<Vec<Label>> {
-    let spelled = |at: transcript::Instant| audiocore::instant::python_isoformat_utc(at.to_utc());
     labelled(conn)?
         .into_iter()
         .filter(|l| speaker.is_none_or(|who| l.name.as_str() == who))
@@ -134,8 +134,8 @@ pub fn list_corrections(
             let rows = stmt.query_map(
                 rusqlite::params![
                     l.clip.stored(),
-                    spelled(l.span.start()),
-                    spelled(l.span.end())
+                    Stamp::from(l.span.start()),
+                    Stamp::from(l.span.end())
                 ],
                 |r| Ok((r.get::<_, String>(0)?, r.get::<_, Option<String>>(1)?)),
             )?;
@@ -150,7 +150,7 @@ pub fn list_corrections(
                 text: words.join(" "),
                 speaker: Some(l.name.as_str().to_owned()),
                 language,
-                start: spelled(l.span.start()),
+                start: Stamp::from(l.span.start()).to_string(),
                 audio_url: format!("/api/correction/{id}/audio"),
             })
         })

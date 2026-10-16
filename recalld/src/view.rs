@@ -14,6 +14,7 @@ use crate::edit_log::{self, LogError};
 use crate::line::{HUMAN_MODEL, HiddenReason, LIVE_MODEL, Stage};
 use crate::rendering;
 use crate::results::ResultError;
+use audiocore::instant::Stamp;
 
 /// The model the `asr` shim loads by default (`recall.asr.DEFAULT_MODEL`). The
 /// queue carries no model, so this copy must match; a test reads `asr.py`.
@@ -533,8 +534,8 @@ const RUN_GAP_US: i64 = 1_000_000;
 
 /// One row of `rendered_lines`, before it is placed.
 struct Row {
-    start: String,
-    end: String,
+    start: Stamp,
+    end: Stamp,
     text: String,
     language: Option<String>,
     confidence: Option<f64>,
@@ -551,10 +552,6 @@ struct Row {
     words: Option<String>,
 }
 
-fn spelled(at: Instant) -> String {
-    audiocore::instant::python_isoformat_utc(at.to_utc())
-}
-
 impl Row {
     fn line(line: &Line, tier: Stage) -> rusqlite::Result<Self> {
         let (label, guess, score) = match line.speaker() {
@@ -569,8 +566,8 @@ impl Row {
             Author::Person(id) => (HUMAN_MODEL, Stage::Corrected, Some(id.stored())),
         };
         Ok(Self {
-            start: spelled(line.span().start()),
-            end: spelled(line.span().end()),
+            start: line.span().start().into(),
+            end: line.span().end().into(),
             text: line.text().to_owned(),
             language: line.language().map(str::to_owned),
             confidence: line.confidence(),
@@ -616,8 +613,8 @@ impl Row {
             Why::Excluded(id) => (HiddenReason::Excluded, Some(id.stored())),
         };
         Self {
-            start: spelled(dropped.span.start()),
-            end: spelled(dropped.span.end()),
+            start: dropped.span.start().into(),
+            end: dropped.span.end().into(),
             text: dropped.text.trim().to_owned(),
             language: None,
             confidence: None,
@@ -645,8 +642,8 @@ impl Row {
             int(shown.map(|s| s.clip.id.stored())),
             int(shown.map(|s| s.audio_id)),
             text((!source.is_empty()).then_some(source)),
-            Value::Text(self.start.clone()),
-            Value::Text(self.end.clone()),
+            Value::Text(self.start.to_string()),
+            Value::Text(self.end.to_string()),
             Value::Text(self.text.clone()),
             text(self.language.as_deref()),
             real(self.confidence),
@@ -694,14 +691,14 @@ fn live(meaning: &Connection, transcribed: &[(Instant, Instant)]) -> rusqlite::R
         .collect();
     let mut new = Vec::new();
     for (live_id, start, end, text, language) in turns {
-        let Some(at) = Instant::parse(&start) else {
+        let (Some(at), Some(end)) = (Instant::parse(&start), Stamp::parse(&end)) else {
             continue;
         };
         if transcribed.iter().any(|(a, b)| *a <= at && at < *b) {
             continue;
         }
         let row = Row {
-            start,
+            start: at.into(),
             end,
             text,
             language,

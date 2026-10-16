@@ -134,6 +134,12 @@ impl From<DateTime<Utc>> for Stamp {
     }
 }
 
+impl From<transcript::Instant> for Stamp {
+    fn from(at: transcript::Instant) -> Self {
+        Self::of(at.to_utc())
+    }
+}
+
 impl std::fmt::Display for Stamp {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.write_str(&self.0)

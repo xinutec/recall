@@ -8,6 +8,7 @@ use crate::edit_log::{self, LogError};
 use crate::line::{HiddenReason, LineId};
 use crate::route;
 use crate::view::{self, ViewError};
+use audiocore::instant::Stamp;
 use rusqlite::{Connection, OptionalExtension};
 use std::path::Path as FsPath;
 use transcript::{Act, Clip, ClipId, EditId, Instant, Name, Span, Text};
@@ -243,15 +244,14 @@ fn between(
     a: &Line,
     b: &Line,
 ) -> Result<Vec<Line>, WriteError> {
-    let spelled = |l: &Line| audiocore::instant::python_isoformat_utc(l.span.start().to_utc());
     let ids: Vec<i64> = SESSION_LINES
         .prepare(meaning)?
         .query_map(
             rusqlite::params![
                 a.clip.source.as_str(),
-                spelled(a),
+                Stamp::from(a.span.start()),
                 a.id.stored(),
-                spelled(b),
+                Stamp::from(b.span.start()),
                 b.id.stored()
             ],
             |r| r.get(0),
