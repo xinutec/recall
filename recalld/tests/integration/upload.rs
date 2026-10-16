@@ -359,6 +359,11 @@ async fn a_real_recording_uploads_and_becomes_a_session() {
         json["turnCount"], 0,
         "it appears at once, before transcription"
     );
+    assert_eq!(
+        json.get("language"),
+        Some(&serde_json::Value::Null),
+        "the app's Session type has the field: null is the model's guess"
+    );
 
     // The file is on disk, and the source is an upload.
     let conn = Connection::open(dir.path().join("recall.sqlite")).expect("db");

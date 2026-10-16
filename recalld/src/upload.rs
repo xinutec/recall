@@ -293,18 +293,24 @@ pub fn started_at(raw: &str) -> Result<DateTime<Utc>, UploadError> {
     Ok(started.trunc_subsecs(0))
 }
 
-/// The session as the list shows it.
-pub fn created_json(source: &str, title: &str, started: DateTime<Utc>, duration_s: f64) -> String {
+/// The new session as the list shows it.
+pub fn created(
+    source: &str,
+    title: &str,
+    started: DateTime<Utc>,
+    duration_s: f64,
+    language: Option<transcript::Language>,
+) -> crate::sessions::SessionOut {
     let end = started + chrono::Duration::microseconds((duration_s * 1e6).round() as i64);
-    serde_json::json!({
-        "id": source,
-        "title": title,
-        "start": instant::python_isoformat_utc(started),
-        "end": instant::python_isoformat_utc(end),
-        "turnCount": 0,
-        "speakers": [],
-    })
-    .to_string()
+    crate::sessions::SessionOut {
+        id: source.to_owned(),
+        title: title.to_owned(),
+        start: instant::python_isoformat_utc(started),
+        end: instant::python_isoformat_utc(end),
+        turn_count: 0,
+        speakers: Vec::new(),
+        language: language.map(|l| l.code().to_owned()),
+    }
 }
 
 /// For tests to state the zone they assert about.
@@ -322,7 +328,7 @@ pub fn london_offset_hours(at: DateTime<Utc>) -> i32 {
 
 use crate::{reads, route, work};
 use axum::extract::{Multipart, State};
-use axum::http::{StatusCode, header};
+use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
 use std::sync::Arc;
 
@@ -411,50 +417,52 @@ pub async fn create_session_route(
     let root = st.root.clone();
     let title = form.title.trim().to_owned();
 
-    let done = tokio::task::spawn_blocking(move || -> Result<String, UploadError> {
-        let (source, default_title) = meeting_id(started);
-        let name = if title.is_empty() {
-            default_title
-        } else {
-            title
-        };
-        let meaning = work::open_write(&root)?;
-        if was_deleted(&meaning, &source, started)? {
-            return Err(UploadError::Deleted);
-        }
-        let path = stored_path(&root, &source, started, &suffix);
-        std::fs::create_dir_all(path.parent().expect("a file has a parent"))?;
-        std::fs::write(&path, &form.bytes)?;
-        // An unreadable file is not left behind.
-        let media = match probe(&path) {
-            Ok(media) => media,
-            Err(err) => {
-                let _ = std::fs::remove_file(&path);
-                return Err(err);
+    let done = tokio::task::spawn_blocking(
+        move || -> Result<crate::sessions::SessionOut, UploadError> {
+            let (source, default_title) = meeting_id(started);
+            let name = if title.is_empty() {
+                default_title
+            } else {
+                title
+            };
+            let meaning = work::open_write(&root)?;
+            if was_deleted(&meaning, &source, started)? {
+                return Err(UploadError::Deleted);
             }
-        };
-        let ingest = crate::store::open(&root)?;
-        register(&meaning, &source, &name, &path, started, media)?;
-        // Before the ingest row, so the first transcription leases with it.
-        let id = transcript::SourceId::parse(&source).expect("meeting_id spells a source id");
-        if let Some(language) = language {
-            crate::labels_write::pin_language(&meaning, &ingest, &root, &id, Some(language))
-                .map_err(UploadError::Pin)?;
-        }
-        deliver(
-            &ingest,
-            &id,
-            &path,
-            started,
-            form.bytes.len(),
-            &sha256_hex(&form.bytes),
-            Utc::now(),
-        )?;
-        Ok(created_json(&source, &name, started, media.duration_s))
-    });
+            let path = stored_path(&root, &source, started, &suffix);
+            std::fs::create_dir_all(path.parent().expect("a file has a parent"))?;
+            std::fs::write(&path, &form.bytes)?;
+            // An unreadable file is not left behind.
+            let media = match probe(&path) {
+                Ok(media) => media,
+                Err(err) => {
+                    let _ = std::fs::remove_file(&path);
+                    return Err(err);
+                }
+            };
+            let ingest = crate::store::open(&root)?;
+            register(&meaning, &source, &name, &path, started, media)?;
+            // Before the ingest row, so the first transcription leases with it.
+            let id = transcript::SourceId::parse(&source).expect("meeting_id spells a source id");
+            if let Some(language) = language {
+                crate::labels_write::pin_language(&meaning, &ingest, &root, &id, Some(language))
+                    .map_err(UploadError::Pin)?;
+            }
+            deliver(
+                &ingest,
+                &id,
+                &path,
+                started,
+                form.bytes.len(),
+                &sha256_hex(&form.bytes),
+                Utc::now(),
+            )?;
+            Ok(created(&source, &name, started, media.duration_s, language))
+        },
+    );
 
     match done.await {
-        Ok(Ok(body)) => ([(header::CONTENT_TYPE, "application/json")], body).into_response(),
+        Ok(Ok(session)) => axum::Json(session).into_response(),
         Ok(Err(UploadError::Unreadable)) => {
             (StatusCode::BAD_REQUEST, "could not read audio").into_response()
         }
