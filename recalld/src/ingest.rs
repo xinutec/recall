@@ -292,7 +292,7 @@ pub async fn liveness(State(config): State<Arc<Config>>, headers: HeaderMap) -> 
         return refused.into_response();
     }
     let handle =
-        tokio::task::spawn_blocking(move || -> rusqlite::Result<Vec<(String, String, String)>> {
+        tokio::task::spawn_blocking(move || -> rusqlite::Result<Vec<crate::speech::Liveness>> {
             let conn = store::open(&config.root)?;
             crate::speech::liveness_by_source(&conn)
         });
@@ -300,13 +300,9 @@ pub async fn liveness(State(config): State<Arc<Config>>, headers: HeaderMap) -> 
         Ok(Ok(rows)) => {
             let sources: BTreeMap<String, serde_json::Value> = rows
                 .into_iter()
-                .map(|(source, delivered, speech)| {
-                    let speech = if speech.is_empty() {
-                        serde_json::Value::Null
-                    } else {
-                        serde_json::Value::String(speech)
-                    };
-                    (source, json!({ "delivered": delivered, "speech": speech }))
+                .map(|l| {
+                    let body = json!({ "delivered": l.delivered, "speech": l.speech });
+                    (l.source, body)
                 })
                 .collect();
             (StatusCode::OK, axum::Json(json!({ "sources": sources }))).into_response()

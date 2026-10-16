@@ -6,6 +6,7 @@
 //! Bounded batches, newest first, so liveness does not wait behind backfill.
 
 use crate::store;
+use audiocore::instant::IngestStamp;
 use audiocore::vad::{Detector, Region};
 use rusqlite::Connection;
 use std::path::Path;
@@ -67,7 +68,7 @@ pub fn scan_once(root: &Path, batch: usize) -> rusqlite::Result<usize> {
                 &filename,
                 &source,
                 seconds,
-                audiocore::instant::IngestStamp::now(),
+                IngestStamp::now(),
                 regions_json(found.ok().as_deref())?,
             ),
         )?;
@@ -117,19 +118,29 @@ pub fn evidence(ingest: &Connection, filename: &str) -> rusqlite::Result<Speech>
     })
 }
 
-/// Every source's newest delivered capture time ("is it running") and newest
-/// possible speech ("is a voice captured"): unmeasured and undecodable
-/// segments count, since not looked at is not silence.
+/// One source's newest delivered capture ("is it running") and newest
+/// possible speech ("is a voice captured").
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Liveness {
+    pub source: String,
+    pub delivered: IngestStamp,
+    /// `None`: nothing delivered may hold speech.
+    pub speech: Option<IngestStamp>,
+}
+
+/// Every source's [`Liveness`]: unmeasured and undecodable segments count,
+/// since not looked at is not silence.
 ///
 /// # Errors
 /// On database failure.
-pub fn liveness_by_source(conn: &Connection) -> rusqlite::Result<Vec<(String, String, String)>> {
+pub fn liveness_by_source(conn: &Connection) -> rusqlite::Result<Vec<Liveness>> {
     let mut stmt = LIVENESS.prepare(conn)?;
     let rows = stmt.query_map([], |r| {
-        let delivered: String = r.get(1)?;
-        // Empty for none; callers map it to null.
-        let speech: Option<String> = r.get(2)?;
-        Ok((r.get(0)?, delivered, speech.unwrap_or_default()))
+        Ok(Liveness {
+            source: r.get(0)?,
+            delivered: r.get(1)?,
+            speech: r.get(2)?,
+        })
     })?;
     rows.collect()
 }

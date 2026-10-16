@@ -32,9 +32,9 @@ fn latest_speech(conn: &rusqlite::Connection, source: &str) -> Option<String> {
     speech::liveness_by_source(conn)
         .expect("query")
         .into_iter()
-        .find(|(s, _, _)| s == source)
-        .map(|(_, _, speech)| speech)
-        .filter(|speech| !speech.is_empty())
+        .find(|l| l.source == source)
+        .and_then(|l| l.speech)
+        .map(|speech| speech.to_string())
 }
 
 fn silent_wav(seconds: u32) -> Vec<u8> {

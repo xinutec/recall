@@ -206,15 +206,14 @@ fn delivered_evidence(root: &std::path::Path) -> HashMap<String, Evidence> {
         return HashMap::new();
     };
     rows.into_iter()
-        .filter_map(|(source, delivered, speech)| {
-            let delivered = audiocore::instant::parse(&delivered)?.with_timezone(&Utc);
-            Some((
-                source,
+        .map(|l| {
+            (
+                l.source,
                 Evidence {
-                    delivered: Some(delivered),
-                    speech: audiocore::instant::parse(&speech).map(|t| t.with_timezone(&Utc)),
+                    delivered: Some(l.delivered.utc()),
+                    speech: l.speech.map(|s| s.utc()),
                 },
-            ))
+            )
         })
         .collect()
 }
