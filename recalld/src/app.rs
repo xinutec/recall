@@ -80,6 +80,7 @@ fn browsing(
     trusted_proxies: Vec<std::net::IpAddr>,
 ) -> Router {
     let capture_root = root.clone();
+    let events_path = root.join("logs/client-events.jsonl");
     let read = Arc::new(reads::State { root });
     Router::new()
         .route("/api/timeline", get(reads::timeline_route))
@@ -172,9 +173,12 @@ fn browsing(
         .merge(
             Router::new()
                 .route("/api/log", post(reports::log_route))
-                .with_state(Arc::new(reports::Reports { log_path })),
+                .route("/api/telemetry", post(reports::telemetry_route))
+                .with_state(Arc::new(reports::Reports {
+                    log_path,
+                    events_path,
+                })),
         )
-        .route("/api/telemetry", post(reports::telemetry_route))
         .merge(webauth::routes(st.clone()))
         .layer(axum::middleware::from_fn_with_state(st, webauth::gate))
 }

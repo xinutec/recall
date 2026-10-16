@@ -128,3 +128,21 @@ fn a_real_telemetry_batch_from_the_app_deserialises() {
     assert_eq!(events[0].path, "/sessions");
     assert_eq!(events[1].label, None);
 }
+
+#[test]
+fn a_kept_event_is_one_json_line_that_reads_back() {
+    let event = recalld::reports::TelemetryEvent {
+        kind: "tap".into(),
+        path: "/sessions".into(),
+        label: Some("Up\nload".into()),
+        at: 1_788_000_000_000,
+    };
+
+    let line = recalld::reports::event_line("2026-10-16T18:00:00+00:00", &event);
+
+    assert_eq!(line.lines().count(), 1, "got: {line}");
+    let read: serde_json::Value = serde_json::from_str(&line).expect("json");
+    assert_eq!(read["label"], "Up load");
+    assert_eq!(read["at"], 1_788_000_000_000_i64);
+    assert_eq!(read["received"], "2026-10-16T18:00:00+00:00");
+}

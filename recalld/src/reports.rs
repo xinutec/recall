@@ -1,15 +1,16 @@
 //! What the browser tells the server: error reports and the activity trace.
 //!
 //! `/api/log` appends a browser error to a file (the phone has no readable
-//! console); `/api/telemetry` logs what a person did, which otherwise never
-//! reaches the server.
+//! console); `/api/telemetry` keeps what a person did, one JSON line per event
+//! in a file on the volume, so which features are used can be counted across
+//! restarts, and logs it too.
 //!
 //! `one_line` is a security boundary: client text goes into log lines, where a
 //! newline could forge a `client-event` line.
 
 use axum::Json;
 use axum::response::Response;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 
 /// So one POST cannot flood the log.
 const MAX_EVENTS: usize = 100;
@@ -91,11 +92,61 @@ pub fn log_line(stamp: &str, entry: &ClientLog) -> String {
     line
 }
 
+/// One kept event, as `client-events.jsonl` holds it. A tap's label is a
+/// control's visible text, which can be a speaker's name: runtime data on the
+/// volume, never in the repository.
+#[derive(Debug, Serialize)]
+struct Kept<'a> {
+    kind: String,
+    path: String,
+    label: Option<String>,
+    at: i64,
+    received: &'a str,
+}
+
+/// The line `/api/telemetry` appends for `event`: JSON, so it is one line
+/// whatever the label holds.
+#[must_use]
+pub fn event_line(received: &str, event: &TelemetryEvent) -> String {
+    let kept = Kept {
+        kind: one_line(&event.kind, MAX_LABEL),
+        path: one_line(&event.path, MAX_LABEL),
+        label: event.label.as_deref().map(|l| one_line(l, MAX_LABEL)),
+        at: event.at,
+        received,
+    };
+    serde_json::to_string(&kept).expect("strings and numbers serialise")
+}
+
 #[derive(Clone, Debug)]
 pub struct Reports {
-    /// Where `/api/log` appends. Telemetry goes to the tracing log instead, to
-    /// interleave with the requests.
+    /// Where `/api/log` appends.
     pub log_path: std::path::PathBuf,
+    /// Where `/api/telemetry` appends.
+    pub events_path: std::path::PathBuf,
+}
+
+/// Append `lines` to `path`. A failed write must not fail the request.
+async fn append(path: std::path::PathBuf, lines: Vec<String>) {
+    let _ = tokio::task::spawn_blocking(move || {
+        use std::io::Write;
+        if let Some(parent) = path.parent() {
+            let _ = std::fs::create_dir_all(parent);
+        }
+        match std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(&path)
+        {
+            Ok(mut fh) => {
+                for line in lines {
+                    let _ = writeln!(fh, "{line}");
+                }
+            }
+            Err(e) => tracing::warn!("{} write failed: {e}", path.display()),
+        }
+    })
+    .await;
 }
 
 pub async fn log_route(
@@ -105,30 +156,21 @@ pub async fn log_route(
     let stamp = chrono::Utc::now()
         .format("%Y-%m-%dT%H:%M:%S%:z")
         .to_string();
-    let line = log_line(&stamp, &body);
-    let path = st.log_path.clone();
-    let _ = tokio::task::spawn_blocking(move || {
-        use std::io::Write;
-        if let Some(parent) = path.parent() {
-            let _ = std::fs::create_dir_all(parent);
-        }
-        // A failed write must not fail the request.
-        match std::fs::OpenOptions::new()
-            .create(true)
-            .append(true)
-            .open(&path)
-        {
-            Ok(mut fh) => {
-                let _ = writeln!(fh, "{line}");
-            }
-            Err(e) => tracing::warn!("client log write failed: {e}"),
-        }
-    })
-    .await;
+    append(st.log_path.clone(), vec![log_line(&stamp, &body)]).await;
     crate::route::ack()
 }
 
-pub async fn telemetry_route(Json(events): Json<Vec<TelemetryEvent>>) -> Response {
+pub async fn telemetry_route(
+    axum::extract::State(st): axum::extract::State<std::sync::Arc<Reports>>,
+    Json(events): Json<Vec<TelemetryEvent>>,
+) -> Response {
+    let received = audiocore::instant::python_isoformat_utc(chrono::Utc::now());
+    let kept: Vec<String> = events
+        .iter()
+        .take(MAX_EVENTS)
+        .map(|e| event_line(&received, e))
+        .collect();
+    append(st.events_path.clone(), kept).await;
     for e in events.iter().take(MAX_EVENTS) {
         tracing::info!(
             "client-event kind={} path={} label={} at={}",
