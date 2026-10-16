@@ -6,11 +6,12 @@ use serde::Serialize;
 use std::path::Path;
 use std::time::Duration;
 
-use crate::line::{HiddenKind, Stage};
+use crate::line::{HiddenKind, HiddenReason, Stage};
 use audiocore::instant::Stamp;
 
 /// The shown lines, and the lines of a stretch a person excluded, which the
 /// app folds into one row with its undo; with `?1`, every hidden line too.
+/// `'excluded'` is [`HiddenReason::Excluded`]'s phrase.
 macro_rules! current {
     () => {
         "SELECT t.* FROM rendered_lines t \
@@ -117,7 +118,7 @@ pub struct Segment {
     pub speaker_score: Option<f64>,
     pub speaker_cluster: Option<String>,
     pub tier: Stage,
-    pub hidden_reason: Option<String>,
+    pub hidden_reason: Option<HiddenReason>,
     pub source_id: Option<String>,
     pub audio_segment_id: Option<i64>,
     pub words_checked: bool,
@@ -189,8 +190,8 @@ pub fn to_out_with(
         confidence: segment.asr_confidence,
         model: segment.asr_model.clone(),
         tier: segment.tier,
-        hidden: segment.hidden_reason.clone(),
-        hidden_as: segment.hidden_reason.as_deref().map(HiddenKind::of),
+        hidden: segment.hidden_reason.map(|r| r.as_str().to_owned()),
+        hidden_as: segment.hidden_reason.map(HiddenKind::from),
         audio_url: format!("/api/audio/{}", segment.id),
         source: segment.source_id.clone(),
         cluster: segment.speaker_cluster.clone(),

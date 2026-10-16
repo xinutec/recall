@@ -11,7 +11,7 @@
 
 use crate::clips::{self, ClipError};
 use crate::edit_log::{self, LogError};
-use crate::line::{EXCLUDED, HUMAN_MODEL, LIVE_MODEL, NOBODY_SPOKE, Stage};
+use crate::line::{HUMAN_MODEL, HiddenReason, LIVE_MODEL, Stage};
 use crate::rendering;
 use crate::results::ResultError;
 
@@ -542,7 +542,7 @@ struct Row {
     score: Option<f64>,
     cluster: Option<String>,
     tier: Stage,
-    hidden: Option<String>,
+    hidden: Option<HiddenReason>,
     checked: bool,
     edit: Option<i64>,
     live: Option<i64>,
@@ -602,16 +602,16 @@ impl Row {
     /// "left out".
     fn dropped(dropped: &Dropped, tier: Stage, recovered: &HashSet<EditId>) -> Self {
         let (hidden, edit) = match dropped.why {
-            Why::RepetitionLoop => ("a repetition loop".to_owned(), None),
-            Why::Wordless => ("no words".to_owned(), None),
-            Why::SilencePhrase => ("a phrase written over silence".to_owned(), None),
-            Why::Replaced(id) => ("replaced by a person's words".to_owned(), Some(id.stored())),
-            Why::NoSpeech(id) => (NOBODY_SPOKE.to_owned(), Some(id.stored())),
-            Why::Unintelligible(id) => ("cannot be made out".to_owned(), Some(id.stored())),
+            Why::RepetitionLoop => (HiddenReason::RepetitionLoop, None),
+            Why::Wordless => (HiddenReason::NoWords, None),
+            Why::SilencePhrase => (HiddenReason::SilencePhrase, None),
+            Why::Replaced(id) => (HiddenReason::Replaced, Some(id.stored())),
+            Why::NoSpeech(id) => (HiddenReason::NobodySpoke, Some(id.stored())),
+            Why::Unintelligible(id) => (HiddenReason::CannotBeMadeOut, Some(id.stored())),
             Why::Excluded(id) if recovered.contains(&id) => {
-                ("left out".to_owned(), Some(id.stored()))
+                (HiddenReason::LeftOut, Some(id.stored()))
             }
-            Why::Excluded(id) => (EXCLUDED.to_owned(), Some(id.stored())),
+            Why::Excluded(id) => (HiddenReason::Excluded, Some(id.stored())),
         };
         Self {
             start: spelled(dropped.span.start()),
@@ -654,7 +654,7 @@ impl Row {
             real(self.score),
             text(self.cluster.as_deref()),
             Value::Text(self.tier.as_str().to_owned()),
-            text(self.hidden.as_deref()),
+            text(self.hidden.map(HiddenReason::as_str)),
             int(self.checked.then_some(1)),
             int(self.edit),
             int(self.live),

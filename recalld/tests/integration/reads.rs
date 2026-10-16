@@ -1,6 +1,7 @@
 //! The read routes over the rendered view, against a database holding the hard
 //! cases, and their mounting rules.
 
+use recalld::line::HiddenReason;
 use recalld::line::Stage;
 use recalld::reads;
 use rusqlite::Connection;
@@ -108,11 +109,9 @@ fn asked_for_hidden_lines_a_page_shows_them_with_their_reason() {
     };
 
     let all = reads::recent(&conn, 50, window(true)).expect("recent");
-    let shown: Vec<(i64, Option<&str>)> = all
-        .iter()
-        .map(|s| (s.id, s.hidden_reason.as_deref()))
-        .collect();
-    assert_eq!(shown, [(3, Some("nobody spoke")), (1, None)]);
+    let shown: Vec<(i64, Option<HiddenReason>)> =
+        all.iter().map(|s| (s.id, s.hidden_reason)).collect();
+    assert_eq!(shown, [(3, Some(HiddenReason::NobodySpoke)), (1, None)]);
 
     let visible = reads::recent(&conn, 50, window(false)).expect("recent");
     assert_eq!(visible.iter().map(|s| s.id).collect::<Vec<_>>(), [1]);

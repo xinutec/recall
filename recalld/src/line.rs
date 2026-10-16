@@ -7,13 +7,71 @@ pub const HUMAN_MODEL: &str = "human";
 /// The live feed's model, as the runner sends it.
 pub const LIVE_MODEL: &str = "live";
 
-/// What `hidden_reason` says when a person marked the words as invented.
-pub const NOBODY_SPOKE: &str = "nobody spoke";
+/// Why a line is hidden: `rendered_lines.hidden_reason`, which only the view
+/// writes, one per reason render leaves model text out. Stored and sent to the
+/// app as its phrase.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum HiddenReason {
+    NoWords,
+    SilencePhrase,
+    RepetitionLoop,
+    /// A person's words replaced these.
+    Replaced,
+    /// A person marked the words as invented.
+    NobodySpoke,
+    CannotBeMadeOut,
+    /// A stretch a person excluded in the app, as if recording had paused.
+    Excluded,
+    /// An exclusion recovered from the old tables: nobody chose it here, so
+    /// the app offers no undo.
+    LeftOut,
+}
 
-/// What `hidden_reason` says for a stretch a person excluded in the app, as
-/// if recording had paused. The hides recovered from the old tables read
-/// "left out" instead: nobody chose them here, so the app offers no undo.
-pub const EXCLUDED: &str = "excluded";
+impl HiddenReason {
+    pub const ALL: [Self; 8] = [
+        Self::NoWords,
+        Self::SilencePhrase,
+        Self::RepetitionLoop,
+        Self::Replaced,
+        Self::NobodySpoke,
+        Self::CannotBeMadeOut,
+        Self::Excluded,
+        Self::LeftOut,
+    ];
+
+    /// The stored phrase.
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::NoWords => "no words",
+            Self::SilencePhrase => "a phrase written over silence",
+            Self::RepetitionLoop => "a repetition loop",
+            Self::Replaced => "replaced by a person's words",
+            Self::NobodySpoke => "nobody spoke",
+            Self::CannotBeMadeOut => "cannot be made out",
+            Self::Excluded => "excluded",
+            Self::LeftOut => "left out",
+        }
+    }
+
+    pub fn parse(stored: &str) -> Option<Self> {
+        Self::ALL.into_iter().find(|r| r.as_str() == stored)
+    }
+}
+
+impl rusqlite::types::ToSql for HiddenReason {
+    fn to_sql(&self) -> rusqlite::Result<rusqlite::types::ToSqlOutput<'_>> {
+        Ok(self.as_str().into())
+    }
+}
+
+impl rusqlite::types::FromSql for HiddenReason {
+    fn column_result(value: rusqlite::types::ValueRef<'_>) -> rusqlite::types::FromSqlResult<Self> {
+        let stored = value.as_str()?;
+        Self::parse(stored).ok_or_else(|| {
+            rusqlite::types::FromSqlError::Other(format!("no hidden reason {stored:?}").into())
+        })
+    }
+}
 
 /// A shown line's id (`rendered_lines.id`), what the app sends back to act
 /// on a line. Not a [`transcript::EditId`], which names a person's act: the
@@ -85,20 +143,12 @@ pub enum HiddenKind {
     Other,
 }
 
-impl HiddenKind {
-    /// The hide a stored `hidden_reason` is: a person's, or render's.
-    #[must_use]
-    pub fn of(stored: &str) -> Self {
-        Self::by_person(stored).unwrap_or(Self::Other)
-    }
-
-    /// The hides a person makes, which are a closed set; render's reasons are
-    /// not, and are all [`Self::Other`].
-    fn by_person(stored: &str) -> Option<Self> {
-        match stored {
-            NOBODY_SPOKE => Some(Self::NobodySpoke),
-            EXCLUDED => Some(Self::Excluded),
-            _ => None,
+impl From<HiddenReason> for HiddenKind {
+    fn from(reason: HiddenReason) -> Self {
+        match reason {
+            HiddenReason::NobodySpoke => Self::NobodySpoke,
+            HiddenReason::Excluded => Self::Excluded,
+            _ => Self::Other,
         }
     }
 }

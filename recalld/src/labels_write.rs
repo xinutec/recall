@@ -5,7 +5,7 @@
 
 use crate::clips;
 use crate::edit_log::{self, LogError};
-use crate::line::LineId;
+use crate::line::{HiddenReason, LineId};
 use crate::route;
 use crate::view::{self, ViewError};
 use rusqlite::{Connection, OptionalExtension};
@@ -96,7 +96,7 @@ struct Line {
     clip: Clip,
     span: Span,
     text: String,
-    hidden: Option<String>,
+    hidden: Option<HiddenReason>,
     edit: Option<EditId>,
     by_person: bool,
     label: Option<String>,
@@ -111,7 +111,7 @@ fn line(meaning: &Connection, ingest: &Connection, id: LineId) -> Result<Line, W
         String,
         String,
         String,
-        Option<String>,
+        Option<HiddenReason>,
         Option<i64>,
         Option<String>,
         Option<String>,
@@ -275,7 +275,7 @@ pub fn undo_exclude(
     id: LineId,
 ) -> Result<(), WriteError> {
     let line = line(meaning, ingest, id)?;
-    let (Some(crate::line::EXCLUDED), Some(edit)) = (line.hidden.as_deref(), line.edit) else {
+    let (Some(HiddenReason::Excluded), Some(edit)) = (line.hidden, line.edit) else {
         return Err(WriteError::NotExcluded(id));
     };
     let mut acts = Vec::new();
@@ -404,8 +404,7 @@ pub fn undo_no_speech(
     id: LineId,
 ) -> Result<(), WriteError> {
     let line = line(meaning, ingest, id)?;
-    let nobody = crate::line::NOBODY_SPOKE.to_owned();
-    let (Some(true), Some(edit)) = (line.hidden.as_deref().map(|h| h == nobody), line.edit) else {
+    let (Some(HiddenReason::NobodySpoke), Some(edit)) = (line.hidden, line.edit) else {
         return Err(WriteError::NotNobodySpoke(id));
     };
     file(
