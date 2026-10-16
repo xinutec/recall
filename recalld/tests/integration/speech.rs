@@ -232,3 +232,20 @@ fn the_scan_stores_where_the_speech_is_and_it_adds_up() {
         "{placed} placed vs {total} measured"
     );
 }
+
+#[test]
+fn regions_this_module_did_not_write_are_an_error_not_unmeasured() {
+    // Read as none, they rendered the clip as if never scanned, and nobody
+    // heard about it.
+    let dir = tempfile::tempdir().expect("tmp");
+    stored(dir.path(), "usb", "usb-20260905T120000.flac", b"x");
+    let conn = store::open(dir.path()).expect("db");
+    conn.execute(
+        "INSERT INTO segment_speech (filename, source, speech_seconds, computed_utc, regions)
+         VALUES ('usb-20260905T120000.flac', 'usb', 3.0, '2026-09-05T12:02:00Z', 'not json')",
+        [],
+    )
+    .expect("row");
+
+    assert!(speech::evidence(&conn, "usb-20260905T120000.flac").is_err());
+}

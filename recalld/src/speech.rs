@@ -96,7 +96,7 @@ fn regions_json(regions: Option<&[Region]>) -> rusqlite::Result<String> {
 /// could not be decoded.
 ///
 /// # Errors
-/// On database failure.
+/// On database failure, or regions this module did not write.
 pub fn evidence(ingest: &Connection, filename: &str) -> rusqlite::Result<Speech> {
     use rusqlite::OptionalExtension as _;
     let Some((seconds, regions)) = HEARD
@@ -107,11 +107,12 @@ pub fn evidence(ingest: &Connection, filename: &str) -> rusqlite::Result<Speech>
     else {
         return Ok(Speech::default());
     };
-    let regions = regions.and_then(|raw| {
-        serde_json::from_str::<Option<Vec<(f64, f64)>>>(&raw)
-            .ok()
-            .flatten()
-    });
+    let regions = match regions {
+        None => None,
+        Some(raw) => serde_json::from_str::<Option<Vec<(f64, f64)>>>(&raw).map_err(|err| {
+            rusqlite::Error::FromSqlConversionFailure(1, rusqlite::types::Type::Text, err.into())
+        })?,
+    };
     Ok(Speech {
         seconds: (seconds >= 0.0).then_some(seconds),
         regions,
