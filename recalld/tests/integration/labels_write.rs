@@ -4,7 +4,8 @@
 
 use crate::fixture::Fleet;
 use recalld::labels_write::{self as w, Correction, WriteError};
-use transcript::{Language, SourceId};
+use recalld::line::LineId;
+use transcript::{EditId, Language, SourceId};
 
 /// One usb clip: two sentences, two voices.
 fn fleet() -> Fleet {
@@ -20,12 +21,14 @@ fn fleet() -> Fleet {
     f
 }
 
-fn line(f: &Fleet, text: &str) -> i64 {
-    f.shown()
-        .into_iter()
-        .find(|l| l.text == text)
-        .unwrap_or_else(|| panic!("no line {text:?} in {:?}", f.texts()))
-        .id
+fn line(f: &Fleet, text: &str) -> LineId {
+    LineId::from_stored(
+        f.shown()
+            .into_iter()
+            .find(|l| l.text == text)
+            .unwrap_or_else(|| panic!("no line {text:?} in {:?}", f.texts()))
+            .id,
+    )
 }
 
 #[test]
@@ -44,7 +47,11 @@ fn typed_words_show_at_once_on_the_same_line_and_the_models_are_kept_hidden() {
     .expect("correct");
 
     assert_eq!(shown, id, "the line keeps its id");
-    let l = f.shown().into_iter().find(|l| l.id == id).expect("line");
+    let l = f
+        .shown()
+        .into_iter()
+        .find(|l| l.id == id.stored())
+        .expect("line");
     assert_eq!(
         (l.text.as_str(), l.tier.as_str(), l.model.as_str()),
         ("hoe gaat het met je?", "corrected", "human")
@@ -71,7 +78,11 @@ fn naming_a_speaker_is_a_speaker_act_only_and_a_check_is_a_checked_words_act() {
     )
     .expect("name");
     assert_eq!(f.act_kinds(), ["Speaker"]);
-    let named = f.shown().into_iter().find(|l| l.id == id).expect("line");
+    let named = f
+        .shown()
+        .into_iter()
+        .find(|l| l.id == id.stored())
+        .expect("line");
     assert_eq!(named.label.as_deref(), Some("Robin"));
     assert_eq!(
         named.model,
@@ -96,7 +107,7 @@ fn naming_a_speaker_is_a_speaker_act_only_and_a_check_is_a_checked_words_act() {
         .meaning
         .query_row(
             "SELECT words_checked FROM rendered_lines WHERE id = ?1",
-            [id],
+            [id.stored()],
             |r| r.get(0),
         )
         .expect("row");
@@ -118,9 +129,10 @@ fn a_write_names_what_is_wrong_with_it() {
         )
     };
     assert!(matches!(correct(id, "  "), Err(WriteError::Blank)));
-    assert!(matches!(correct(9999, "x"), Err(WriteError::Missing(9999))));
+    let nowhere = LineId::from_stored(9999);
+    assert!(matches!(correct(nowhere, "x"), Err(WriteError::Missing(id)) if id == nowhere));
     w::no_speech(&f.meaning, &f.ingest, f.root(), id).expect("no speech");
-    let hidden = f.hidden()[0].0;
+    let hidden = LineId::from_stored(f.hidden()[0].0);
     assert!(matches!(correct(hidden, "x"), Err(WriteError::Hidden(_))));
     assert!(matches!(
         w::undo_correction(&f.meaning, &f.ingest, f.root(), line(&f, "hoe gaat het?")),
@@ -166,7 +178,7 @@ fn nobody_spoke_hides_the_line_and_its_undo_by_the_hidden_id_shows_it() {
         Err(WriteError::NotNobodySpoke(_))
     ));
 
-    w::undo_no_speech(&f.meaning, &f.ingest, f.root(), hidden).expect("undo");
+    w::undo_no_speech(&f.meaning, &f.ingest, f.root(), LineId::from_stored(hidden)).expect("undo");
     assert_eq!(f.texts(), ["goede morgen.", "hoe gaat het?"]);
 }
 
@@ -189,28 +201,38 @@ fn a_labelled_fragment_can_be_named_again_or_kept_from_the_voiceprints() {
     let labels = recalld::labels::list_corrections(&f.meaning, None, 50).expect("labels");
     assert_eq!(labels.len(), 1);
     assert_eq!(labels[0].text, "goede morgen.");
-    let fragment = labels[0].id;
+    let fragment = EditId::from_stored(labels[0].id);
 
     w::relabel(&f.meaning, &f.ingest, f.root(), fragment, "Sam").expect("relabel");
     let labels = recalld::labels::list_corrections(&f.meaning, None, 50).expect("labels");
     assert_eq!(labels.len(), 1, "the later naming replaces the earlier");
     assert_eq!(labels[0].speaker.as_deref(), Some("Sam"));
 
-    w::unenrol(&f.meaning, &f.ingest, f.root(), labels[0].id).expect("unenrol");
+    w::unenrol(
+        &f.meaning,
+        &f.ingest,
+        f.root(),
+        EditId::from_stored(labels[0].id),
+    )
+    .expect("unenrol");
     assert!(
         recalld::labels::list_corrections(&f.meaning, None, 50)
             .expect("labels")
             .is_empty()
     );
-    let l = f.shown().into_iter().find(|l| l.id == id).expect("line");
+    let l = f
+        .shown()
+        .into_iter()
+        .find(|l| l.id == id.stored())
+        .expect("line");
     assert_eq!(
         l.label.as_deref(),
         Some("Sam"),
         "the name stays on the line"
     );
     assert!(matches!(
-        w::relabel(&f.meaning, &f.ingest, f.root(), 9999, "x"),
-        Err(WriteError::NotALabel(9999))
+        w::relabel(&f.meaning, &f.ingest, f.root(), EditId::from_stored(9999), "x"),
+        Err(WriteError::NotALabel(id)) if id == EditId::from_stored(9999)
     ));
 }
 
@@ -380,7 +402,13 @@ fn excluding_a_stretch_hides_its_lines_across_clips_and_one_undo_brings_it_all_b
     assert_eq!(kinds, ["Exclude", "Exclude"]);
 
     // Either line of the stretch takes all of it back.
-    w::undo_exclude(&f.meaning, &f.ingest, f.root(), hidden[1].0).expect("undo");
+    w::undo_exclude(
+        &f.meaning,
+        &f.ingest,
+        f.root(),
+        LineId::from_stored(hidden[1].0),
+    )
+    .expect("undo");
     assert_eq!(
         f.texts(),
         [

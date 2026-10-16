@@ -15,6 +15,30 @@ pub const NOBODY_SPOKE: &str = "nobody spoke";
 /// "left out" instead: nobody chose them here, so the app offers no undo.
 pub const EXCLUDED: &str = "excluded";
 
+/// A shown line's id (`rendered_lines.id`), what the app sends back to act
+/// on a line. Not a [`transcript::EditId`], which names a person's act: the
+/// two are both integers and one in the other's place acts on the wrong row.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, serde::Deserialize)]
+#[serde(transparent)]
+pub struct LineId(i64);
+
+impl LineId {
+    /// For the view that owns the rows, and a request naming one.
+    pub const fn from_stored(id: i64) -> Self {
+        Self(id)
+    }
+
+    pub const fn stored(self) -> i64 {
+        self.0
+    }
+}
+
+impl std::fmt::Display for LineId {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.0)
+    }
+}
+
 /// How much processing a line has had: the tier the app shows.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, ts_rs::TS)]
 #[serde(rename_all = "lowercase")]

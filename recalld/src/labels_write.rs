@@ -5,6 +5,7 @@
 
 use crate::clips;
 use crate::edit_log::{self, LogError};
+use crate::line::LineId;
 use crate::route;
 use crate::view::{self, ViewError};
 use rusqlite::{Connection, OptionalExtension};
@@ -32,19 +33,19 @@ crate::statements! {
 pub enum WriteError {
     /// Nothing but whitespace was typed.
     Blank,
-    Missing(i64),
+    Missing(LineId),
     /// The line is hidden: render left it out.
-    Hidden(i64),
+    Hidden(LineId),
     /// A live line: no clip yet to hang an act on.
-    Live(i64),
+    Live(LineId),
     /// Not hidden as "nobody spoke", so nothing to undo.
-    NotNobodySpoke(i64),
+    NotNobodySpoke(LineId),
     /// Not in a stretch a person excluded, so nothing to undo.
-    NotExcluded(i64),
+    NotExcluded(LineId),
     /// No person's words that can still be taken back.
-    NotCorrected(i64),
+    NotCorrected(LineId),
     /// No labelled fragment with this id.
-    NotALabel(i64),
+    NotALabel(EditId),
     /// An assignment whose lines are not one session's, in order.
     BadSpan,
     Db(rusqlite::Error),
@@ -91,7 +92,7 @@ impl From<clips::ClipError> for WriteError {
 
 /// A rendered line, shown or hidden, as the writes need it.
 struct Line {
-    id: i64,
+    id: LineId,
     clip: Clip,
     span: Span,
     text: String,
@@ -103,7 +104,7 @@ struct Line {
     words: Vec<(i64, i64, String)>,
 }
 
-fn line(meaning: &Connection, ingest: &Connection, id: i64) -> Result<Line, WriteError> {
+fn line(meaning: &Connection, ingest: &Connection, id: LineId) -> Result<Line, WriteError> {
     type Raw = (
         i64,
         Option<i64>,
@@ -117,7 +118,7 @@ fn line(meaning: &Connection, ingest: &Connection, id: i64) -> Result<Line, Writ
         Option<String>,
     );
     let raw: Option<Raw> = LINE
-        .query_row(meaning, [id], |r| {
+        .query_row(meaning, [id.stored()], |r| {
             Ok((
                 r.get(0)?,
                 r.get(1)?,
@@ -132,7 +133,7 @@ fn line(meaning: &Connection, ingest: &Connection, id: i64) -> Result<Line, Writ
             ))
         })
         .optional()?;
-    let Some((id, clip, start, end, text, hidden, edit, model, label, words)) = raw else {
+    let Some((_, clip, start, end, text, hidden, edit, model, label, words)) = raw else {
         return Err(WriteError::Missing(id));
     };
     let Some(clip) = clip else {
@@ -161,7 +162,7 @@ fn line(meaning: &Connection, ingest: &Connection, id: i64) -> Result<Line, Writ
     })
 }
 
-fn shown(meaning: &Connection, ingest: &Connection, id: i64) -> Result<Line, WriteError> {
+fn shown(meaning: &Connection, ingest: &Connection, id: LineId) -> Result<Line, WriteError> {
     let line = line(meaning, ingest, id)?;
     if line.hidden.is_some() {
         return Err(WriteError::Hidden(id));
@@ -204,8 +205,8 @@ pub fn exclude(
     meaning: &Connection,
     ingest: &Connection,
     root: &FsPath,
-    first: i64,
-    last: i64,
+    first: LineId,
+    last: LineId,
 ) -> Result<usize, WriteError> {
     let a = shown(meaning, ingest, first)?;
     let b = shown(meaning, ingest, last)?;
@@ -246,12 +247,18 @@ fn between(
     let ids: Vec<i64> = SESSION_LINES
         .prepare(meaning)?
         .query_map(
-            rusqlite::params![a.clip.source.as_str(), spelled(a), a.id, spelled(b), b.id],
+            rusqlite::params![
+                a.clip.source.as_str(),
+                spelled(a),
+                a.id.stored(),
+                spelled(b),
+                b.id.stored()
+            ],
             |r| r.get(0),
         )?
         .collect::<rusqlite::Result<_>>()?;
     ids.into_iter()
-        .map(|id| shown(meaning, ingest, id))
+        .map(|id| shown(meaning, ingest, LineId::from_stored(id)))
         .collect()
 }
 
@@ -265,7 +272,7 @@ pub fn undo_exclude(
     meaning: &Connection,
     ingest: &Connection,
     root: &FsPath,
-    id: i64,
+    id: LineId,
 ) -> Result<(), WriteError> {
     let line = line(meaning, ingest, id)?;
     let (Some(crate::line::EXCLUDED), Some(edit)) = (line.hidden.as_deref(), line.edit) else {
@@ -301,10 +308,10 @@ pub fn correct(
     meaning: &Connection,
     ingest: &Connection,
     root: &FsPath,
-    id: i64,
+    id: LineId,
     typed: &str,
     edit: &Correction,
-) -> Result<i64, WriteError> {
+) -> Result<LineId, WriteError> {
     let text = Text::new(typed).ok_or(WriteError::Blank)?;
     let line = shown(meaning, ingest, id)?;
     let changed = text.as_str() != line.text;
@@ -337,7 +344,7 @@ pub fn correct(
         Some(edit) => LINE_OF_EDIT
             .query_row(meaning, [edit.stored()], |r| r.get(0))
             .optional()?
-            .unwrap_or(line.id),
+            .map_or(line.id, LineId::from_stored),
         None => line.id,
     })
 }
@@ -351,7 +358,7 @@ pub fn undo_correction(
     meaning: &Connection,
     ingest: &Connection,
     root: &FsPath,
-    id: i64,
+    id: LineId,
 ) -> Result<(), WriteError> {
     let line = shown(meaning, ingest, id)?;
     let (true, Some(edit)) = (line.by_person, line.edit) else {
@@ -375,7 +382,7 @@ pub fn no_speech(
     meaning: &Connection,
     ingest: &Connection,
     root: &FsPath,
-    id: i64,
+    id: LineId,
 ) -> Result<(), WriteError> {
     let line = shown(meaning, ingest, id)?;
     let act = Act::NoSpeech {
@@ -394,7 +401,7 @@ pub fn undo_no_speech(
     meaning: &Connection,
     ingest: &Connection,
     root: &FsPath,
-    id: i64,
+    id: LineId,
 ) -> Result<(), WriteError> {
     let line = line(meaning, ingest, id)?;
     let nobody = crate::line::NOBODY_SPOKE.to_owned();
@@ -412,8 +419,8 @@ pub fn undo_no_speech(
 }
 
 /// A labelled fragment: a person's naming of a stretch, by its edit id.
-fn label(meaning: &Connection, id: i64) -> Result<(ClipId, Span, Name), WriteError> {
-    match edit_log::get(meaning, EditId::from_stored(id))? {
+fn label(meaning: &Connection, id: EditId) -> Result<(ClipId, Span, Name), WriteError> {
+    match edit_log::get(meaning, id)? {
         Some(transcript::Edit {
             act: Act::Speaker {
                 clip, span, name, ..
@@ -433,7 +440,7 @@ pub fn relabel(
     meaning: &Connection,
     ingest: &Connection,
     root: &FsPath,
-    id: i64,
+    id: EditId,
     speaker: &str,
 ) -> Result<(), WriteError> {
     let (clip, span, _) = label(meaning, id)?;
@@ -457,7 +464,7 @@ pub fn unenrol(
     meaning: &Connection,
     ingest: &Connection,
     root: &FsPath,
-    id: i64,
+    id: EditId,
 ) -> Result<(), WriteError> {
     let (clip, span, name) = label(meaning, id)?;
     let act = Act::Speaker {
@@ -519,8 +526,8 @@ pub fn assign_span(
     ingest: &Connection,
     root: &FsPath,
     source: &str,
-    (first, first_char): (i64, usize),
-    (last, last_char): (i64, usize),
+    (first, first_char): (LineId, usize),
+    (last, last_char): (LineId, usize),
     speaker: &str,
 ) -> Result<usize, WriteError> {
     let name = Name::new(speaker).ok_or(WriteError::Blank)?;
@@ -711,7 +718,7 @@ pub struct ReassignIn {
 
 pub async fn correction_reassign_route(
     State(st): State<Arc<reads::State>>,
-    Path(id): Path<i64>,
+    Path(id): Path<EditId>,
     Json(body): Json<ReassignIn>,
 ) -> Response {
     let speaker = body.speaker.trim().to_owned();
@@ -730,7 +737,7 @@ pub async fn correction_reassign_route(
 
 pub async fn correction_hide_route(
     State(st): State<Arc<reads::State>>,
-    Path(id): Path<i64>,
+    Path(id): Path<EditId>,
 ) -> Response {
     match write(&st, "correction hide", move |m, i, root| {
         unenrol(m, i, root, id)
@@ -745,7 +752,8 @@ pub async fn correction_hide_route(
 #[derive(Deserialize, ts_rs::TS)]
 #[ts(export, rename = "CorrectRequest")]
 pub struct CorrectIn {
-    id: i64,
+    #[ts(type = "number")]
+    id: LineId,
     text: String,
     #[ts(optional = nullable)]
     speaker: Option<String>,
@@ -772,7 +780,10 @@ pub async fn correct_route(
     })
     .await
     {
-        Ok(new_id) => Json(route::NewId { new_id }).into_response(),
+        Ok(new_id) => Json(route::NewId {
+            new_id: new_id.stored(),
+        })
+        .into_response(),
         Err(response) => response,
     }
 }
@@ -781,7 +792,8 @@ pub async fn correct_route(
 #[derive(Deserialize, ts_rs::TS)]
 #[ts(export, rename = "LineRequest")]
 pub struct LineIn {
-    id: i64,
+    #[ts(type = "number")]
+    id: LineId,
 }
 
 pub async fn no_speech_route(
@@ -816,8 +828,10 @@ pub async fn undo_no_speech_route(
 #[derive(Deserialize, ts_rs::TS)]
 #[ts(export, rename = "ExcludeRequest")]
 pub struct ExcludeIn {
-    from: i64,
-    to: i64,
+    #[ts(type = "number")]
+    from: LineId,
+    #[ts(type = "number")]
+    to: LineId,
 }
 
 pub async fn exclude_route(
@@ -869,9 +883,11 @@ pub async fn undo_correction_route(
 #[ts(export, rename = "AssignSpanRequest")]
 #[serde(rename_all = "camelCase")]
 pub struct AssignIn {
-    start_turn: i64,
+    #[ts(type = "number")]
+    start_turn: LineId,
     start_char: usize,
-    end_turn: i64,
+    #[ts(type = "number")]
+    end_turn: LineId,
     end_char: usize,
     name: String,
 }
@@ -930,7 +946,7 @@ pub fn refused(what: &str, err: WriteError) -> Response {
         WriteError::NotCorrected(id) => bad(format!(
             "line #{id} is not a person's words that can be taken back"
         )),
-        WriteError::NotALabel(id) => bad(format!("no labelled fragment with id {id}")),
+        WriteError::NotALabel(id) => bad(format!("no labelled fragment with id {}", id.stored())),
         WriteError::BadSpan => bad("the span's lines are not one session's, in order".to_owned()),
         WriteError::Db(err) => route::faulted(what, &err),
         WriteError::Log(err) => route::faulted(what, &err),
