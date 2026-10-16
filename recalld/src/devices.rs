@@ -12,6 +12,7 @@ use audiocore::instant;
 use chrono::{DateTime, Utc};
 use rusqlite::{Connection, OptionalExtension};
 use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
 
 crate::statements! {
     SETTING: Meaning =
@@ -82,202 +83,169 @@ fn set_setting(conn: &Connection, key: &str, value: &str) -> rusqlite::Result<()
     Ok(())
 }
 
-/// The stored map, or empty if it is missing or unreadable: a health endpoint
-/// must not 500. Logged, since the next write replaces it.
-fn stored_map(
-    conn: &Connection,
-    key: &str,
-) -> rusqlite::Result<serde_json::Map<String, serde_json::Value>> {
+/// A beat as stored, under its device's id: [`Beat`] without the key.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct StoredBeat {
+    app: String,
+    version: String,
+    started_at: Option<String>,
+    streaming: bool,
+    charging: Option<bool>,
+    mic_ok: Option<bool>,
+    via_lan: Option<bool>,
+    dropped_bytes: Option<i64>,
+    at: String,
+}
+
+/// A report as stored, under its device's id: [`Report`] without the key.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct StoredReport {
+    queued: i64,
+    oldest_queued_at: Option<String>,
+    failing: i64,
+    reason: Option<String>,
+    at: String,
+}
+
+/// The stored map, or empty if it is missing or not a map: a health endpoint
+/// must not 500. Logged, since the next write replaces it. Entries stay raw:
+/// one that will not read survives the next write, to be noticed.
+fn stored(conn: &Connection, key: &str) -> rusqlite::Result<BTreeMap<String, serde_json::Value>> {
     let Some(raw) = get_setting(conn, key)? else {
-        return Ok(serde_json::Map::new());
+        return Ok(BTreeMap::new());
     };
-    match serde_json::from_str::<serde_json::Value>(&raw) {
-        Ok(serde_json::Value::Object(map)) => Ok(map),
-        Ok(other) => {
-            tracing::warn!(
-                "{key} holds {} rather than an object; {} bytes of device status \
-                 are being read as empty",
-                match other {
-                    serde_json::Value::Null => "null",
-                    serde_json::Value::Bool(_) => "a bool",
-                    serde_json::Value::Number(_) => "a number",
-                    serde_json::Value::String(_) => "a string",
-                    serde_json::Value::Array(_) => "an array",
-                    serde_json::Value::Object(_) => unreachable!("matched above"),
-                },
-                raw.len()
-            );
-            Ok(serde_json::Map::new())
-        }
+    match serde_json::from_str(&raw) {
+        Ok(entries) => Ok(entries),
         Err(err) => {
             tracing::warn!(
-                "{key} will not parse ({err}); {} bytes of device status are being \
-                 read as empty and the next write will overwrite them",
+                "{key} will not parse as a map ({err}); {} bytes of device status are \
+                 being read as empty and the next write will overwrite them",
                 raw.len()
             );
-            Ok(serde_json::Map::new())
+            Ok(BTreeMap::new())
         }
     }
 }
 
-/// A stored instant in the archive's spelling; a naive timestamp is UTC.
-fn when(value: Option<&serde_json::Value>) -> Option<String> {
-    let text = match value {
-        None | Some(serde_json::Value::Null) => return None,
-        Some(serde_json::Value::String(s)) => s.clone(),
-        Some(other) => other.to_string(),
-    };
-    instant::respell_utc(&text)
+/// The entries that read as `T`; one that does not is logged and skipped.
+fn readable<T: serde::de::DeserializeOwned>(
+    key: &str,
+    entries: BTreeMap<String, serde_json::Value>,
+) -> impl Iterator<Item = (String, T)> {
+    entries
+        .into_iter()
+        .filter_map(move |(device, value)| match serde_json::from_value(value) {
+            Ok(entry) => Some((device, entry)),
+            Err(err) => {
+                tracing::warn!("{key}: {device}'s entry will not read ({err}); skipped");
+                None
+            }
+        })
 }
 
-fn text_of(value: Option<&serde_json::Value>, max: usize) -> String {
-    match value {
-        None | Some(serde_json::Value::Null) => String::new(),
-        Some(serde_json::Value::String(s)) => clip(s, max),
-        Some(other) => clip(&other.to_string(), max),
-    }
-}
-
-/// `None` stays `None`; anything else takes JSON truthiness.
-fn flag(value: Option<&serde_json::Value>) -> Option<bool> {
-    match value {
-        None | Some(serde_json::Value::Null) => None,
-        Some(serde_json::Value::Bool(b)) => Some(*b),
-        Some(serde_json::Value::Number(n)) => Some(n.as_f64().is_some_and(|f| f != 0.0)),
-        Some(serde_json::Value::String(s)) => Some(!s.is_empty()),
-        Some(_) => Some(true),
-    }
-}
-
-fn one_beat(device: &str, raw: &serde_json::Value) -> Option<Beat> {
-    let raw = raw.as_object()?;
-    let at = when(raw.get("at"))?;
-    let streaming = flag(raw.get("streaming"))?;
-    Some(Beat {
-        device: clip(device, MAX_DEVICE_LEN),
-        app: text_of(raw.get("app"), MAX_TEXT_LEN),
-        version: text_of(raw.get("version"), MAX_TEXT_LEN),
-        started_at: when(raw.get("startedAt")),
-        streaming,
-        charging: flag(raw.get("charging")),
-        mic_ok: flag(raw.get("micOk")),
-        via_lan: flag(raw.get("viaLan")),
-        dropped_bytes: raw.get("droppedBytes").and_then(serde_json::Value::as_i64),
-        at,
-    })
-}
-
-fn one_report(device: &str, raw: &serde_json::Value) -> Option<Report> {
-    let raw = raw.as_object()?;
-    let at = when(raw.get("at"))?;
-    Some(Report {
-        device: clip(device, MAX_DEVICE_LEN),
-        queued: raw.get("queued")?.as_i64()?,
-        oldest_queued_at: when(raw.get("oldestQueuedAt")),
-        failing: raw.get("failing")?.as_i64()?,
-        reason: match raw.get("reason") {
-            None | Some(serde_json::Value::Null) => None,
-            Some(other) => Some(text_of(Some(other), MAX_REASON_LEN)),
-        },
-        at,
-    })
+fn store(
+    conn: &Connection,
+    key: &str,
+    entries: &BTreeMap<String, serde_json::Value>,
+) -> rusqlite::Result<()> {
+    let json = serde_json::to_string(entries).expect("a map of JSON values serialises");
+    set_setting(conn, key, &json)
 }
 
 /// Forget one device's row, to undo a stray write. Returns whether it was
 /// there.
 pub fn forget(conn: &Connection, key: &str, device: &str) -> rusqlite::Result<bool> {
-    let mut map = stored_map(conn, key)?;
+    let mut map = stored(conn, key)?;
     if map.remove(device).is_none() {
         return Ok(false);
     }
-    set_setting(conn, key, &serde_json::Value::Object(map).to_string())?;
+    store(conn, key, &map)?;
     Ok(true)
 }
 
-/// Every app's last beat, by device id. A bad entry is skipped.
+/// Every app's last beat, by device id.
 pub fn read_beats(conn: &Connection) -> rusqlite::Result<Vec<Beat>> {
-    let map = stored_map(conn, BEATS)?;
-    let mut devices: Vec<&String> = map.keys().collect();
-    devices.sort();
-    Ok(devices
-        .into_iter()
-        .filter_map(|d| one_beat(d, &map[d]))
+    Ok(readable::<StoredBeat>(BEATS, stored(conn, BEATS)?)
+        .map(|(device, b)| Beat {
+            device,
+            app: b.app,
+            version: b.version,
+            started_at: b.started_at,
+            streaming: b.streaming,
+            charging: b.charging,
+            mic_ok: b.mic_ok,
+            via_lan: b.via_lan,
+            dropped_bytes: b.dropped_bytes,
+            at: b.at,
+        })
         .collect())
 }
 
 pub fn read_reports(conn: &Connection) -> rusqlite::Result<Vec<Report>> {
-    let map = stored_map(conn, REPORTS)?;
-    let mut devices: Vec<&String> = map.keys().collect();
-    devices.sort();
-    Ok(devices
-        .into_iter()
-        .filter_map(|d| one_report(d, &map[d]))
+    Ok(readable::<StoredReport>(REPORTS, stored(conn, REPORTS)?)
+        .map(|(device, r)| Report {
+            device,
+            queued: r.queued,
+            oldest_queued_at: r.oldest_queued_at,
+            failing: r.failing,
+            reason: r.reason,
+            at: r.at,
+        })
         .collect())
 }
 
 /// Drop devices silent past `MAX_AGE_DAYS`, then keep the `MAX_DEVICES` most
 /// recent by stored `at` text. An unreadable `at` sorts oldest.
 fn evicted(
-    mut entries: serde_json::Map<String, serde_json::Value>,
+    mut entries: BTreeMap<String, serde_json::Value>,
     now: DateTime<Utc>,
-) -> serde_json::Map<String, serde_json::Value> {
-    let cutoff = now - chrono::Duration::days(MAX_AGE_DAYS);
-    entries.retain(|_, value| {
-        value
-            .as_object()
-            .and_then(|o| o.get("at"))
+) -> BTreeMap<String, serde_json::Value> {
+    let at = |entry: &serde_json::Value| {
+        entry
+            .get("at")
             .and_then(serde_json::Value::as_str)
-            .and_then(|at| DateTime::parse_from_rfc3339(at).ok())
+            .unwrap_or_default()
+            .to_owned()
+    };
+    let cutoff = now - chrono::Duration::days(MAX_AGE_DAYS);
+    entries.retain(|_, entry| {
+        DateTime::parse_from_rfc3339(&at(entry))
+            .ok()
             // Unparseable: left to the count cap, so it is seen before it goes.
-            .is_none_or(|at| at.with_timezone(&Utc) >= cutoff)
+            .is_none_or(|when| when.with_timezone(&Utc) >= cutoff)
     });
     if entries.len() <= MAX_DEVICES {
         return entries;
     }
-    let mut ranked: Vec<(String, String)> = entries
-        .iter()
-        .map(|(k, v)| {
-            let at = v
-                .as_object()
-                .and_then(|o| o.get("at"))
-                .and_then(|a| a.as_str())
-                .unwrap_or_default()
-                .to_owned();
-            (k.clone(), at)
-        })
-        .collect();
-    // Rebuilt in ranked order: the stored text keeps it.
-    ranked.sort_by(|a, b| b.1.cmp(&a.1));
-    let mut kept = serde_json::Map::with_capacity(MAX_DEVICES);
-    for (device, _) in ranked.into_iter().take(MAX_DEVICES) {
-        if let Some(value) = entries.remove(&device) {
-            kept.insert(device, value);
-        }
-    }
-    kept
+    let mut ranked: Vec<(String, serde_json::Value)> = entries.into_iter().collect();
+    ranked.sort_by_cached_key(|(_, entry)| std::cmp::Reverse(at(entry)));
+    ranked.into_iter().take(MAX_DEVICES).collect()
+}
+
+/// An entry as stored: a plain struct of strings, numbers and options.
+fn entry(value: &impl Serialize) -> serde_json::Value {
+    serde_json::to_value(value).expect("a stored entry serialises")
 }
 
 pub fn record_beat(conn: &Connection, beat: &Beat, now: DateTime<Utc>) -> rusqlite::Result<()> {
-    let mut map = stored_map(conn, BEATS)?;
+    let mut map = stored(conn, BEATS)?;
     map.insert(
         clip(&beat.device, MAX_DEVICE_LEN),
-        serde_json::json!({
-            "app": clip(&beat.app, MAX_TEXT_LEN),
-            "version": clip(&beat.version, MAX_TEXT_LEN),
-            "startedAt": beat.started_at,
-            "streaming": beat.streaming,
-            "charging": beat.charging,
-            "micOk": beat.mic_ok,
-            "viaLan": beat.via_lan,
-            "droppedBytes": beat.dropped_bytes,
-            "at": beat.at,
+        entry(&StoredBeat {
+            app: clip(&beat.app, MAX_TEXT_LEN),
+            version: clip(&beat.version, MAX_TEXT_LEN),
+            started_at: beat.started_at.clone(),
+            streaming: beat.streaming,
+            charging: beat.charging,
+            mic_ok: beat.mic_ok,
+            via_lan: beat.via_lan,
+            dropped_bytes: beat.dropped_bytes,
+            at: beat.at.clone(),
         }),
     );
-    set_setting(
-        conn,
-        BEATS,
-        &serde_json::Value::Object(evicted(map, now)).to_string(),
-    )
+    store(conn, BEATS, &evicted(map, now))
 }
 
 pub fn record_report(
@@ -285,22 +253,18 @@ pub fn record_report(
     report: &Report,
     now: DateTime<Utc>,
 ) -> rusqlite::Result<()> {
-    let mut map = stored_map(conn, REPORTS)?;
+    let mut map = stored(conn, REPORTS)?;
     map.insert(
         clip(&report.device, MAX_DEVICE_LEN),
-        serde_json::json!({
-            "queued": report.queued,
-            "oldestQueuedAt": report.oldest_queued_at,
-            "failing": report.failing,
-            "reason": report.reason.as_deref().map(|r| clip(r, MAX_REASON_LEN)),
-            "at": report.at,
+        entry(&StoredReport {
+            queued: report.queued,
+            oldest_queued_at: report.oldest_queued_at.clone(),
+            failing: report.failing,
+            reason: report.reason.as_deref().map(|r| clip(r, MAX_REASON_LEN)),
+            at: report.at.clone(),
         }),
     );
-    set_setting(
-        conn,
-        REPORTS,
-        &serde_json::Value::Object(evicted(map, now)).to_string(),
-    )
+    store(conn, REPORTS, &evicted(map, now))
 }
 
 // --- HTTP -------------------------------------------------------------------
