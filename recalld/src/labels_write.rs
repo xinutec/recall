@@ -724,28 +724,24 @@ pub async fn correction_reassign_route(
     if speaker.is_empty() {
         return (StatusCode::BAD_REQUEST, "speaker required").into_response();
     }
-    match write(&st, "correction reassign", move |m, i, root| {
-        relabel(m, i, root, id, &speaker)
-    })
-    .await
-    {
-        Ok(()) => route::ack(),
-        Err(response) => response,
-    }
+    route::acked(
+        write(&st, "correction reassign", move |m, i, root| {
+            relabel(m, i, root, id, &speaker)
+        })
+        .await,
+    )
 }
 
 pub async fn correction_hide_route(
     State(st): State<Arc<reads::State>>,
     Path(id): Path<EditId>,
 ) -> Response {
-    match write(&st, "correction hide", move |m, i, root| {
-        unenrol(m, i, root, id)
-    })
-    .await
-    {
-        Ok(()) => route::ack(),
-        Err(response) => response,
-    }
+    route::acked(
+        write(&st, "correction hide", move |m, i, root| {
+            unenrol(m, i, root, id)
+        })
+        .await,
+    )
 }
 
 #[derive(Deserialize, ts_rs::TS)]
@@ -799,28 +795,24 @@ pub async fn no_speech_route(
     State(st): State<Arc<reads::State>>,
     Json(body): Json<LineIn>,
 ) -> Response {
-    match write(&st, "no speech", move |m, i, root| {
-        no_speech(m, i, root, body.id)
-    })
-    .await
-    {
-        Ok(()) => route::ack(),
-        Err(response) => response,
-    }
+    route::acked(
+        write(&st, "no speech", move |m, i, root| {
+            no_speech(m, i, root, body.id)
+        })
+        .await,
+    )
 }
 
 pub async fn undo_no_speech_route(
     State(st): State<Arc<reads::State>>,
     Json(body): Json<LineIn>,
 ) -> Response {
-    match write(&st, "undo no speech", move |m, i, root| {
-        undo_no_speech(m, i, root, body.id)
-    })
-    .await
-    {
-        Ok(()) => route::ack(),
-        Err(response) => response,
-    }
+    route::acked(
+        write(&st, "undo no speech", move |m, i, root| {
+            undo_no_speech(m, i, root, body.id)
+        })
+        .await,
+    )
 }
 
 /// A stretch, by its first and last line.
@@ -851,28 +843,24 @@ pub async fn undo_exclude_route(
     State(st): State<Arc<reads::State>>,
     Json(body): Json<LineIn>,
 ) -> Response {
-    match write(&st, "undo exclude", move |m, i, root| {
-        undo_exclude(m, i, root, body.id)
-    })
-    .await
-    {
-        Ok(()) => route::ack(),
-        Err(response) => response,
-    }
+    route::acked(
+        write(&st, "undo exclude", move |m, i, root| {
+            undo_exclude(m, i, root, body.id)
+        })
+        .await,
+    )
 }
 
 pub async fn undo_correction_route(
     State(st): State<Arc<reads::State>>,
     Json(body): Json<LineIn>,
 ) -> Response {
-    match write(&st, "undo correction", move |m, i, root| {
-        undo_correction(m, i, root, body.id)
-    })
-    .await
-    {
-        Ok(()) => route::ack(),
-        Err(response) => response,
-    }
+    route::acked(
+        write(&st, "undo correction", move |m, i, root| {
+            undo_correction(m, i, root, body.id)
+        })
+        .await,
+    )
 }
 
 /// A text span, from a character of one line to a character of another,
@@ -906,27 +894,24 @@ pub async fn assign_route(
     if name.is_empty() {
         return (StatusCode::BAD_REQUEST, "name required").into_response();
     }
-    let root = st.root.clone();
-    let assigned = tokio::task::spawn_blocking(move || {
-        let meaning = work::open_write(&root).map_err(WriteError::Db)?;
-        let ingest = crate::store::open(&root).map_err(WriteError::Db)?;
+    let assigned = write(&st, "assign span", move |m, i, root| {
         assign_span(
-            &meaning,
-            &ingest,
-            &root,
+            m,
+            i,
+            root,
             &source,
             (body.start_turn, body.start_char),
             (body.end_turn, body.end_char),
             &name,
         )
-    });
-    match assigned.await {
-        Ok(Ok(touched)) => Json(AssignOut {
+    })
+    .await;
+    match assigned {
+        Ok(touched) => Json(AssignOut {
             touched: i64::try_from(touched).unwrap_or(i64::MAX),
         })
         .into_response(),
-        Ok(Err(err)) => refused("assign span", err),
-        Err(err) => route::faulted("assign span task", &err),
+        Err(response) => response,
     }
 }
 

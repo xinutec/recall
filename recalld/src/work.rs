@@ -130,14 +130,12 @@ pub async fn vocabulary_delete_route(
     axum::extract::Path(id): axum::extract::Path<i64>,
 ) -> Response {
     let root = st.root.clone();
-    match route::blocking("vocabulary delete", move || {
-        delete_term(&open_write(&root)?, id)
-    })
-    .await
-    {
-        Ok(()) => route::ack(),
-        Err(response) => response,
-    }
+    route::acked(
+        route::blocking("vocabulary delete", move || {
+            delete_term(&open_write(&root)?, id)
+        })
+        .await,
+    )
 }
 
 // --- the live feed (`POST /sync/live`) ----------------------------------------

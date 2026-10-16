@@ -323,14 +323,12 @@ pub async fn heartbeat_post_route(
         dropped_bytes: body.dropped_bytes.map(|b| b.max(0)),
         at,
     };
-    match route::blocking("heartbeat", move || {
-        record_beat(&work::open_write(&root)?, &beat, Utc::now())
-    })
-    .await
-    {
-        Ok(()) => route::ack(),
-        Err(response) => response,
-    }
+    route::acked(
+        route::blocking("heartbeat", move || {
+            record_beat(&work::open_write(&root)?, &beat, Utc::now())
+        })
+        .await,
+    )
 }
 
 pub async fn outbox_post_route(
@@ -348,14 +346,12 @@ pub async fn outbox_post_route(
         reason: body.reason,
         at,
     };
-    match route::blocking("outbox report", move || {
-        record_report(&work::open_write(&root)?, &report, Utc::now())
-    })
-    .await
-    {
-        Ok(()) => route::ack(),
-        Err(response) => response,
-    }
+    route::acked(
+        route::blocking("outbox report", move || {
+            record_report(&work::open_write(&root)?, &report, Utc::now())
+        })
+        .await,
+    )
 }
 
 pub fn beats_out(conn: &Connection) -> rusqlite::Result<BeatsOut> {

@@ -102,6 +102,11 @@ pub fn ack() -> Response {
     Json(Ack { ok: true }).into_response()
 }
 
+/// [`ack`] for a write that went through, or the answer it already chose.
+pub fn acked(write: Result<(), Response>) -> Response {
+    write.map_or_else(|refused| refused, |()| ack())
+}
+
 /// What a write that minted a row answers with.
 #[derive(Serialize, ts_rs::TS)]
 #[ts(export, rename = "CorrectResult")]
