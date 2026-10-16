@@ -7,6 +7,7 @@
 //! vocabulary prompt (the runner), the live feed (recall-live), numbers for
 //! the doctor, and the recorders' beats and outboxes for fleetwatch.
 
+use audiocore::work::{LiveStored, LiveTurns, Prompt};
 use axum::Router;
 use axum::extract::{Query, State};
 use axum::http::StatusCode;
@@ -182,7 +183,7 @@ pub async fn vocabulary_prompt_route(
     headers: axum::http::HeaderMap,
 ) -> Response {
     gated_read(&st, &headers, "sync vocabulary prompt", |conn| {
-        Ok(PromptOut {
+        Ok(Prompt {
             prompt: crate::labels::initial_prompt(conn)?,
         })
     })
@@ -297,17 +298,6 @@ pub async fn heard_route(
     .await
 }
 
-#[derive(Deserialize)]
-pub struct LiveTurnsIn {
-    pub turns: Vec<crate::work::LiveTurn>,
-}
-
-/// How many were newly stored.
-#[derive(Debug, Serialize, PartialEq, Eq)]
-pub struct LiveStoredOut {
-    pub stored: usize,
-}
-
 /// `POST /sync/live`: the live feed. Best effort: the archive pass transcribes
 /// the minute again, so a dropped push loses no word.
 pub async fn live_route(
@@ -318,7 +308,7 @@ pub async fn live_route(
     if let Err(refusal) = authorised(&st, &headers) {
         return refusal;
     }
-    let Ok(body) = serde_json::from_slice::<LiveTurnsIn>(&body) else {
+    let Ok(body) = serde_json::from_slice::<LiveTurns>(&body) else {
         return (StatusCode::UNPROCESSABLE_ENTITY, "bad live turns").into_response();
     };
     let root = st.root.clone();
@@ -328,15 +318,9 @@ pub async fn live_route(
     })
     .await
     {
-        Ok(stored) => axum::Json(LiveStoredOut { stored }).into_response(),
+        Ok(stored) => axum::Json(LiveStored { stored }).into_response(),
         Err(response) => response,
     }
-}
-
-/// `null` when the glossary is empty.
-#[derive(Debug, Serialize, PartialEq, Eq)]
-pub struct PromptOut {
-    pub prompt: Option<String>,
 }
 
 pub fn routes(gate: Arc<Gate>) -> Router {

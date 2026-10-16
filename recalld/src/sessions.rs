@@ -215,7 +215,7 @@ pub fn set_language(
 /// time so a change applies to the next one.
 pub fn attach_language(
     root: &std::path::Path,
-    job: &mut crate::queue::Job,
+    job: &mut audiocore::work::Job,
 ) -> rusqlite::Result<()> {
     if job.kind != audiocore::job::Kind::TranscribeSegment {
         return Ok(());

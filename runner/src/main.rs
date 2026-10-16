@@ -10,9 +10,10 @@
 
 use audiocore::job::Kind;
 use audiocore::shim::{Stored, voices};
+use audiocore::work::{Job, Span};
 use chrono::Utc;
 use clap::Parser;
-use runner::client::{self, Client, Job, Span};
+use runner::client::{self, Client};
 use runner::pulse::stamp_pulse;
 use runner::shim::{self, Shim};
 use std::path::Path;

@@ -7,9 +7,9 @@
 use crate::same_speech::COPY_SECONDS;
 use crate::store::{self, ROOM_SOURCE};
 use audiocore::job::Kind;
+use audiocore::work::Job;
 use chrono::{DateTime, Duration, SecondsFormat, Utc};
 use rusqlite::{Connection, OptionalExtension};
-use serde::Serialize;
 use std::path::Path;
 
 crate::statements! {
@@ -92,25 +92,6 @@ const LEASE_TTL_S: i64 = 10 * 60;
 /// Leases a job may take before it is retired as failed; otherwise a clip that
 /// kills the shim would hold the GPU for ever.
 pub const MAX_ATTEMPTS: i64 = 3;
-
-#[derive(Debug, Clone, Serialize, PartialEq)]
-pub struct Job {
-    pub id: i64,
-    pub kind: Kind,
-    /// Fetched via `/ingest/v1/blob/<source>/<filename>`.
-    pub filename: String,
-    /// Carried, not parsed from the filename: `meeting-20260907-0905` is a
-    /// source id, so no split on a hyphen is safe.
-    pub source: String,
-    /// For [`Kind::EnrollSpeaker`] only: the stretches to embed, filled at
-    /// lease time.
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub spans: Vec<crate::enrol::Span>,
-    /// For [`Kind::TranscribeSegment`] only: the language its session is pinned
-    /// to (`crate::sessions::attach_language`); absent, the model guesses.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub language: Option<String>,
-}
 
 fn iso(t: DateTime<Utc>) -> String {
     t.to_rfc3339_opts(SecondsFormat::Secs, true)

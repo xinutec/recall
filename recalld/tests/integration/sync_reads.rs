@@ -72,7 +72,8 @@ fn an_empty_glossary_is_none_not_an_empty_string() {
 
 // --- the live feed -----------------------------------------------------------
 
-use recalld::work::{LiveTurn, ingest_live};
+use audiocore::work::LiveTurn;
+use recalld::work::ingest_live;
 
 /// The real migration ladder.
 fn live_store() -> Connection {

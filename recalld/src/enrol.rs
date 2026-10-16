@@ -7,9 +7,9 @@
 use crate::ledger::{Outcome, record};
 use audiocore::instant::Stamp;
 use audiocore::job::Kind;
+use audiocore::work::Span;
 use chrono::{DateTime, SecondsFormat, Utc};
 use rusqlite::Connection;
-use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
 
 crate::statements! {
@@ -49,18 +49,6 @@ crate::statements! {
 
 /// A naming shorter than this enrols a useless print.
 const MIN_SECONDS: f64 = 1.0;
-
-/// One stretch to embed. No name on the wire: the naming is read at write
-/// time, so one renamed meanwhile enrols under its new name.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-pub struct Span {
-    /// The naming act's id (`edits.id`), echoed back with its print. Named for
-    /// the runner's protocol, which predates the edit log.
-    pub segment_id: i64,
-    /// Seconds from the start of the clip.
-    pub start_s: f64,
-    pub end_s: f64,
-}
 
 /// The naming acts that already have a print: by the act, or for an act
 /// recovered from the old tables, by the line or correction it came from.
@@ -210,7 +198,10 @@ pub fn spans_for(
 ///
 /// # Errors
 /// If the meaning plane refuses.
-pub fn attach_spans(root: &std::path::Path, job: &mut crate::queue::Job) -> rusqlite::Result<()> {
+pub fn attach_spans(
+    root: &std::path::Path,
+    job: &mut audiocore::work::Job,
+) -> rusqlite::Result<()> {
     if job.kind != Kind::EnrollSpeaker {
         return Ok(());
     }

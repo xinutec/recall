@@ -4,8 +4,9 @@
 
 use crate::fixture::Fleet;
 use audiocore::job::Kind;
+use audiocore::work::Span;
 use chrono::{DateTime, Utc};
-use recalld::enrol::{Print, Span, derive_jobs, forget_unwanted, pending, write_pass};
+use recalld::enrol::{Print, derive_jobs, forget_unwanted, pending, write_pass};
 use recalld::store;
 use transcript::{Act, Clip, Name, Span as TimeSpan};
 
@@ -313,7 +314,7 @@ fn a_leased_enrolment_job_carries_its_spans_and_other_kinds_carry_none() {
     let (f, clip) = fleet();
     let act = name(&f, &clip, 2.0, 6.0, "Alice", true);
 
-    let mut enrol_job = recalld::queue::Job {
+    let mut enrol_job = audiocore::work::Job {
         id: 1,
         kind: Kind::EnrollSpeaker,
         filename: CLIP.to_owned(),
@@ -336,7 +337,7 @@ fn a_leased_enrolment_job_carries_its_spans_and_other_kinds_carry_none() {
             .contains("spans")
     );
 
-    let mut diarize_job = recalld::queue::Job {
+    let mut diarize_job = audiocore::work::Job {
         kind: Kind::DiarizeSegment,
         spans: Vec::new(),
         ..enrol_job.clone()
@@ -373,7 +374,7 @@ fn delivered_at(root: &std::path::Path, filename: &str, start_utc: &str) {
 fn a_lease_of_another_kind_does_not_need_the_meaning_plane_at_all() {
     // A lease of another kind does not open `recall.sqlite`.
     let empty = tempfile::tempdir().expect("tempdir");
-    let mut job = recalld::queue::Job {
+    let mut job = audiocore::work::Job {
         id: 1,
         kind: Kind::TranscribeSegment,
         filename: "usb-20260910T100000.wav".to_owned(),

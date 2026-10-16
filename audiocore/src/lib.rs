@@ -15,3 +15,4 @@ pub mod shim;
 pub use transcript::text;
 pub mod vad;
 pub mod wav;
+pub mod work;

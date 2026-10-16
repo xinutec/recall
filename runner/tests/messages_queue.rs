@@ -231,7 +231,7 @@ fn the_messages_queue_without_its_token_is_refused_at_start() {
 #[test]
 fn a_job_names_a_file_in_the_scratch_directory_or_nothing() {
     // The name comes from the server; it must not write outside scratch.
-    let job = |filename: &str| -> runner::client::Job {
+    let job = |filename: &str| -> audiocore::work::Job {
         serde_json::from_value(serde_json::json!({
             "id": 1, "kind": "transcribe-segment", "filename": filename, "source": "chat"
         }))

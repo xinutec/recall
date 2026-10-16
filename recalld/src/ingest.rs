@@ -388,9 +388,8 @@ pub async fn lease_job(
     }
     let kinds = query.kinds();
     let handle =
-        tokio::task::spawn_blocking(move || -> rusqlite::Result<Option<crate::queue::Job>> {
-            let leased = crate::queue::lease(&config.root, Utc::now(), &kinds)?;
-            let Some(mut job) = leased else {
+        tokio::task::spawn_blocking(move || -> rusqlite::Result<Option<audiocore::work::Job>> {
+            let Some(mut job) = crate::queue::lease(&config.root, Utc::now(), &kinds)? else {
                 return Ok(None);
             };
             crate::enrol::attach_spans(&config.root, &mut job)?;
@@ -398,8 +397,7 @@ pub async fn lease_job(
             Ok(Some(job))
         });
     match handle.await {
-        Ok(Ok(Some(job))) => (StatusCode::OK, axum::Json(json!({ "job": job }))).into_response(),
-        Ok(Ok(None)) => (StatusCode::OK, axum::Json(json!({ "job": null }))).into_response(),
+        Ok(Ok(job)) => axum::Json(audiocore::work::Lease { job }).into_response(),
         // Through the fault log, where the doctor counts them.
         Ok(Err(err)) => crate::route::faulted("work lease", &err),
         Err(err) => crate::route::faulted("work lease task", &err),

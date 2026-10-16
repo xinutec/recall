@@ -1,57 +1,8 @@
 //! Talking to recalld: lease, fetch, ack.
 
-use serde::{Deserialize, Serialize};
+use audiocore::work::{Job, Lease, LiveStored, LiveTurn, LiveTurns, Prompt};
 use std::io::Read;
 use std::path::Path;
-
-/// One unit of work, exactly as the queue hands it over.
-#[derive(Debug, Clone, Deserialize, PartialEq)]
-pub struct Job {
-    pub id: i64,
-    pub kind: audiocore::job::Kind,
-    /// The blob to work on, under `source`.
-    pub filename: String,
-    /// Which recorder it came from, as recalld serves it. Never guessed here.
-    pub source: String,
-    /// For `enroll-speaker`: which stretches of the clip to embed, in seconds
-    /// from its start. Absent for every other kind.
-    #[serde(default)]
-    pub spans: Vec<Span>,
-    /// For `transcribe-segment`: the language its session is pinned to;
-    /// absent, the model guesses.
-    #[serde(default)]
-    pub language: Option<String>,
-}
-
-impl Job {
-    /// The filename as a single path component, to write under the scratch
-    /// directory; `None` for anything that would land elsewhere.
-    #[must_use]
-    pub fn scratch_name(&self) -> Option<&str> {
-        let name = std::path::Path::new(&self.filename);
-        (name.file_name() == Some(name.as_os_str()) && self.filename != "..")
-            .then_some(self.filename.as_str())
-    }
-}
-
-/// One stretch of a clip to embed. No name: the fleet reads the label when it
-/// writes the print.
-#[derive(Debug, Clone, Deserialize, Serialize, PartialEq)]
-pub struct Span {
-    pub segment_id: i64,
-    pub start_s: f64,
-    pub end_s: f64,
-}
-
-#[derive(Deserialize)]
-struct LeaseBody {
-    job: Option<Job>,
-}
-
-#[derive(Deserialize)]
-struct PromptBody {
-    prompt: Option<String>,
-}
 
 #[derive(Debug)]
 pub enum Error {
@@ -104,7 +55,7 @@ impl Client {
             .auth(self.agent.put(&url))
             .call()
             .map_err(|e| Error::Http(e.to_string()))?;
-        let body: LeaseBody = serde_json::from_reader(response.into_reader())
+        let body: Lease = serde_json::from_reader(response.into_reader())
             .map_err(|e| Error::Body(e.to_string()))?;
         Ok(body.job)
     }
@@ -165,9 +116,11 @@ impl Client {
     pub fn push_live(&self, turns: &[LiveTurn]) -> Result<usize, Error> {
         let response = self
             .auth(self.agent.post(&format!("{}/sync/live", self.base)))
-            .send_json(serde_json::json!({ "turns": turns }))
+            .send_json(LiveTurns {
+                turns: turns.to_vec(),
+            })
             .map_err(|e| Error::Http(e.to_string()))?;
-        let body: LiveStoredBody = serde_json::from_reader(response.into_reader())
+        let body: LiveStored = serde_json::from_reader(response.into_reader())
             .map_err(|e| Error::Body(e.to_string()))?;
         Ok(body.stored)
     }
@@ -183,24 +136,8 @@ impl Client {
             .auth(self.agent.get(&url))
             .call()
             .map_err(|e| Error::Http(e.to_string()))?;
-        let body: PromptBody = serde_json::from_reader(response.into_reader())
+        let body: Prompt = serde_json::from_reader(response.into_reader())
             .map_err(|e| Error::Body(e.to_string()))?;
         Ok(body.prompt.filter(|p| !p.trim().is_empty()))
     }
-}
-
-/// One provisional turn as `POST /sync/live` takes it
-/// (`recalld::work::LiveTurn`): `snake_case`, unlike the browsing plane.
-#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
-pub struct LiveTurn {
-    pub start: String,
-    pub end: String,
-    pub text: String,
-    pub asr_model: String,
-    pub language: Option<String>,
-}
-
-#[derive(Deserialize)]
-struct LiveStoredBody {
-    stored: usize,
 }

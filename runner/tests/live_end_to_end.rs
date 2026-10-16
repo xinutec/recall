@@ -115,7 +115,7 @@ fn which_half_failed(root: &Path, agent: &mut std::process::Child, elapsed: Dura
     let canary = match rusqlite::Connection::open(root.join("recall.sqlite")) {
         Ok(mut c) => recalld::work::ingest_live(
             &mut c,
-            &[recalld::work::LiveTurn {
+            &[audiocore::work::LiveTurn {
                 start: "2000-01-01T00:00:00+00:00".to_owned(),
                 end: "2000-01-01T00:00:01+00:00".to_owned(),
                 text: "a canary probing the write half".to_owned(),

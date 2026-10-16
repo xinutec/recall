@@ -3,6 +3,7 @@
 
 use crate::{reads, route};
 use audiocore::instant::Stamp;
+use audiocore::work::LiveTurn;
 use axum::Json;
 use axum::extract::State;
 use axum::http::StatusCode;
@@ -140,16 +141,6 @@ pub async fn vocabulary_delete_route(
 }
 
 // --- the live feed (`POST /sync/live`) ----------------------------------------
-
-#[derive(Debug, Deserialize)]
-pub struct LiveTurn {
-    pub start: String,
-    pub end: String,
-    pub text: String,
-    pub asr_model: String,
-    #[serde(default)]
-    pub language: Option<String>,
-}
 
 /// Store pushed live turns: provisional, audio-less lines the view shows until
 /// a transcribed clip covers their start. `created_utc` records the tier's
