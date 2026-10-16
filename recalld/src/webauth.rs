@@ -312,16 +312,7 @@ impl Config {
         let Some(presented) = authorization.and_then(|a| a.strip_prefix("Bearer ")) else {
             return false;
         };
-        // HMACs, not `==` on the tokens, which leaks a prefix through timing.
-        let Ok(mut mac) = HmacSha256::new_from_slice(self.session_secret.as_bytes()) else {
-            return false;
-        };
-        mac.update(presented.as_bytes());
-        let Ok(mut expect_mac) = HmacSha256::new_from_slice(self.session_secret.as_bytes()) else {
-            return false;
-        };
-        expect_mac.update(expected.as_bytes());
-        mac.finalize().into_bytes() == expect_mac.finalize().into_bytes()
+        crate::tokens::same_token(presented, expected)
     }
 }
 

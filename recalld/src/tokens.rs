@@ -85,7 +85,9 @@ impl Tokens {
     }
 }
 
-/// Equality for a single-token gate, compared as digests.
+/// Equality for a single-token gate, the one comparison every gate uses: the
+/// digests, in constant time, so neither a prefix nor the length leaks.
 pub fn same_token(presented: &str, expected: &str) -> bool {
-    digest(presented) == digest(expected)
+    use subtle::ConstantTimeEq;
+    digest(presented).ct_eq(&digest(expected)).into()
 }

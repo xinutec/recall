@@ -16,7 +16,6 @@ use axum::response::{IntoResponse, Response};
 use axum::routing::post;
 use serde::Deserialize;
 use std::sync::Arc;
-use subtle::ConstantTimeEq;
 
 /// The secret the Mac presents. Without one the plane is not mounted, so it
 /// cannot answer open by accident.
@@ -56,10 +55,7 @@ async fn require_token(
 
 /// Authorise a sync request in constant time, or say what to answer.
 pub fn check(presented: Option<&str>, expected: &str) -> Result<(), (StatusCode, &'static str)> {
-    let ok = presented.is_some_and(|p| {
-        // `ct_eq` short-circuits on unequal length, which is not secret.
-        p.as_bytes().ct_eq(expected.as_bytes()).into()
-    });
+    let ok = presented.is_some_and(|p| crate::tokens::same_token(p, expected));
     if ok {
         Ok(())
     } else {
