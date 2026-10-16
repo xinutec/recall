@@ -660,6 +660,39 @@ fn a_finished_transcription_queues_its_diarization_at_once() {
 }
 
 #[test]
+fn catching_up_follow_ons_takes_no_write_lock_while_it_reads() {
+    // The read scans every finished transcription: after a reboot, on a cold
+    // disk, a write lock held across it refused every lease for minutes.
+    let dir = tempfile::tempdir().expect("tempdir");
+    let now: DateTime<Utc> = "2026-09-11T12:00:00Z".parse().expect("t");
+    let name = mic_row(dir.path(), "usb", "20260911T100000");
+    let conn = store::open(dir.path()).expect("db");
+    conn.execute(
+        "INSERT INTO jobs (kind, filename, state, created_utc, done_utc, result)
+         VALUES (?1, ?2, 'done', '2026-09-11T11:00:00Z', '2026-09-11T11:00:00Z', ?3)",
+        (Kind::DiarizeSegment, &name, TRANSCRIBED),
+    )
+    .expect("its diarization is already queued");
+    conn.execute(
+        "INSERT INTO jobs (kind, filename, state, created_utc, done_utc, result)
+         VALUES (?1, ?2, 'done', '2026-09-11T11:00:00Z', '2026-09-11T11:00:00Z', ?3)",
+        (Kind::TranscribeSegment, &name, TRANSCRIBED),
+    )
+    .expect("finished job");
+    let writer = store::open(dir.path()).expect("db");
+    writer
+        .execute_batch("BEGIN IMMEDIATE")
+        .expect("hold the write lock");
+    conn.busy_timeout(std::time::Duration::from_millis(100))
+        .expect("fail fast");
+
+    assert_eq!(
+        recalld::queue::derive_follow_ons(&conn, now).expect("a read needs no write lock"),
+        0
+    );
+}
+
+#[test]
 fn a_transcription_finished_without_its_diarization_is_caught_up() {
     // Finished before done derived follow-ons, or by hand: the pass catches up,
     // and a refused one still gets none.

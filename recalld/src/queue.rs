@@ -27,16 +27,17 @@ crate::statements! {
            AND j.kind IN (SELECT value FROM json_each(?2))
          ORDER BY (j.kind = ?3) DESC, s.start_utc DESC, j.filename DESC
          LIMIT 1";
-    /// Finished `?3` jobs with no `?1` job yet, and only then their results:
-    /// reading every result costs 25 s on a cold disk.
-    DERIVE_FOLLOW_ON: Ingest =
+    /// Finished `?2` jobs that succeeded with no `?1` job yet, and only then
+    /// their results: reading every result costs 25 s on a cold disk. A read:
+    /// as an `INSERT … SELECT` it held the write lock across the scan, and
+    /// after a reboot refused every lease for five minutes.
+    FOLLOW_ONS_MISSING: Ingest =
         "WITH open AS MATERIALIZED (
              SELECT j.id FROM jobs j
-             WHERE j.kind = ?3 AND j.done_utc IS NOT NULL
+             WHERE j.kind = ?2 AND j.done_utc IS NOT NULL
                AND NOT EXISTS (SELECT 1 FROM jobs d
                                WHERE d.kind = ?1 AND d.filename = j.filename))
-         INSERT OR IGNORE INTO jobs (kind, filename, created_utc)
-         SELECT ?1, j.filename, ?2 FROM jobs j JOIN open o ON o.id = j.id
+         SELECT j.filename FROM jobs j JOIN open o ON o.id = j.id
          WHERE json_valid(j.result) AND json_extract(j.result, '$.ok') = 1";
     /// The same for one job just finished.
     FOLLOW_ON_OF: Ingest =
@@ -102,10 +103,18 @@ fn iso(t: DateTime<Utc>) -> String {
 /// derives each as its transcription lands; this catches up on any it missed.
 /// Idempotent. Not on the lease path: it reads results.
 pub fn derive_follow_ons(conn: &Connection, now: DateTime<Utc>) -> rusqlite::Result<usize> {
-    DERIVE_FOLLOW_ON.execute(
-        conn,
-        (Kind::DiarizeSegment, iso(now), Kind::TranscribeSegment),
-    )
+    let missing: Vec<String> = {
+        let mut stmt = FOLLOW_ONS_MISSING.prepare(conn)?;
+        let rows = stmt.query_map((Kind::DiarizeSegment, Kind::TranscribeSegment), |r| {
+            r.get(0)
+        })?;
+        rows.collect::<Result<_, _>>()?
+    };
+    let mut derived = 0;
+    for filename in missing {
+        derived += DERIVE_JOB.execute(conn, (Kind::DiarizeSegment, &filename, iso(now)))?;
+    }
+    Ok(derived)
 }
 
 /// Derive a transcription job, up to `limit`, for each microphone clip or
