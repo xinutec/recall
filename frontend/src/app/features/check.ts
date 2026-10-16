@@ -27,6 +27,7 @@ import { Moment, Transcript, TranscriptList } from '../models';
 import { RecallApi } from '../recall-api';
 import { dayKey, timeOfDaySeconds } from '../format';
 import { Player } from '../shared/player';
+import { failed } from '../shared/notice';
 
 /** One line per moment to check: none live, and none in a moment whose words a
  * person already checked on any mic (a rename alone does not count). Of the
@@ -271,7 +272,7 @@ export class Check {
         });
         this.at.set(this.lines().indexOf(t));
       },
-      error: () => this.snack.open('Could not undo', 'OK', { duration: 4000 }),
+      error: () => failed(this.snack, 'Could not undo'),
     });
   }
 
@@ -288,7 +289,7 @@ export class Check {
       },
       error: () => {
         this.busy.set(false);
-        this.snack.open('Could not save, try again', 'OK', { duration: 4000 });
+        failed(this.snack, 'Could not save, try again');
       },
     });
   }

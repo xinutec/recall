@@ -14,6 +14,7 @@ import { MatSnackBar } from '@angular/material/snack-bar';
 import { Session, SessionList } from '../models';
 import { RecallApi } from '../recall-api';
 import { dayLabel, timeOfDay } from '../format';
+import { failed } from '../shared/notice';
 
 /** The languages a session can be pinned to; '' leaves it to the model. */
 export const LANGUAGES: readonly { code: string; label: string }[] = [
@@ -123,7 +124,7 @@ export class Sessions {
         this.editingId.set(null);
         this.data.reload();
       },
-      error: () => this.snack.open('Could not rename', 'Dismiss', { duration: 4000 }),
+      error: () => failed(this.snack, 'Could not rename'),
     });
   }
 
@@ -133,7 +134,7 @@ export class Sessions {
         this.snack.open('Re-diarize queued — runs while recording is paused', undefined, {
           duration: 4000,
         }),
-      error: () => this.snack.open('Could not queue re-diarize', 'Dismiss', { duration: 4000 }),
+      error: () => failed(this.snack, 'Could not queue re-diarize'),
     });
   }
 
@@ -146,7 +147,7 @@ export class Sessions {
           duration: 4000,
         });
       },
-      error: () => this.snack.open('Could not change the language', 'Dismiss', { duration: 4000 }),
+      error: () => failed(this.snack, 'Could not change the language'),
     });
   }
 
@@ -166,7 +167,7 @@ export class Sessions {
         this.data.reload();
         this.snack.open('Session deleted', undefined, { duration: 2500 });
       },
-      error: () => this.snack.open('Could not delete', 'Dismiss', { duration: 4000 }),
+      error: () => failed(this.snack, 'Could not delete'),
     });
   }
 }

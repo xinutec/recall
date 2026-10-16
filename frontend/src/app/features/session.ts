@@ -23,6 +23,8 @@ import { RecallApi } from '../recall-api';
 import { Player } from '../shared/player';
 import { Turns } from '../shared/turns';
 import { shortDay, timeOfDay } from '../format';
+import { failed } from '../shared/notice';
+import { undiarized } from '../shared/tier';
 
 /** A diarization voice: its cluster, the name most of its turns carry, and a
  * sample to recognise it by. */
@@ -89,9 +91,7 @@ export class Session implements OnDestroy {
     });
   }
 
-  protected readonly finalizing = computed(() =>
-    this.turns().some((t) => t.tier === 'live' || t.tier === 'transcribed'),
-  );
+  protected readonly finalizing = computed(() => this.turns().some((t) => undiarized(t.tier)));
 
   /** Voices, biggest first. Named only when most of its turns carry the name. */
   protected readonly voices = computed<Voice[]>(() => {
@@ -157,7 +157,7 @@ export class Session implements OnDestroy {
     this.sent.set(v.cluster, who);
     this.api.nameSessionVoice(this.id(), v.cluster, who).subscribe({
       next: () => this.reload(),
-      error: () => this.snack.open('Could not save, try again', 'OK', { duration: 4000 }),
+      error: () => failed(this.snack, 'Could not save, try again'),
     });
   }
 

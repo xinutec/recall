@@ -18,6 +18,8 @@ import { RecallApi } from '../recall-api';
 import { timeOfDay, timeOfDaySeconds } from '../format';
 import { LineSheet, LineSheetData, LineSheetResult } from './line-sheet';
 import { Player } from './player';
+import { failed } from './notice';
+import { undiarized } from './tier';
 
 /** Consecutive turns shown under one speaker. Each turn stays its own tap target. */
 export interface Run {
@@ -213,7 +215,7 @@ export class Turns implements OnDestroy {
 
   /** No speaker separation yet: shown grey, still editable. */
   protected provisional(t: Transcript): boolean {
-    return t.tier === 'live' || t.tier === 'transcribed';
+    return undiarized(t.tier);
   }
 
   // --- playback
@@ -275,7 +277,7 @@ export class Turns implements OnDestroy {
       },
       error: () => {
         this.excludeBusy.set(false);
-        this.snack.open('Could not exclude, try again', 'OK', { duration: 4000 });
+        failed(this.snack, 'Could not exclude, try again');
       },
     });
   }
@@ -287,7 +289,7 @@ export class Turns implements OnDestroy {
   protected undoExclude(line: Transcript): void {
     this.api.undoExclude(line.id).subscribe({
       next: () => this.changed.emit(),
-      error: () => this.snack.open('Could not undo', 'OK', { duration: 4000 }),
+      error: () => failed(this.snack, 'Could not undo'),
     });
   }
 
@@ -333,7 +335,7 @@ export class Turns implements OnDestroy {
       .subscribe(() => {
         this.api.undoNoSpeech(t.id).subscribe({
           next: () => this.changed.emit(),
-          error: () => this.snack.open('Could not undo', 'OK', { duration: 4000 }),
+          error: () => failed(this.snack, 'Could not undo'),
         });
       });
   }

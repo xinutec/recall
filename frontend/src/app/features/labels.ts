@@ -17,6 +17,7 @@ import { Label, LabelList, SpeakerNames, VocabularyList } from '../models';
 import { RecallApi } from '../recall-api';
 import { formatClock } from '../format';
 import { PlayButton } from '../shared/play-button';
+import { failed } from '../shared/notice';
 
 /**
  * Review the labelled fragments: filter by voice, play each, reassign a wrong
@@ -65,14 +66,14 @@ export class Labels {
         this.newTerm.set('');
         this.vocabulary.reload();
       },
-      error: () => this.snack.open('Could not add the term', 'Dismiss', { duration: 4000 }),
+      error: () => failed(this.snack, 'Could not add the term'),
     });
   }
 
   protected removeTerm(id: number): void {
     this.api.deleteVocabularyTerm(id).subscribe({
       next: () => this.vocabulary.reload(),
-      error: () => this.snack.open('Could not remove the term', 'Dismiss', { duration: 4000 }),
+      error: () => failed(this.snack, 'Could not remove the term'),
     });
   }
 
@@ -120,7 +121,7 @@ export class Labels {
         this.snack.open('Re-tagged', undefined, { duration: 2000 });
         this.results.reload();
       },
-      error: () => this.snack.open('Could not re-tag', 'Dismiss', { duration: 4000 }),
+      error: () => failed(this.snack, 'Could not re-tag'),
     });
   }
 
@@ -130,7 +131,7 @@ export class Labels {
         this.snack.open('Removed from the training set', undefined, { duration: 2000 });
         this.results.reload();
       },
-      error: () => this.snack.open('Could not remove', 'Dismiss', { duration: 4000 }),
+      error: () => failed(this.snack, 'Could not remove'),
     });
   }
 }

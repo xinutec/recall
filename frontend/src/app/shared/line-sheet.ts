@@ -15,6 +15,7 @@ import { RecallApi } from '../recall-api';
 import { timeOfDaySeconds } from '../format';
 import { Player } from './player';
 import { SaidBy } from './said-by';
+import { failed } from './notice';
 
 export interface LineSheetData {
   readonly turn: Transcript;
@@ -218,7 +219,7 @@ export class LineSheet {
       next: () => this.ref.dismiss(result),
       error: () => {
         this.busy.set(false);
-        this.snack.open('Could not save, try again', 'OK', { duration: 4000 });
+        failed(this.snack, 'Could not save, try again');
       },
     });
   }
