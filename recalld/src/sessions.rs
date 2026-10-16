@@ -4,12 +4,13 @@
 //! Every mutating route is guarded to uploads (404 for no such source, 400 for
 //! the continuous archive).
 
+use crate::sources::SourceKind;
 use crate::{reads, route, work};
 use audiocore::instant::Stamp;
 use axum::extract::{Path, State};
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
-use rusqlite::Connection;
+use rusqlite::{Connection, OptionalExtension};
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 
@@ -53,8 +54,6 @@ crate::statements! {
     DROP_SESSION_LINES: Meaning = "DELETE FROM rendered_lines WHERE source_id = ?1";
 }
 
-const UPLOAD_KIND: &str = "upload";
-
 #[derive(Debug, Serialize, PartialEq, Eq, ts_rs::TS)]
 #[ts(export, rename = "Session")]
 #[serde(rename_all = "camelCase")]
@@ -79,7 +78,7 @@ pub struct SessionsOut {
 /// as speakers; guesses have no trustworthy threshold.
 pub fn sessions(conn: &Connection) -> rusqlite::Result<SessionsOut> {
     let mut stmt = SESSIONS.prepare(conn)?;
-    let rows = stmt.query_map([UPLOAD_KIND], |r| {
+    let rows = stmt.query_map([SourceKind::Upload], |r| {
         let names: Option<String> = r.get(5)?;
         // GROUP_CONCAT's order is undefined.
         let mut speakers: Vec<String> = names
@@ -143,10 +142,12 @@ impl SessionError {
 }
 
 fn require_upload(conn: &Connection, source: &str) -> Result<(), SessionError> {
-    let kind: Option<String> = SOURCE_KIND.query_row(conn, [source], |r| r.get(0)).ok();
-    match kind.as_deref() {
+    let kind: Option<SourceKind> = SOURCE_KIND
+        .query_row(conn, [source], |r| r.get(0))
+        .optional()?;
+    match kind {
         None => Err(SessionError::Missing),
-        Some(UPLOAD_KIND) => Ok(()),
+        Some(SourceKind::Upload) => Ok(()),
         Some(_) => Err(SessionError::NotAnUpload),
     }
 }

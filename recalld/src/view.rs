@@ -35,7 +35,7 @@ crate::statements! {
     AUDIO_ROWS: Meaning =
         "SELECT a.id, a.path, a.end_utc FROM audio_segments a
          JOIN sources s ON s.id = a.source_id
-         WHERE s.kind <> 'derived' AND a.path IS NOT NULL
+         WHERE s.kind <> ?1 AND a.path IS NOT NULL
          ORDER BY a.start_utc DESC";
     RESULT_VERSIONS: Ingest =
         "SELECT filename, kind, done_utc FROM jobs
@@ -239,7 +239,9 @@ fn shown(meaning: &Connection, ingest: &Connection, root: &Path) -> Result<Vec<S
     let by_path = clips::by_audio_path(ingest, root)?;
     let rows: Vec<(i64, String, Option<String>)> = AUDIO_ROWS
         .prepare(meaning)?
-        .query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))?
+        .query_map([crate::sources::SourceKind::Derived], |r| {
+            Ok((r.get(0)?, r.get(1)?, r.get(2)?))
+        })?
         .collect::<rusqlite::Result<_>>()?;
     Ok(rows
         .into_iter()

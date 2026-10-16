@@ -16,7 +16,7 @@ use std::path::{Path, PathBuf};
 use transcript::{ClipId, SourceId};
 
 crate::statements! {
-    UPLOADS: Meaning = "SELECT id FROM sources WHERE kind = 'upload'";
+    UPLOADS: Meaning = "SELECT id FROM sources WHERE kind = ?1";
     /// `?1`, `?2`: the span in the ingest plane's spelling.
     SEGMENTS: Ingest =
         "SELECT source, filename, start_utc FROM segments WHERE start_utc >= ?1 AND start_utc < ?2";
@@ -190,7 +190,9 @@ pub fn span(
 ) -> Result<Forgotten, ForgetError> {
     let uploads: Vec<SourceId> = {
         let mut stmt = UPLOADS.prepare(meaning)?;
-        let rows = stmt.query_map([], |r| crate::sql::source_id(r, 0))?;
+        let rows = stmt.query_map([crate::sources::SourceKind::Upload], |r| {
+            crate::sql::source_id(r, 0)
+        })?;
         rows.collect::<rusqlite::Result<_>>()?
     };
     let (from, to) = span.ingest();

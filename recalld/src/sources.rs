@@ -54,6 +54,21 @@ impl SourceKind {
     }
 }
 
+impl rusqlite::types::ToSql for SourceKind {
+    fn to_sql(&self) -> rusqlite::Result<rusqlite::types::ToSqlOutput<'_>> {
+        Ok(self.as_str().into())
+    }
+}
+
+impl rusqlite::types::FromSql for SourceKind {
+    fn column_result(value: rusqlite::types::ValueRef<'_>) -> rusqlite::types::FromSqlResult<Self> {
+        let stored = value.as_str()?;
+        Self::parse(stored).ok_or_else(|| {
+            rusqlite::types::FromSqlError::Other(format!("no source kind {stored:?}").into())
+        })
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SourceRow {
     pub id: String,

@@ -30,8 +30,6 @@ pub const AUDIO_SUFFIXES: &[&str] = &[
     ".mp3", ".m4a", ".mp4", ".wav", ".flac", ".aac", ".ogg", ".opus", ".webm",
 ];
 
-const UPLOAD_KIND: &str = "upload";
-
 const S16_BYTES_PER_SAMPLE: usize = 2;
 
 fn sha256_hex(bytes: &[u8]) -> String {
@@ -261,7 +259,7 @@ pub fn register(
     started: DateTime<Utc>,
     media: Media,
 ) -> Result<(), UploadError> {
-    ADD_SOURCE.execute(conn, (source, name, UPLOAD_KIND))?;
+    ADD_SOURCE.execute(conn, (source, name, crate::sources::SourceKind::Upload))?;
     let end = started + chrono::Duration::microseconds((media.duration_s * 1e6).round() as i64);
     ADD_AUDIO_SEGMENT.execute(
         conn,

@@ -141,7 +141,9 @@ pub fn derive_segment_jobs(
     // registered, so it gets no job.
     let known: std::collections::HashSet<String> = {
         let mut stmt = NON_ROOM_SOURCES.prepare(meaning)?;
-        let rows = stmt.query_map([crate::store::ROOM_KIND], |r| r.get::<_, String>(0))?;
+        let rows = stmt.query_map([crate::sources::SourceKind::Derived], |r| {
+            r.get::<_, String>(0)
+        })?;
         rows.collect::<Result<_, _>>()?
     };
 

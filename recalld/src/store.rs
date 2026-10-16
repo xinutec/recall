@@ -69,7 +69,6 @@ pub struct Row {
 
 /// The retired room stream: its rows stay as history and the passes skip them.
 pub const ROOM_SOURCE: &str = "room";
-pub const ROOM_KIND: &str = "derived";
 
 /// Where a source's blobs live: `<root>/ingest/<source>/`. Use this, not a
 /// spelled-out `join`: a wrong one records unplayable paths.

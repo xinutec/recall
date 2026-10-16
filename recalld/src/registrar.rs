@@ -9,7 +9,7 @@ use chrono::Duration;
 
 crate::statements! {
     CAPTURE_SOURCES: Meaning =
-        "SELECT id FROM sources WHERE kind NOT IN ('upload', ?1)";
+        "SELECT id FROM sources WHERE kind NOT IN (?1, ?2)";
     UNWRITTEN: Ingest =
         "SELECT s.filename, s.source FROM segments s
              WHERE s.source != ?1
@@ -65,7 +65,13 @@ pub fn register_segments(
     // Not uploads, which register themselves, nor the room's blocks.
     let mics: std::collections::HashSet<String> = {
         let mut stmt = CAPTURE_SOURCES.prepare(meaning)?;
-        let rows = stmt.query_map([crate::store::ROOM_KIND], |r| r.get::<_, String>(0))?;
+        let rows = stmt.query_map(
+            [
+                crate::sources::SourceKind::Upload,
+                crate::sources::SourceKind::Derived,
+            ],
+            |r| r.get::<_, String>(0),
+        )?;
         rows.collect::<Result<_, _>>()?
     };
     let have = registered_names(meaning)?;
