@@ -70,6 +70,19 @@ pub struct Media {
     pub channels: i64,
 }
 
+/// What `ffprobe -of json -show_entries stream=sample_rate,channels` prints.
+#[derive(serde::Deserialize)]
+struct Probed {
+    streams: Vec<ProbedStream>,
+}
+
+/// ffprobe reports `sample_rate` as a string and `channels` as a number.
+#[derive(serde::Deserialize)]
+struct ProbedStream {
+    sample_rate: String,
+    channels: i64,
+}
+
 /// Sample rate and channels from the header; the duration by decoding, since
 /// segment-muxer output has none in its header.
 pub fn probe(path: &Path) -> Result<Media, UploadError> {
@@ -89,22 +102,14 @@ pub fn probe(path: &Path) -> Result<Media, UploadError> {
     if !out.status.success() {
         return Err(UploadError::Unreadable);
     }
-    let parsed: serde_json::Value =
+    let probed: Probed =
         serde_json::from_slice(&out.stdout).map_err(|_| UploadError::Unreadable)?;
-    let stream = parsed
-        .get("streams")
-        .and_then(|s| s.get(0))
-        .ok_or(UploadError::Unreadable)?;
-    // ffprobe reports sample_rate as a string and channels as a number.
+    let stream = probed.streams.first().ok_or(UploadError::Unreadable)?;
     let sample_rate: i64 = stream
-        .get("sample_rate")
-        .and_then(|v| v.as_str())
-        .and_then(|v| v.parse().ok())
-        .ok_or(UploadError::Unreadable)?;
-    let channels: i64 = stream
-        .get("channels")
-        .and_then(serde_json::Value::as_i64)
-        .ok_or(UploadError::Unreadable)?;
+        .sample_rate
+        .parse()
+        .map_err(|_| UploadError::Unreadable)?;
+    let channels = stream.channels;
     if sample_rate <= 0 || channels <= 0 {
         return Err(UploadError::Unreadable);
     }
