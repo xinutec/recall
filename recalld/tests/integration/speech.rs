@@ -1,6 +1,7 @@
 //! The ingest scanner: speech seconds per delivered segment. Only the real-speech
 //! case needs a recording, and it skips where that fixture is absent.
 
+use audiocore::instant::IngestStamp;
 use recalld::speech::{self, UNKNOWN_SECONDS};
 use recalld::store;
 use std::path::Path;
@@ -16,10 +17,10 @@ fn stored(root: &Path, source: &str, name: &str, audio: &[u8]) {
         &store::Row {
             source: source.to_owned(),
             filename: name.to_owned(),
-            start_utc: "2026-09-05T12:00:00Z".to_owned(),
+            start_utc: IngestStamp::parse("2026-09-05T12:00:00Z").expect("instant"),
             bytes: audio.len() as u64,
             sha256: "x".to_owned(),
-            received_utc: "2026-09-05T12:01:00Z".to_owned(),
+            received_utc: IngestStamp::parse("2026-09-05T12:01:00Z").expect("instant"),
             sent_utc: None,
         },
     )
@@ -186,10 +187,10 @@ fn the_scan_takes_the_newest_segments_first() {
             &store::Row {
                 source: "usb".to_owned(),
                 filename: name.to_owned(),
-                start_utc: stamp.to_owned(),
+                start_utc: IngestStamp::parse(stamp).expect("instant"),
                 bytes: quiet.len() as u64,
                 sha256: "x".to_owned(),
-                received_utc: stamp.to_owned(),
+                received_utc: IngestStamp::parse(stamp).expect("instant"),
                 sent_utc: None,
             },
         )

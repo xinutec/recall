@@ -6,6 +6,7 @@
 //! uploaded; ffprobe validates it.
 
 use audiocore::instant;
+use audiocore::instant::IngestStamp;
 use chrono::{DateTime, Datelike, SubsecRound, TimeZone, Timelike, Utc};
 use chrono_tz::Europe::London;
 use rusqlite::Connection;
@@ -226,11 +227,10 @@ pub fn deliver(
         &crate::store::Row {
             source: source.to_owned(),
             filename,
-            // The ingest plane's spelling (`Z`).
-            start_utc: started.to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
+            start_utc: IngestStamp::of(started),
             bytes: bytes as u64,
             sha256: sha256.to_owned(),
-            received_utc: now.to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
+            received_utc: IngestStamp::of(now),
             sent_utc: None,
         },
     )

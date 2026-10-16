@@ -1,5 +1,6 @@
 //! The job queue: derive, lease newest first, done; a lapsed lease re-offers.
 
+use audiocore::instant::IngestStamp;
 use audiocore::job::Kind;
 use chrono::{DateTime, Duration, Utc};
 use recalld::queue::{done, lease};
@@ -19,7 +20,7 @@ fn room_row(root: &std::path::Path, stamp: &str) {
                 .start_utc,
             bytes: 1,
             sha256: "x".into(),
-            received_utc: "2026-09-05T00:00:00Z".into(),
+            received_utc: IngestStamp::parse("2026-09-05T00:00:00Z").expect("instant"),
             sent_utc: None,
         },
     )
@@ -262,7 +263,7 @@ fn unmeasured_file(root: &std::path::Path, source: &str, stamp: &str, ext: &str)
             source: source.into(),
             filename: name.clone(),
             // The ingest plane's spelling: a trailing Z.
-            start_utc: format!(
+            start_utc: IngestStamp::parse(&format!(
                 "{}-{}-{}T{}:{}:{}Z",
                 &stamp[0..4],
                 &stamp[4..6],
@@ -270,10 +271,11 @@ fn unmeasured_file(root: &std::path::Path, source: &str, stamp: &str, ext: &str)
                 &stamp[9..11],
                 &stamp[11..13],
                 &stamp[13..15]
-            ),
+            ))
+            .expect("instant"),
             bytes: 1,
             sha256: "x".into(),
-            received_utc: "2026-09-05T00:00:00Z".into(),
+            received_utc: IngestStamp::parse("2026-09-05T00:00:00Z").expect("instant"),
             sent_utc: None,
         },
     )
@@ -511,10 +513,10 @@ fn a_lease_picks_the_newest_clip_across_sources_not_the_alphabetical_one() {
             &store::Row {
                 source: source.into(),
                 filename: filename.clone(),
-                start_utc: iso.into(),
+                start_utc: IngestStamp::parse(iso).expect("instant"),
                 bytes: 1,
                 sha256: "x".into(),
-                received_utc: iso.into(),
+                received_utc: IngestStamp::parse(iso).expect("instant"),
                 sent_utc: None,
             },
         )

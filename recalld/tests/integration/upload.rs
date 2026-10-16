@@ -95,7 +95,7 @@ fn an_upload_is_recorded_in_the_ingest_plane_and_a_repeat_is_a_no_op() {
         .expect("row");
     assert_eq!(row.source, "meeting-20260703-0950");
     // The ingest plane's spelling, with a trailing Z.
-    assert_eq!(row.start_utc, "2026-07-03T08:50:00Z");
+    assert_eq!(row.start_utc.as_str(), "2026-07-03T08:50:00Z");
     assert_eq!(row.bytes, 11);
 }
 

@@ -1,6 +1,7 @@
 //! Clip identity (#1911): every stored file has exactly one clip, the file is
 //! the key, and a rename keeps the id.
 
+use audiocore::instant::IngestStamp;
 use recalld::store::{self, Row};
 use rusqlite::Connection;
 use transcript::Instant;
@@ -9,10 +10,10 @@ fn row(source: &str, filename: &str, start: &str) -> Row {
     Row {
         source: source.into(),
         filename: filename.into(),
-        start_utc: start.into(),
+        start_utc: IngestStamp::parse(start).expect("instant"),
         bytes: 1,
         sha256: "x".into(),
-        received_utc: start.into(),
+        received_utc: IngestStamp::parse(start).expect("instant"),
         sent_utc: None,
     }
 }
@@ -78,13 +79,8 @@ fn two_files_of_one_source_and_second_are_two_clips() {
 }
 
 #[test]
-fn a_start_that_will_not_convert_fails_the_files_own_insert() {
-    let (_dir, conn) = ingest();
-    let refused = store::insert(&conn, &row("usb", "usb-x.flac", "not a time"));
-
-    assert!(
-        refused.is_err(),
-        "a clip without a time must not be stored silently"
-    );
-    assert!(store::lookup(&conn, "usb-x.flac").unwrap().is_none());
+fn a_start_that_is_not_an_instant_cannot_become_a_row() {
+    // A clip without a time must not be stored silently: the row's type
+    // cannot hold one.
+    assert_eq!(IngestStamp::parse("not a time"), None);
 }

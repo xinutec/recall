@@ -3,6 +3,7 @@
 //! routes, so a second real recalld stands in for it here, which is why its
 //! file names follow recall's grammar. Drives the shipped binary.
 
+use audiocore::instant::IngestStamp;
 use recalld::app::{Config as ServerConfig, router};
 use std::path::Path;
 use std::process::Output;
@@ -51,10 +52,10 @@ fn queued_clip(root: &Path, source: &str, name: &str) {
         &recalld::store::Row {
             source: source.to_owned(),
             filename: name.to_owned(),
-            start_utc: "2026-10-10T10:00:00Z".to_owned(),
+            start_utc: IngestStamp::parse("2026-10-10T10:00:00Z").expect("instant"),
             bytes: 11,
             sha256: "x".to_owned(),
-            received_utc: "2026-10-10T10:01:00Z".to_owned(),
+            received_utc: IngestStamp::parse("2026-10-10T10:01:00Z").expect("instant"),
             sent_utc: None,
         },
     )

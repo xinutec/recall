@@ -8,7 +8,7 @@ use crate::ledger::{Outcome, record};
 use audiocore::instant::Stamp;
 use audiocore::job::Kind;
 use audiocore::work::Span;
-use chrono::{DateTime, SecondsFormat, Utc};
+use chrono::{DateTime, Utc};
 use rusqlite::Connection;
 use std::collections::{HashMap, HashSet};
 
@@ -249,7 +249,7 @@ pub fn derive_jobs(
             (
                 Kind::EnrollSpeaker,
                 &filename,
-                now.to_rfc3339_opts(SecondsFormat::Secs, true),
+                audiocore::instant::IngestStamp::of(now),
             ),
         )?;
     }

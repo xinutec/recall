@@ -1,5 +1,6 @@
 //! A clip's current model output, read by its id.
 
+use audiocore::instant::IngestStamp;
 use audiocore::job::Kind;
 use recalld::results::Outcome;
 use recalld::store::{self, Row};
@@ -14,10 +15,10 @@ fn a_clips_current_transcription_is_read_by_its_id_and_a_retranscription_replace
         &Row {
             source: "usb".into(),
             filename: name.into(),
-            start_utc: "2026-10-04T12:00:00Z".into(),
+            start_utc: IngestStamp::parse("2026-10-04T12:00:00Z").expect("instant"),
             bytes: 1,
             sha256: "x".into(),
-            received_utc: "2026-10-04T12:00:00Z".into(),
+            received_utc: IngestStamp::parse("2026-10-04T12:00:00Z").expect("instant"),
             sent_utc: None,
         },
     )
@@ -72,10 +73,10 @@ fn a_refusal_is_told_apart_from_not_yet_done() {
         &Row {
             source: "usb".into(),
             filename: name.into(),
-            start_utc: "2026-10-04T12:00:00Z".into(),
+            start_utc: IngestStamp::parse("2026-10-04T12:00:00Z").expect("instant"),
             bytes: 1,
             sha256: "x".into(),
-            received_utc: "2026-10-04T12:00:00Z".into(),
+            received_utc: IngestStamp::parse("2026-10-04T12:00:00Z").expect("instant"),
             sent_utc: None,
         },
     )

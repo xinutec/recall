@@ -12,12 +12,13 @@
 use crate::app::Config;
 use crate::store::{self, Row};
 use crate::tokens::Verdict;
+use audiocore::instant::IngestStamp;
 use audiocore::names::{self, SegmentName};
 use axum::body::Bytes;
 use axum::extract::{Path, Query, State};
 use axum::http::{HeaderMap, StatusCode, header};
 use axum::response::{IntoResponse, Response};
-use chrono::{SecondsFormat, Utc};
+use chrono::Utc;
 use serde::Deserialize;
 use serde_json::json;
 use sha2::{Digest, Sha256};
@@ -111,8 +112,7 @@ const DIVERGENT: &str = "a different segment already holds this name";
 
 /// Whether an operator forgot this minute (`crate::forget`).
 fn was_forgotten(root: &FsPath, name: &SegmentName) -> rusqlite::Result<bool> {
-    let started = audiocore::instant::parse_utc(&name.start_utc)
-        .expect("names::parse spells the start it validated");
+    let started = name.start_utc.utc();
     crate::upload::was_deleted(&crate::reads::open(root)?, &name.source, started)
 }
 
@@ -163,7 +163,7 @@ fn store_segment(
         start_utc: name.start_utc.clone(),
         bytes: body.len() as u64,
         sha256: sha256.clone(),
-        received_utc: Utc::now().to_rfc3339_opts(SecondsFormat::Secs, true),
+        received_utc: IngestStamp::now(),
         sent_utc,
     };
     if let Err(err) = store::insert(&conn, &row) {

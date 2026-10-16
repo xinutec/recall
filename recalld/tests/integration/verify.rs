@@ -2,6 +2,7 @@
 //! present with the size and hash its row recorded, every meaning-plane audio
 //! row naming a file that exists.
 
+use audiocore::instant::IngestStamp;
 use recalld::store::Row;
 use recalld::verify::{self, Verified};
 use rusqlite::Connection;
@@ -47,10 +48,10 @@ impl Archive {
             &Row {
                 source: "geb".to_owned(),
                 filename: filename.to_owned(),
-                start_utc: "2026-10-01T12:00:00Z".to_owned(),
+                start_utc: IngestStamp::parse("2026-10-01T12:00:00Z").expect("instant"),
                 bytes: u64::try_from(recorded.len()).expect("small"),
                 sha256: hex::encode(Sha256::digest(recorded)),
-                received_utc: "2026-10-01T12:01:00Z".to_owned(),
+                received_utc: IngestStamp::parse("2026-10-01T12:01:00Z").expect("instant"),
                 sent_utc: None,
             },
         )

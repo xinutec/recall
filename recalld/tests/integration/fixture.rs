@@ -1,6 +1,7 @@
 //! A fleet in a temporary root: clips with stored results in the ingest plane,
 //! their audio rows in the meaning plane, and the rendered view over them.
 
+use audiocore::instant::IngestStamp;
 use audiocore::job::Kind;
 use rusqlite::Connection;
 use transcript::Clip;
@@ -78,10 +79,10 @@ impl Fleet {
             &recalld::store::Row {
                 source: source.into(),
                 filename: filename.clone(),
-                start_utc: at.to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
+                start_utc: IngestStamp::of(at),
                 bytes: 1,
                 sha256: "x".into(),
-                received_utc: at.to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
+                received_utc: IngestStamp::of(at),
                 sent_utc: None,
             },
         )

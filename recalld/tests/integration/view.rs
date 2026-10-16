@@ -2,6 +2,7 @@
 //! only when what it is made from moved, keeps the ids of lines that did not
 //! change, and shows a live turn until a transcribed clip covers it.
 
+use audiocore::instant::IngestStamp;
 use audiocore::job::Kind;
 use recalld::view::{self, Refreshed};
 use rusqlite::Connection;
@@ -90,10 +91,10 @@ fn fleet() -> Fleet {
         &recalld::store::Row {
             source: "usb".into(),
             filename: FILE.into(),
-            start_utc: "2026-10-04T12:00:00Z".into(),
+            start_utc: IngestStamp::parse("2026-10-04T12:00:00Z").expect("instant"),
             bytes: 1,
             sha256: "x".into(),
-            received_utc: "2026-10-04T12:00:00Z".into(),
+            received_utc: IngestStamp::parse("2026-10-04T12:00:00Z").expect("instant"),
             sent_utc: None,
         },
     )
@@ -316,10 +317,10 @@ fn a_clip_whose_rows_will_not_write_is_reported_and_the_rest_still_render() {
         &recalld::store::Row {
             source: "usb".into(),
             filename: SECOND.into(),
-            start_utc: "2026-10-04T12:01:00Z".into(),
+            start_utc: IngestStamp::parse("2026-10-04T12:01:00Z").expect("instant"),
             bytes: 1,
             sha256: "y".into(),
-            received_utc: "2026-10-04T12:01:00Z".into(),
+            received_utc: IngestStamp::parse("2026-10-04T12:01:00Z").expect("instant"),
             sent_utc: None,
         },
     )
@@ -426,10 +427,11 @@ fn a_refresh_writes_its_clips_in_one_commit_not_one_each() {
             &recalld::store::Row {
                 source: "usb".into(),
                 filename: name.clone(),
-                start_utc: format!("2026-10-04T12:{minute:02}:00Z"),
+                start_utc: IngestStamp::parse(&format!("2026-10-04T12:{minute:02}:00Z"))
+                    .expect("instant"),
                 bytes: 1,
                 sha256: "y".into(),
-                received_utc: "2026-10-04T12:10:00Z".into(),
+                received_utc: IngestStamp::parse("2026-10-04T12:10:00Z").expect("instant"),
                 sent_utc: None,
             },
         )

@@ -3,6 +3,7 @@
 //! person's later act makes stale.
 
 use crate::fixture::Fleet;
+use audiocore::instant::IngestStamp;
 use audiocore::job::Kind;
 use audiocore::work::Span;
 use chrono::{DateTime, Utc};
@@ -360,10 +361,10 @@ fn delivered_at(root: &std::path::Path, filename: &str, start_utc: &str) {
         &store::Row {
             source: "usb".into(),
             filename: filename.into(),
-            start_utc: start_utc.into(),
+            start_utc: IngestStamp::parse(start_utc).expect("instant"),
             bytes: 1,
             sha256: "x".into(),
-            received_utc: "2026-09-10T10:01:00Z".into(),
+            received_utc: IngestStamp::parse("2026-09-10T10:01:00Z").expect("instant"),
             sent_utc: None,
         },
     )

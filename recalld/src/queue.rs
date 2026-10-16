@@ -6,9 +6,10 @@
 
 use crate::same_speech::COPY_SECONDS;
 use crate::store::{self, ROOM_SOURCE};
+use audiocore::instant::IngestStamp;
 use audiocore::job::Kind;
 use audiocore::work::Job;
-use chrono::{DateTime, Duration, SecondsFormat, Utc};
+use chrono::{DateTime, Duration, Utc};
 use rusqlite::{Connection, OptionalExtension};
 use std::path::Path;
 
@@ -94,10 +95,6 @@ const LEASE_TTL_S: i64 = 10 * 60;
 /// kills the shim would hold the GPU for ever.
 pub const MAX_ATTEMPTS: i64 = 3;
 
-fn iso(t: DateTime<Utc>) -> String {
-    t.to_rfc3339_opts(SecondsFormat::Secs, true)
-}
-
 /// Derive the diarize job for every clip whose transcription succeeded and has
 /// none: without words to align, diarization attributes nothing. [`done`]
 /// derives each as its transcription lands; this catches up on any it missed.
@@ -112,7 +109,10 @@ pub fn derive_follow_ons(conn: &Connection, now: DateTime<Utc>) -> rusqlite::Res
     };
     let mut derived = 0;
     for filename in missing {
-        derived += DERIVE_JOB.execute(conn, (Kind::DiarizeSegment, &filename, iso(now)))?;
+        derived += DERIVE_JOB.execute(
+            conn,
+            (Kind::DiarizeSegment, &filename, IngestStamp::of(now)),
+        )?;
     }
     Ok(derived)
 }
@@ -175,7 +175,10 @@ pub fn derive_segment_jobs(
             }
             taken.push((source.clone(), start));
         }
-        inserted += DERIVE_JOB.execute(ingest, (Kind::TranscribeSegment, &filename, iso(now)))?;
+        inserted += DERIVE_JOB.execute(
+            ingest,
+            (Kind::TranscribeSegment, &filename, IngestStamp::of(now)),
+        )?;
     }
     Ok(inserted)
 }
@@ -204,20 +207,30 @@ pub fn lease_on(
     let kinds = serde_json::to_string(&kinds)
         .map_err(|e| rusqlite::Error::ToSqlConversionFailure(e.into()))?;
     let job: Option<Job> = LEASE
-        .query_row(conn, (iso(now), kinds, Kind::EnrollSpeaker), |r| {
-            Ok(Job {
-                id: r.get(0)?,
-                kind: r.get(1)?,
-                filename: r.get(2)?,
-                source: r.get(3)?,
-                // Filled by the caller, which can reach the meaning plane.
-                spans: Vec::new(),
-                language: None,
-            })
-        })
+        .query_row(
+            conn,
+            (IngestStamp::of(now), kinds, Kind::EnrollSpeaker),
+            |r| {
+                Ok(Job {
+                    id: r.get(0)?,
+                    kind: r.get(1)?,
+                    filename: r.get(2)?,
+                    source: r.get(3)?,
+                    // Filled by the caller, which can reach the meaning plane.
+                    spans: Vec::new(),
+                    language: None,
+                })
+            },
+        )
         .optional()?;
     if let Some(job) = &job {
-        LEASE_JOB.execute(conn, (iso(now + Duration::seconds(LEASE_TTL_S)), job.id))?;
+        LEASE_JOB.execute(
+            conn,
+            (
+                IngestStamp::of(now + Duration::seconds(LEASE_TTL_S)),
+                job.id,
+            ),
+        )?;
     }
     tx.commit()?;
     Ok(job)
@@ -230,7 +243,10 @@ pub fn lease_on(
 /// If the store refuses.
 pub fn renew(root: &Path, id: i64, now: DateTime<Utc>) -> rusqlite::Result<bool> {
     let conn = store::open(root)?;
-    Ok(RENEW.execute(&conn, (iso(now + Duration::seconds(LEASE_TTL_S)), id))? == 1)
+    Ok(RENEW.execute(
+        &conn,
+        (IngestStamp::of(now + Duration::seconds(LEASE_TTL_S)), id),
+    )? == 1)
 }
 
 /// Retire every job whose leases are spent and lapsed, as a failure.
@@ -238,7 +254,7 @@ fn retire_exhausted(conn: &Connection, now: DateTime<Utc>) -> rusqlite::Result<u
     RETIRE_EXHAUSTED.execute(
         conn,
         (
-            iso(now),
+            IngestStamp::of(now),
             format!(r#"{{"ok":false,"error":"gave up after {MAX_ATTEMPTS} attempts"}}"#),
             MAX_ATTEMPTS,
         ),
@@ -250,11 +266,16 @@ fn retire_exhausted(conn: &Connection, now: DateTime<Utc>) -> rusqlite::Result<u
 pub fn done(root: &Path, id: i64, result: &str, now: DateTime<Utc>) -> rusqlite::Result<bool> {
     let mut conn = store::open(root)?;
     let tx = crate::sql::write(&mut conn)?;
-    let updated = FINISH.execute(&tx, (iso(now), result, id))?;
+    let updated = FINISH.execute(&tx, (IngestStamp::of(now), result, id))?;
     if updated == 1 {
         FOLLOW_ON_OF.execute(
             &tx,
-            (Kind::DiarizeSegment, iso(now), id, Kind::TranscribeSegment),
+            (
+                Kind::DiarizeSegment,
+                IngestStamp::of(now),
+                id,
+                Kind::TranscribeSegment,
+            ),
         )?;
     }
     tx.commit()?;

@@ -2,6 +2,7 @@
 //! Only the model is substituted, by a stub shim speaking the real protocol;
 //! the queue, blob store, auth gate, client and stdio driver are the shipped ones.
 
+use audiocore::instant::IngestStamp;
 use recalld::app::{Config as ServerConfig, router};
 use runner::client::Client;
 use runner::shim::{self, Shim};
@@ -51,10 +52,10 @@ fn queued_clip(root: &Path, name: &str, bytes: &[u8]) {
         &recalld::store::Row {
             source: "usb".to_owned(),
             filename: name.to_owned(),
-            start_utc: "2026-09-06T10:00:00Z".to_owned(),
+            start_utc: IngestStamp::parse("2026-09-06T10:00:00Z").expect("instant"),
             bytes: bytes.len() as u64,
             sha256: "x".to_owned(),
-            received_utc: "2026-09-06T10:01:00Z".to_owned(),
+            received_utc: IngestStamp::parse("2026-09-06T10:01:00Z").expect("instant"),
             sent_utc: None,
         },
     )

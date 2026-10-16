@@ -6,8 +6,8 @@
 //! ([`crate::sessions::delete_session`]) uses them too. Each recording is
 //! tombstoned, so delivering it again is refused.
 
+use audiocore::instant::IngestStamp;
 use audiocore::instant::{self, Stamp};
-use audiocore::names::SegmentStart;
 use chrono::{DateTime, Utc};
 use rusqlite::Connection;
 use serde::Serialize;
@@ -74,8 +74,8 @@ impl Span {
         (from < to).then_some(Self { from, to })
     }
 
-    fn ingest(&self) -> (SegmentStart, SegmentStart) {
-        (SegmentStart::of(self.from), SegmentStart::of(self.to))
+    fn ingest(&self) -> (IngestStamp, IngestStamp) {
+        (IngestStamp::of(self.from), IngestStamp::of(self.to))
     }
 
     fn meaning(&self) -> (Stamp, Stamp) {

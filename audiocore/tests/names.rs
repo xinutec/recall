@@ -7,7 +7,7 @@ use audiocore::names::{Extension, NameError, parse, valid_source};
 fn a_wellformed_name_decomposes() {
     let name = parse("usb", "usb-20260905T120000.flac").expect("valid");
     assert_eq!(name.source, "usb");
-    assert_eq!(name.start_utc, "2026-09-05T12:00:00Z");
+    assert_eq!(name.start_utc.as_str(), "2026-09-05T12:00:00Z");
     assert_eq!(name.ext, Extension::Flac);
 }
 
@@ -23,7 +23,7 @@ fn a_phones_own_copy_is_named_apart_from_its_streams() {
     // The host cuts a phone's stream and the phone keeps its own copy of the
     // same minute; both are FLAC and often open in the same second.
     let own = parse("pixel5", "pixel5-20261003T120000.phone.flac").expect("valid");
-    assert_eq!(own.start_utc, "2026-10-03T12:00:00Z");
+    assert_eq!(own.start_utc.as_str(), "2026-10-03T12:00:00Z");
     assert_eq!(own.ext, Extension::Flac);
     assert_eq!(
         parse("pixel5", "pixel5-20261003T120000.tablet.flac"),
@@ -71,7 +71,7 @@ fn an_uploaded_recordings_container_is_a_deliverable_one() {
             &format!("meeting-20260907-0905-20260907T080526.{ext}"),
         )
         .unwrap_or_else(|_| panic!(".{ext} must be accepted"));
-        assert_eq!(name.start_utc, "2026-09-07T08:05:26Z");
+        assert_eq!(name.start_utc.as_str(), "2026-09-07T08:05:26Z");
     }
 }
 

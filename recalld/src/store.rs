@@ -1,6 +1,7 @@
 //! The ingest plane's bookkeeping: one row per stored blob, in
 //! `<root>/ingest.sqlite`. Append-only, except [`forget_files`].
 
+use audiocore::instant::IngestStamp;
 use rusqlite::{Connection, OptionalExtension};
 use serde::Serialize;
 use std::path::Path;
@@ -58,10 +59,10 @@ fn row(r: &rusqlite::Row<'_>) -> rusqlite::Result<Row> {
 pub struct Row {
     pub source: String,
     pub filename: String,
-    pub start_utc: String,
+    pub start_utc: IngestStamp,
     pub bytes: u64,
     pub sha256: String,
-    pub received_utc: String,
+    pub received_utc: IngestStamp,
     /// The recorder's clock at upload, to measure clock skew against (arrival
     /// is latency, not skew: a backlog arrives late).
     pub sent_utc: Option<String>,

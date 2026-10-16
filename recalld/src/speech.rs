@@ -67,7 +67,7 @@ pub fn scan_once(root: &Path, batch: usize) -> rusqlite::Result<usize> {
                 &filename,
                 &source,
                 seconds,
-                chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
+                audiocore::instant::IngestStamp::now(),
                 regions_json(found.ok().as_deref())?,
             ),
         )?;

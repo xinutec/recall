@@ -1,5 +1,6 @@
 //! What the fleet can say about the live feed, from both planes.
 
+use audiocore::instant::IngestStamp;
 use audiocore::instant::python_isoformat_utc;
 use recalld::live_tier::live_health;
 use recalld::store;
@@ -50,10 +51,10 @@ fn clip(root: &Path, source_id: &str, name: &str, minute: u32, speech: Option<f6
         &store::Row {
             source: source_id.to_owned(),
             filename: name.to_owned(),
-            start_utc: start.clone(),
+            start_utc: IngestStamp::parse(&start).expect("instant"),
             bytes: 1,
             sha256: "x".to_owned(),
-            received_utc: start.clone(),
+            received_utc: IngestStamp::parse(&start).expect("instant"),
             sent_utc: None,
         },
     )

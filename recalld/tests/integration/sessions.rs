@@ -1,6 +1,7 @@
 //! Uploaded meetings: the list, the guards that keep household capture out of
 //! reach, and the transcript export.
 
+use audiocore::instant::IngestStamp;
 use audiocore::job::Kind;
 use recalld::sessions::{
     self, ExportTurn, SessionError, clean_transcript, parse_language, rediarize, rename,
@@ -179,10 +180,10 @@ fn diarized_meeting(source: &str) -> tempfile::TempDir {
             &recalld::store::Row {
                 source: source.to_owned(),
                 filename: filename.clone(),
-                start_utc: "2026-07-03T09:50:00Z".to_owned(),
+                start_utc: IngestStamp::parse("2026-07-03T09:50:00Z").expect("instant"),
                 bytes: 1,
                 sha256: "x".to_owned(),
-                received_utc: NOW.to_owned(),
+                received_utc: IngestStamp::parse(NOW).expect("instant"),
                 sent_utc: None,
             },
         )
@@ -687,10 +688,10 @@ fn deleting_a_session_forgets_its_words_in_the_ingest_plane_too() {
             &recalld::store::Row {
                 source: source.into(),
                 filename: name.into(),
-                start_utc: "2026-10-04T12:00:00Z".into(),
+                start_utc: IngestStamp::parse("2026-10-04T12:00:00Z").expect("instant"),
                 bytes: 1,
                 sha256: "x".into(),
-                received_utc: "2026-10-04T12:00:00Z".into(),
+                received_utc: IngestStamp::parse("2026-10-04T12:00:00Z").expect("instant"),
                 sent_utc: None,
             },
         )
