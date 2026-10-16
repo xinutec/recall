@@ -21,13 +21,21 @@ use audiocore::instant::Stamp;
 pub const SHIM_MODEL: &str = "mlx-community/whisper-large-v3-turbo";
 use audiocore::job::Kind;
 use rusqlite::Connection;
-use rusqlite::types::Value;
 use std::collections::{HashMap, HashSet};
 use std::hash::{Hash, Hasher};
 use std::path::Path;
 use transcript::render::{Author, Dropped, Line, Speaker, Why};
 use transcript::voice::Voiceprint;
 use transcript::{Clip, EditId, Instant};
+
+/// `rendered_lines`' columns, in [`StoredLine`]'s order after the id.
+macro_rules! line_columns {
+    () => {
+        "id, clip_id, audio_segment_id, source_id, start_utc, end_utc, text, language,
+         asr_confidence, asr_model, speaker_label, speaker_guess, speaker_score,
+         speaker_cluster, tier, hidden_reason, words_checked, edit_id, live_id, word_timings"
+    };
+}
 
 crate::statements! {
     /// Every recording a person can see lines from, newest first so a full
@@ -47,17 +55,11 @@ crate::statements! {
     SOURCE_EDITS: Meaning =
         "SELECT source_id, max(id) FROM edits WHERE source_id IS NOT NULL GROUP BY source_id";
     STORED_INPUTS: Meaning = "SELECT clip_id, inputs FROM rendered_clips";
-    /// The id, then every stored column in [`INSERT_LINE`]'s order.
     OLD_ROWS: Meaning =
-        "SELECT id, clip_id, audio_segment_id, source_id, start_utc, end_utc, text, language,
-             asr_confidence, asr_model, speaker_label, speaker_guess, speaker_score,
-             speaker_cluster, tier, hidden_reason, words_checked, edit_id, live_id, word_timings
-         FROM rendered_lines WHERE clip_id = ?1 ORDER BY id";
+        "SELECT ", line_columns!(), " FROM rendered_lines WHERE clip_id = ?1 ORDER BY id";
     DROP_CLIP: Meaning = "DELETE FROM rendered_lines WHERE clip_id = ?1";
     INSERT_LINE: Meaning =
-        "INSERT INTO rendered_lines (id, clip_id, audio_segment_id, source_id, start_utc, end_utc,
-             text, language, asr_confidence, asr_model, speaker_label, speaker_guess, speaker_score,
-             speaker_cluster, tier, hidden_reason, words_checked, edit_id, live_id, word_timings)
+        "INSERT INTO rendered_lines (", line_columns!(), ")
          VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18,
                  ?19, ?20)";
     SET_INPUTS: Meaning =
@@ -66,10 +68,7 @@ crate::statements! {
     LIVE_TURNS: Meaning = "SELECT id, start_utc, end_utc, text, language FROM live_lines";
     /// As [`OLD_ROWS`], for the live lines.
     OLD_LIVE: Meaning =
-        "SELECT id, clip_id, audio_segment_id, source_id, start_utc, end_utc, text, language,
-             asr_confidence, asr_model, speaker_label, speaker_guess, speaker_score,
-             speaker_cluster, tier, hidden_reason, words_checked, edit_id, live_id, word_timings
-         FROM rendered_lines WHERE live_id IS NOT NULL ORDER BY id";
+        "SELECT ", line_columns!(), " FROM rendered_lines WHERE live_id IS NOT NULL ORDER BY id";
     DROP_LIVE: Meaning = "DELETE FROM rendered_lines WHERE live_id IS NOT NULL";
 }
 
@@ -417,7 +416,7 @@ fn write_clip(
     known: Option<&str>,
 ) -> rusqlite::Result<Wrote> {
     let sp = tx.savepoint()?;
-    let mut old: Vec<(i64, Vec<Value>)> = Vec::new();
+    let mut old: Vec<(i64, StoredLine)> = Vec::new();
     {
         let mut stmt = OLD_ROWS.prepare(&sp)?;
         let found = stmt.query_map([s.clip.id.stored()], stored_row)?;
@@ -431,8 +430,8 @@ fn write_clip(
         Wrote::Nothing
     } else {
         DROP_CLIP.execute(&sp, [s.clip.id.stored()])?;
-        for (id, values) in &new {
-            insert(&sp, *id, values)?;
+        for (id, line) in &new {
+            insert(&sp, *id, line)?;
         }
         Wrote::Lines
     };
@@ -446,12 +445,57 @@ fn write_clip(
     Ok(wrote)
 }
 
-/// A stored row: its id, and the columns [`Row::values`] gives.
-fn stored_row(r: &rusqlite::Row<'_>) -> rusqlite::Result<(i64, Vec<Value>)> {
-    let values = (1..=COLUMNS)
-        .map(|i| r.get::<_, Value>(i))
-        .collect::<rusqlite::Result<_>>()?;
-    Ok((r.get(0)?, values))
+/// A `rendered_lines` row after its id, column for column: what is written,
+/// and what a stored row is compared with, so equal means stored unchanged.
+#[derive(Debug, Clone, PartialEq)]
+struct StoredLine {
+    clip_id: Option<i64>,
+    audio_segment_id: Option<i64>,
+    source_id: Option<String>,
+    start_utc: String,
+    end_utc: String,
+    text: String,
+    language: Option<String>,
+    asr_confidence: Option<f64>,
+    asr_model: Option<String>,
+    speaker_label: Option<String>,
+    speaker_guess: Option<String>,
+    speaker_score: Option<f64>,
+    speaker_cluster: Option<String>,
+    tier: String,
+    hidden_reason: Option<String>,
+    words_checked: Option<i64>,
+    edit_id: Option<i64>,
+    live_id: Option<i64>,
+    word_timings: Option<String>,
+}
+
+/// A stored row: its id, and its [`StoredLine`].
+fn stored_row(r: &rusqlite::Row<'_>) -> rusqlite::Result<(i64, StoredLine)> {
+    Ok((
+        r.get("id")?,
+        StoredLine {
+            clip_id: r.get("clip_id")?,
+            audio_segment_id: r.get("audio_segment_id")?,
+            source_id: r.get("source_id")?,
+            start_utc: r.get("start_utc")?,
+            end_utc: r.get("end_utc")?,
+            text: r.get("text")?,
+            language: r.get("language")?,
+            asr_confidence: r.get("asr_confidence")?,
+            asr_model: r.get("asr_model")?,
+            speaker_label: r.get("speaker_label")?,
+            speaker_guess: r.get("speaker_guess")?,
+            speaker_score: r.get("speaker_score")?,
+            speaker_cluster: r.get("speaker_cluster")?,
+            tier: r.get("tier")?,
+            hidden_reason: r.get("hidden_reason")?,
+            words_checked: r.get("words_checked")?,
+            edit_id: r.get("edit_id")?,
+            live_id: r.get("live_id")?,
+            word_timings: r.get("word_timings")?,
+        },
+    ))
 }
 
 /// The new rows with the ids they keep: same span and still hidden or still
@@ -460,18 +504,20 @@ fn stored_row(r: &rusqlite::Row<'_>) -> rusqlite::Result<(i64, Vec<Value>)> {
 /// back.
 fn with_ids(
     rows: &[Row],
-    old: &[(i64, Vec<Value>)],
+    old: &[(i64, StoredLine)],
     shown: Option<&Shown>,
     source: &str,
-) -> Vec<(Option<i64>, Vec<Value>)> {
-    let text = |v: &Value| match v {
-        Value::Text(t) => t.clone(),
-        _ => String::new(),
+) -> Vec<(Option<i64>, StoredLine)> {
+    let key = |l: &StoredLine| {
+        (
+            l.start_utc.clone(),
+            l.end_utc.clone(),
+            l.hidden_reason.is_some(),
+        )
     };
-    let key = |v: &[Value]| (text(&v[START]), text(&v[END]), v[HIDDEN] != Value::Null);
     let mut free: HashMap<(String, String, bool), std::collections::VecDeque<i64>> = HashMap::new();
-    for (id, v) in old {
-        free.entry(key(v)).or_default().push_back(*id);
+    for (id, line) in old {
+        free.entry(key(line)).or_default().push_back(*id);
     }
     let mut take = |k: (String, String, bool)| {
         free.get_mut(&k)
@@ -479,29 +525,49 @@ fn with_ids(
     };
     rows.iter()
         .map(|row| {
-            let values = row.values(shown, source);
-            let (start, end, hidden) = key(&values);
+            let line = row.stored(shown, source);
+            let (start, end, hidden) = key(&line);
             let id =
                 take((start.clone(), end.clone(), hidden)).or_else(|| take((start, end, !hidden)));
-            (id, values)
+            (id, line)
         })
         .collect()
 }
 
 /// Whether the new rows are the stored ones, ids and all.
-fn same(old: &[(i64, Vec<Value>)], new: &[(Option<i64>, Vec<Value>)]) -> bool {
-    let by_id: HashMap<i64, &Vec<Value>> = old.iter().map(|(id, v)| (*id, v)).collect();
+fn same(old: &[(i64, StoredLine)], new: &[(Option<i64>, StoredLine)]) -> bool {
+    let by_id: HashMap<i64, &StoredLine> = old.iter().map(|(id, l)| (*id, l)).collect();
     old.len() == new.len()
         && new
             .iter()
-            .all(|(id, values)| id.and_then(|id| by_id.get(&id)) == Some(&values))
+            .all(|(id, line)| id.and_then(|id| by_id.get(&id)) == Some(&line))
 }
 
-fn insert(conn: &Connection, id: Option<i64>, values: &[Value]) -> rusqlite::Result<()> {
-    let id = id.map_or(Value::Null, Value::Integer);
+fn insert(conn: &Connection, id: Option<i64>, l: &StoredLine) -> rusqlite::Result<()> {
     INSERT_LINE.execute(
         conn,
-        rusqlite::params_from_iter(std::iter::once(&id).chain(values)),
+        rusqlite::params![
+            id,
+            l.clip_id,
+            l.audio_segment_id,
+            l.source_id,
+            l.start_utc,
+            l.end_utc,
+            l.text,
+            l.language,
+            l.asr_confidence,
+            l.asr_model,
+            l.speaker_label,
+            l.speaker_guess,
+            l.speaker_score,
+            l.speaker_cluster,
+            l.tier,
+            l.hidden_reason,
+            l.words_checked,
+            l.edit_id,
+            l.live_id,
+            l.word_timings,
+        ],
     )?;
     Ok(())
 }
@@ -636,42 +702,31 @@ impl Row {
         }
     }
 
-    /// The stored columns after the id, in [`INSERT_LINE`]'s order: what is
-    /// written, and what a stored row is compared with.
-    fn values(&self, shown: Option<&Shown>, source: &str) -> Vec<Value> {
-        let text = |t: Option<&str>| t.map_or(Value::Null, |t| Value::Text(t.to_owned()));
-        let int = |i: Option<i64>| i.map_or(Value::Null, Value::Integer);
-        let real = |f: Option<f64>| f.map_or(Value::Null, Value::Real);
-        vec![
-            int(shown.map(|s| s.clip.id.stored())),
-            int(shown.map(|s| s.audio_id)),
-            text((!source.is_empty()).then_some(source)),
-            Value::Text(self.start.to_string()),
-            Value::Text(self.end.to_string()),
-            Value::Text(self.text.clone()),
-            text(self.language.as_deref()),
-            real(self.confidence),
-            Value::Text(self.model.to_owned()),
-            text(self.label.as_deref()),
-            text(self.guess.as_deref()),
-            real(self.score),
-            text(self.cluster.as_deref()),
-            Value::Text(self.tier.as_str().to_owned()),
-            text(self.hidden.map(HiddenReason::as_str)),
-            int(self.checked.then_some(1)),
-            int(self.edit),
-            int(self.live),
-            text(self.words.as_deref()),
-        ]
+    /// The row as stored.
+    fn stored(&self, shown: Option<&Shown>, source: &str) -> StoredLine {
+        StoredLine {
+            clip_id: shown.map(|s| s.clip.id.stored()),
+            audio_segment_id: shown.map(|s| s.audio_id),
+            source_id: (!source.is_empty()).then(|| source.to_owned()),
+            start_utc: self.start.to_string(),
+            end_utc: self.end.to_string(),
+            text: self.text.clone(),
+            language: self.language.clone(),
+            asr_confidence: self.confidence,
+            asr_model: Some(self.model.to_owned()),
+            speaker_label: self.label.clone(),
+            speaker_guess: self.guess.clone(),
+            speaker_score: self.score,
+            speaker_cluster: self.cluster.clone(),
+            tier: self.tier.as_str().to_owned(),
+            hidden_reason: self.hidden.map(|h| h.as_str().to_owned()),
+            words_checked: self.checked.then_some(1),
+            edit_id: self.edit,
+            live_id: self.live,
+            word_timings: self.words.clone(),
+        }
     }
 }
-
-/// How many columns [`Row::values`] gives, and where four of them are.
-const COLUMNS: usize = 19;
-const START: usize = 3;
-const END: usize = 4;
-const HIDDEN: usize = 14;
-const LIVE: usize = 17;
 
 /// Show each live turn no transcribed clip covers; returns how many.
 fn live(meaning: &Connection, transcribed: &[(Instant, Instant)]) -> rusqlite::Result<usize> {
@@ -682,16 +737,13 @@ fn live(meaning: &Connection, transcribed: &[(Instant, Instant)]) -> rusqlite::R
         })?
         .collect::<rusqlite::Result<_>>()?;
     let tx = crate::sql::write_shared(meaning)?;
-    let old: Vec<(i64, Vec<Value>)> = OLD_LIVE
+    let old: Vec<(i64, StoredLine)> = OLD_LIVE
         .prepare(&tx)?
         .query_map([], stored_row)?
         .collect::<rusqlite::Result<_>>()?;
     let by_turn: HashMap<i64, i64> = old
         .iter()
-        .filter_map(|(id, v)| match v[LIVE] {
-            Value::Integer(turn) => Some((turn, *id)),
-            _ => None,
-        })
+        .filter_map(|(id, line)| line.live_id.map(|turn| (turn, *id)))
         .collect();
     let mut new = Vec::new();
     for (live_id, start, end, text, language) in turns {
@@ -719,7 +771,7 @@ fn live(meaning: &Connection, transcribed: &[(Instant, Instant)]) -> rusqlite::R
             live: Some(live_id),
             words: None,
         };
-        new.push((by_turn.get(&live_id).copied(), row.values(None, "")));
+        new.push((by_turn.get(&live_id).copied(), row.stored(None, "")));
     }
     // Unchanged, as on almost every pass: no write, no commit.
     if same(&old, &new) {
@@ -727,8 +779,8 @@ fn live(meaning: &Connection, transcribed: &[(Instant, Instant)]) -> rusqlite::R
         return Ok(new.len());
     }
     DROP_LIVE.execute(&tx, [])?;
-    for (id, values) in &new {
-        insert(&tx, *id, values)?;
+    for (id, line) in &new {
+        insert(&tx, *id, line)?;
     }
     tx.commit()?;
     Ok(new.len())
