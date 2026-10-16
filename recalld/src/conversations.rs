@@ -7,6 +7,7 @@
 use crate::same_speech::{overlap, same_span, seconds as seconds_between};
 use chrono::{DateTime, Utc};
 use std::collections::HashMap;
+use transcript::SourceId;
 
 /// A conversation breaks after a silence longer than this; the `gap` query
 /// parameter overrides it.
@@ -19,7 +20,7 @@ pub struct Turn {
     pub start: DateTime<Utc>,
     pub end: DateTime<Utc>,
     pub speaker_label: Option<String>,
-    pub source_id: Option<String>,
+    pub source_id: Option<SourceId>,
     pub asr_confidence: Option<f64>,
     pub speaker_guess: Option<String>,
     pub speaker_score: Option<f64>,
@@ -229,7 +230,7 @@ fn spine(turns: &[Turn], stretch: &[usize]) -> (Vec<usize>, Vec<usize>) {
     let mut order: Vec<Option<&str>> = Vec::new();
     let mut by_source: HashMap<Option<&str>, Vec<usize>> = HashMap::new();
     for &index in stretch {
-        let source = turns[index].source_id.as_deref();
+        let source = turns[index].source_id.as_ref().map(SourceId::as_str);
         if !by_source.contains_key(&source) {
             order.push(source);
         }
@@ -385,23 +386,14 @@ fn distinct<'a>(values: impl Iterator<Item = Option<&'a str>>) -> Vec<String> {
     seen
 }
 
-/// A row whose time will not parse is dropped, not defaulted: an epoch would
-/// split the conversation.
 fn turns_of(segments: &[reads::Segment]) -> (Vec<Turn>, Vec<usize>) {
     let mut turns = Vec::with_capacity(segments.len());
     let mut kept = Vec::with_capacity(segments.len());
     for (index, segment) in segments.iter().enumerate() {
-        let (Ok(start), Ok(end)) = (
-            DateTime::parse_from_rfc3339(&segment.start_utc),
-            DateTime::parse_from_rfc3339(&segment.end_utc),
-        ) else {
-            tracing::warn!("turn {} has an unparseable span, skipped", segment.id);
-            continue;
-        };
         turns.push(Turn {
             id: segment.id,
-            start: start.with_timezone(&Utc),
-            end: end.with_timezone(&Utc),
+            start: segment.start_utc.utc(),
+            end: segment.end_utc.utc(),
             speaker_label: segment.speaker_label.clone(),
             source_id: segment.source_id.clone(),
             asr_confidence: segment.asr_confidence,
@@ -443,11 +435,11 @@ fn moment_out(
     let row = |i: usize| &segments[kept[i]];
     let line = row(moment.primary);
     let guess = best_colocated_guess(turns, moment.primary, &moment.alternates);
-    // The stored text, not a reformatted instant: chrono trims trailing zeros
-    // (.960 for .960000), changing every timestamp on the wire.
+    // The stored spelling, not chrono's: it trims trailing zeros (.960 for
+    // .960000), changing every timestamp on the wire.
     MomentOut {
-        start: line.start_utc.clone(),
-        end: line.end_utc.clone(),
+        start: line.start_utc.to_string(),
+        end: line.end_utc.to_string(),
         primary: reads::to_out_with(line, Some(guess)),
         alternates: moment
             .alternates
@@ -457,7 +449,7 @@ fn moment_out(
         sources: distinct(
             std::iter::once(moment.primary)
                 .chain(moment.alternates.iter().copied())
-                .map(|i| turns[i].source_id.as_deref()),
+                .map(|i| turns[i].source_id.as_ref().map(SourceId::as_str)),
         ),
     }
 }
@@ -483,10 +475,10 @@ fn conversation_out(
     ConversationOut {
         start: group
             .first()
-            .map(|&i| row(i).start_utc.clone())
+            .map(|&i| row(i).start_utc.to_string())
             .unwrap_or_default(),
         end: extreme(turns, group, |t| t.end, true)
-            .map(|i| row(i).end_utc.clone())
+            .map(|i| row(i).end_utc.to_string())
             .unwrap_or_default(),
         turn_count: shown.len(),
         speakers: distinct(group.iter().map(|&i| turns[i].speaker_label.as_deref())),

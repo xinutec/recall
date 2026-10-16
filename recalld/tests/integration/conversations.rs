@@ -1,9 +1,11 @@
 //! Conversation and moment folding.
 
+use audiocore::instant::Stamp;
 use chrono::{DateTime, TimeDelta, Utc};
 use recalld::conversations::{
     DEFAULT_GAP_SECONDS, Turn, best_colocated_guess, cluster_moments, fold, segment_conversations,
 };
+use transcript::SourceId;
 
 fn at(seconds: i64) -> DateTime<Utc> {
     DateTime::from_timestamp(1_780_000_000 + seconds, 0).expect("in range")
@@ -16,7 +18,7 @@ fn turn(id: i64, start: i64, end: i64, source: &str) -> Turn {
         start: at(start),
         end: at(end),
         speaker_label: None,
-        source_id: Some(source.to_owned()),
+        source_id: Some(SourceId::parse(source).expect("source id")),
         asr_confidence: None,
         speaker_guess: None,
         speaker_score: None,
@@ -399,8 +401,8 @@ fn a_gap_measured_in_fractions_of_a_second_is_respected() {
 fn segment(id: i64, start: i64, end: i64, text: &str) -> recalld::reads::Segment {
     recalld::reads::Segment {
         id,
-        start_utc: at(start).to_rfc3339(),
-        end_utc: at(end).to_rfc3339(),
+        start_utc: Stamp::of(at(start)),
+        end_utc: Stamp::of(at(end)),
         text: text.to_owned(),
         language: None,
         asr_confidence: None,
@@ -411,7 +413,7 @@ fn segment(id: i64, start: i64, end: i64, text: &str) -> recalld::reads::Segment
         speaker_cluster: None,
         tier: recalld::line::Stage::Transcribed,
         hidden_reason: None,
-        source_id: Some("usb".to_owned()),
+        source_id: Some(SourceId::parse("usb").expect("source id")),
         audio_segment_id: None,
         words_checked: false,
     }
@@ -449,7 +451,7 @@ fn a_conversation_reports_its_span_its_turn_count_and_its_confirmed_speakers() {
 }
 
 fn from_mic(mut s: recalld::reads::Segment, mic: &str) -> recalld::reads::Segment {
-    s.source_id = Some(mic.to_owned());
+    s.source_id = Some(SourceId::parse(mic).expect("source id"));
     s
 }
 

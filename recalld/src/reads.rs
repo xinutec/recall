@@ -5,6 +5,7 @@ use rusqlite::{Connection, OptionalExtension, Row};
 use serde::Serialize;
 use std::path::Path;
 use std::time::Duration;
+use transcript::SourceId;
 
 use crate::line::{HiddenKind, HiddenReason, Stage};
 use audiocore::instant::Stamp;
@@ -107,8 +108,8 @@ pub struct PageOut {
 /// A turn's stored columns, before the display rules.
 pub struct Segment {
     pub id: i64,
-    pub start_utc: String,
-    pub end_utc: String,
+    pub start_utc: Stamp,
+    pub end_utc: Stamp,
     pub text: String,
     pub language: Option<String>,
     pub asr_confidence: Option<f64>,
@@ -119,7 +120,7 @@ pub struct Segment {
     pub speaker_cluster: Option<String>,
     pub tier: Stage,
     pub hidden_reason: Option<HiddenReason>,
-    pub source_id: Option<String>,
+    pub source_id: Option<SourceId>,
     pub audio_segment_id: Option<i64>,
     pub words_checked: bool,
 }
@@ -149,7 +150,13 @@ impl Segment {
                 })?
             },
             hidden_reason: row.get("hidden_reason")?,
-            source_id: row.get("source_id")?,
+            source_id: {
+                let index = row.as_ref().column_index("source_id")?;
+                match row.get_ref(index)? {
+                    rusqlite::types::ValueRef::Null => None,
+                    _ => Some(crate::sql::source_id(row, index)?),
+                }
+            },
             audio_segment_id: row.get("audio_segment_id")?,
             words_checked: row.get::<_, Option<i64>>("words_checked")? == Some(1),
         })
@@ -178,10 +185,10 @@ pub fn to_out_with(
     };
     TranscriptOut {
         id: segment.id,
-        // As stored: reformatting could only change them (a `Z` for
+        // The stored spelling: chrono's could only change it (a `Z` for
         // `+00:00`, dropped microseconds).
-        start: segment.start_utc.clone(),
-        end: segment.end_utc.clone(),
+        start: segment.start_utc.to_string(),
+        end: segment.end_utc.to_string(),
         text: segment.text.clone(),
         language: segment.language.clone(),
         speaker,
@@ -193,7 +200,7 @@ pub fn to_out_with(
         hidden: segment.hidden_reason.map(|r| r.as_str().to_owned()),
         hidden_as: segment.hidden_reason.map(HiddenKind::from),
         audio_url: format!("/api/audio/{}", segment.id),
-        source: segment.source_id.clone(),
+        source: segment.source_id.as_ref().map(|s| s.as_str().to_owned()),
         cluster: segment.speaker_cluster.clone(),
         words_checked: segment.words_checked,
     }
@@ -307,12 +314,8 @@ pub fn recent(conn: &Connection, limit: i64, window: Window) -> rusqlite::Result
         )?
         .collect::<rusqlite::Result<_>>()?;
 
-    let full_page = !segments.is_empty() && i64::try_from(segments.len()).is_ok_and(|n| n == limit);
-    if full_page {
-        let boundary = segments
-            .last()
-            .map(|s| s.start_utc.clone())
-            .unwrap_or_default();
+    let full_page = i64::try_from(segments.len()).is_ok_and(|n| n == limit);
+    if full_page && let Some(boundary) = segments.last().map(|s| s.start_utc.clone()) {
         let seen: Vec<i64> = segments
             .iter()
             .filter(|s| s.start_utc == boundary)
