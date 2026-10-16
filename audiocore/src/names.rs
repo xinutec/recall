@@ -66,7 +66,7 @@ impl Extension {
 /// A validated segment name, decomposed.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SegmentName {
-    pub source: String,
+    pub source: transcript::SourceId,
     pub start_utc: IngestStamp,
     pub ext: Extension,
 }
@@ -99,9 +99,7 @@ pub fn valid_source(source: &str) -> bool {
 
 /// Parse `filename` as a segment of `source`, or say exactly why not.
 pub fn parse(source: &str, filename: &str) -> Result<SegmentName, NameError> {
-    if !valid_source(source) {
-        return Err(NameError::BadSource);
-    }
+    let id = transcript::SourceId::parse(source).ok_or(NameError::BadSource)?;
     let rest = filename
         .strip_prefix(source)
         .and_then(|r| r.strip_prefix('-'))
@@ -115,7 +113,7 @@ pub fn parse(source: &str, filename: &str) -> Result<SegmentName, NameError> {
     let parsed =
         NaiveDateTime::parse_from_str(stamp, "%Y%m%dT%H%M%S").map_err(|_| NameError::BadStamp)?;
     Ok(SegmentName {
-        source: source.to_owned(),
+        source: id,
         start_utc: IngestStamp::of(parsed.and_utc()),
         ext,
     })

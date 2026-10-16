@@ -113,7 +113,7 @@ const DIVERGENT: &str = "a different segment already holds this name";
 /// Whether an operator forgot this minute (`crate::forget`).
 fn was_forgotten(root: &FsPath, name: &SegmentName) -> rusqlite::Result<bool> {
     let started = name.start_utc.utc();
-    crate::upload::was_deleted(&crate::reads::open(root)?, &name.source, started)
+    crate::upload::was_deleted(&crate::reads::open(root)?, name.source.as_str(), started)
 }
 
 /// The blocking half of a PUT. 400: fix the name; 409: the name is taken;
@@ -147,7 +147,7 @@ fn store_segment(
             return fault("ingest tombstone lookup", &err, "bookkeeping unavailable");
         }
     }
-    let dir = store::source_dir(&config.root, &name.source);
+    let dir = store::source_dir(&config.root, name.source.as_str());
     let dest = dir.join(filename);
     let written = write_blob(&config.root, &dir, &dest, body);
     match written {
@@ -302,7 +302,7 @@ pub async fn liveness(State(config): State<Arc<Config>>, headers: HeaderMap) -> 
                 .into_iter()
                 .map(|l| {
                     let body = json!({ "delivered": l.delivered, "speech": l.speech });
-                    (l.source, body)
+                    (l.source.as_str().to_owned(), body)
                 })
                 .collect();
             (StatusCode::OK, axum::Json(json!({ "sources": sources }))).into_response()

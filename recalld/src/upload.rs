@@ -209,7 +209,7 @@ pub fn stored_path(root: &Path, source: &str, started: DateTime<Utc>, suffix: &s
 /// same name is the same recording.
 pub fn deliver(
     ingest: &Connection,
-    source: &str,
+    source: &transcript::SourceId,
     path: &Path,
     started: DateTime<Utc>,
     bytes: usize,
@@ -225,7 +225,7 @@ pub fn deliver(
     crate::store::insert(
         ingest,
         &crate::store::Row {
-            source: source.to_owned(),
+            source: source.clone(),
             filename,
             start_utc: IngestStamp::of(started),
             bytes: bytes as u64,
@@ -436,13 +436,14 @@ pub async fn create_session_route(
         let ingest = crate::store::open(&root)?;
         register(&meaning, &source, &name, &path, started, media)?;
         // Before the ingest row, so the first transcription leases with it.
-        if let (Some(language), Some(id)) = (language, transcript::SourceId::parse(&source)) {
+        let id = transcript::SourceId::parse(&source).expect("meeting_id spells a source id");
+        if let Some(language) = language {
             crate::labels_write::pin_language(&meaning, &ingest, &root, &id, Some(language))
                 .map_err(UploadError::Pin)?;
         }
         deliver(
             &ingest,
-            &source,
+            &id,
             &path,
             started,
             form.bytes.len(),

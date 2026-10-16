@@ -4,6 +4,7 @@ use audiocore::instant::IngestStamp;
 use audiocore::job::Kind;
 use recalld::results::Outcome;
 use recalld::store::{self, Row};
+use transcript::SourceId;
 
 #[test]
 fn a_clips_current_transcription_is_read_by_its_id_and_a_retranscription_replaces_it() {
@@ -13,7 +14,7 @@ fn a_clips_current_transcription_is_read_by_its_id_and_a_retranscription_replace
     store::insert(
         &conn,
         &Row {
-            source: "usb".into(),
+            source: SourceId::parse("usb").expect("source id"),
             filename: name.into(),
             start_utc: IngestStamp::parse("2026-10-04T12:00:00Z").expect("instant"),
             bytes: 1,
@@ -71,7 +72,7 @@ fn a_refusal_is_told_apart_from_not_yet_done() {
     store::insert(
         &conn,
         &Row {
-            source: "usb".into(),
+            source: SourceId::parse("usb").expect("source id"),
             filename: name.into(),
             start_utc: IngestStamp::parse("2026-10-04T12:00:00Z").expect("instant"),
             bytes: 1,

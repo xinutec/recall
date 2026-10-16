@@ -6,6 +6,7 @@ use recalld::upload::{
     stored_path, suffix_of,
 };
 use rusqlite::Connection;
+use transcript::SourceId;
 
 fn at(iso: &str) -> DateTime<Utc> {
     DateTime::parse_from_rfc3339(iso)
@@ -71,7 +72,7 @@ fn an_upload_is_recorded_in_the_ingest_plane_and_a_repeat_is_a_no_op() {
 
     deliver(
         &ingest,
-        "meeting-20260703-0950",
+        &SourceId::parse("meeting-20260703-0950").expect("id"),
         &path,
         started,
         11,
@@ -81,7 +82,7 @@ fn an_upload_is_recorded_in_the_ingest_plane_and_a_repeat_is_a_no_op() {
     .expect("deliver");
     deliver(
         &ingest,
-        "meeting-20260703-0950",
+        &SourceId::parse("meeting-20260703-0950").expect("id"),
         &path,
         started,
         11,
@@ -93,7 +94,7 @@ fn an_upload_is_recorded_in_the_ingest_plane_and_a_repeat_is_a_no_op() {
     let row = recalld::store::lookup(&ingest, "meeting-20260703-0950-20260703T085000.mp3")
         .expect("lookup")
         .expect("row");
-    assert_eq!(row.source, "meeting-20260703-0950");
+    assert_eq!(row.source.as_str(), "meeting-20260703-0950");
     // The ingest plane's spelling, with a trailing Z.
     assert_eq!(row.start_utc.as_str(), "2026-07-03T08:50:00Z");
     assert_eq!(row.bytes, 11);

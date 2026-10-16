@@ -8,6 +8,7 @@ use recalld::app::{Config as ServerConfig, router};
 use std::path::Path;
 use std::process::Output;
 use std::sync::Arc;
+use transcript::SourceId;
 
 const RECALL_TOKEN: &str = "recall-token";
 const MESSAGES_TOKEN: &str = "messages-token";
@@ -50,7 +51,7 @@ fn queued_clip(root: &Path, source: &str, name: &str) {
     recalld::store::insert(
         &conn,
         &recalld::store::Row {
-            source: source.to_owned(),
+            source: SourceId::parse(source).expect("source id"),
             filename: name.to_owned(),
             start_utc: IngestStamp::parse("2026-10-10T10:00:00Z").expect("instant"),
             bytes: 11,

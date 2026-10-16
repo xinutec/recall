@@ -9,6 +9,7 @@ use audiocore::work::Span;
 use chrono::{DateTime, Utc};
 use recalld::enrol::{Print, derive_jobs, forget_unwanted, pending, write_pass};
 use recalld::store;
+use transcript::SourceId;
 use transcript::{Act, Clip, Name, Span as TimeSpan};
 
 fn at(iso: &str) -> DateTime<Utc> {
@@ -359,7 +360,7 @@ fn delivered_at(root: &std::path::Path, filename: &str, start_utc: &str) {
     store::insert(
         &conn,
         &store::Row {
-            source: "usb".into(),
+            source: SourceId::parse("usb").expect("source id"),
             filename: filename.into(),
             start_utc: IngestStamp::parse(start_utc).expect("instant"),
             bytes: 1,

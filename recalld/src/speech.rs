@@ -122,7 +122,7 @@ pub fn evidence(ingest: &Connection, filename: &str) -> rusqlite::Result<Speech>
 /// possible speech ("is a voice captured").
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Liveness {
-    pub source: String,
+    pub source: transcript::SourceId,
     pub delivered: IngestStamp,
     /// `None`: nothing delivered may hold speech.
     pub speech: Option<IngestStamp>,
@@ -137,7 +137,7 @@ pub fn liveness_by_source(conn: &Connection) -> rusqlite::Result<Vec<Liveness>> 
     let mut stmt = LIVENESS.prepare(conn)?;
     let rows = stmt.query_map([], |r| {
         Ok(Liveness {
-            source: r.get(0)?,
+            source: crate::sql::source_id(r, 0)?,
             delivered: r.get(1)?,
             speech: r.get(2)?,
         })

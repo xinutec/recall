@@ -5,6 +5,7 @@ use audiocore::instant::IngestStamp;
 use recalld::speech::{self, UNKNOWN_SECONDS};
 use recalld::store;
 use std::path::Path;
+use transcript::SourceId;
 
 /// Register a blob the scanner will find, copying `audio` into the ingest tree.
 fn stored(root: &Path, source: &str, name: &str, audio: &[u8]) {
@@ -15,7 +16,7 @@ fn stored(root: &Path, source: &str, name: &str, audio: &[u8]) {
     store::insert(
         &conn,
         &store::Row {
-            source: source.to_owned(),
+            source: SourceId::parse(source).expect("source id"),
             filename: name.to_owned(),
             start_utc: IngestStamp::parse("2026-09-05T12:00:00Z").expect("instant"),
             bytes: audio.len() as u64,
@@ -32,7 +33,7 @@ fn latest_speech(conn: &rusqlite::Connection, source: &str) -> Option<String> {
     speech::liveness_by_source(conn)
         .expect("query")
         .into_iter()
-        .find(|l| l.source == source)
+        .find(|l| l.source.as_str() == source)
         .and_then(|l| l.speech)
         .map(|speech| speech.to_string())
 }
@@ -185,7 +186,7 @@ fn the_scan_takes_the_newest_segments_first() {
         store::insert(
             &conn,
             &store::Row {
-                source: "usb".to_owned(),
+                source: SourceId::parse("usb").expect("source id"),
                 filename: name.to_owned(),
                 start_utc: IngestStamp::parse(stamp).expect("instant"),
                 bytes: quiet.len() as u64,

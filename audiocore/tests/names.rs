@@ -6,7 +6,7 @@ use audiocore::names::{Extension, NameError, parse, valid_source};
 #[test]
 fn a_wellformed_name_decomposes() {
     let name = parse("usb", "usb-20260905T120000.flac").expect("valid");
-    assert_eq!(name.source, "usb");
+    assert_eq!(name.source.as_str(), "usb");
     assert_eq!(name.start_utc.as_str(), "2026-09-05T12:00:00Z");
     assert_eq!(name.ext, Extension::Flac);
 }

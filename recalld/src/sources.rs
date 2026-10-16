@@ -208,7 +208,7 @@ fn delivered_evidence(root: &std::path::Path) -> HashMap<String, Evidence> {
     rows.into_iter()
         .map(|l| {
             (
-                l.source,
+                l.source.as_str().to_owned(),
                 Evidence {
                     delivered: Some(l.delivered.utc()),
                     speech: l.speech.map(|s| s.utc()),

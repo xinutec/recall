@@ -6,6 +6,7 @@ use rusqlite::{Connection, OptionalExtension};
 use serde::Serialize;
 use std::path::Path;
 use std::time::Duration;
+use transcript::SourceId;
 
 crate::statements! {
     FILES_OF: Ingest = "SELECT filename FROM segments WHERE source = ?1";
@@ -43,7 +44,7 @@ crate::statements! {
 fn row(r: &rusqlite::Row<'_>) -> rusqlite::Result<Row> {
     let bytes: i64 = r.get(3)?;
     Ok(Row {
-        source: r.get(0)?,
+        source: crate::sql::source_id(r, 0)?,
         filename: r.get(1)?,
         start_utc: r.get(2)?,
         bytes: u64::try_from(bytes)
@@ -57,7 +58,7 @@ fn row(r: &rusqlite::Row<'_>) -> rusqlite::Result<Row> {
 /// One stored segment, as the read side serves it.
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
 pub struct Row {
-    pub source: String,
+    pub source: SourceId,
     pub filename: String,
     pub start_utc: IngestStamp,
     pub bytes: u64,
@@ -124,7 +125,7 @@ pub fn insert(conn: &Connection, row: &Row) -> rusqlite::Result<()> {
         conn,
         (
             &row.filename,
-            &row.source,
+            row.source.as_str(),
             &row.start_utc,
             i64::try_from(row.bytes).expect("a byte count fits SQLite's i64"),
             &row.sha256,

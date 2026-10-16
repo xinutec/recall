@@ -5,6 +5,7 @@ use audiocore::instant::IngestStamp;
 use audiocore::job::Kind;
 use rusqlite::Connection;
 use transcript::Clip;
+use transcript::SourceId;
 
 pub struct Fleet {
     pub dir: tempfile::TempDir,
@@ -77,7 +78,7 @@ impl Fleet {
         recalld::store::insert(
             &self.ingest,
             &recalld::store::Row {
-                source: source.into(),
+                source: SourceId::parse(source).expect("source id"),
                 filename: filename.clone(),
                 start_utc: IngestStamp::of(at),
                 bytes: 1,

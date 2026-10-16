@@ -6,6 +6,7 @@ use audiocore::instant::IngestStamp;
 use audiocore::job::Kind;
 use recalld::view::{self, Refreshed};
 use rusqlite::Connection;
+use transcript::SourceId;
 use transcript::{Act, Instant, Name, Span, Text};
 
 const FILE: &str = "usb-20261004T120000.flac";
@@ -89,7 +90,7 @@ fn fleet() -> Fleet {
     recalld::store::insert(
         &ingest,
         &recalld::store::Row {
-            source: "usb".into(),
+            source: SourceId::parse("usb").expect("source id"),
             filename: FILE.into(),
             start_utc: IngestStamp::parse("2026-10-04T12:00:00Z").expect("instant"),
             bytes: 1,
@@ -315,7 +316,7 @@ fn a_clip_whose_rows_will_not_write_is_reported_and_the_rest_still_render() {
     recalld::store::insert(
         &f.ingest,
         &recalld::store::Row {
-            source: "usb".into(),
+            source: SourceId::parse("usb").expect("source id"),
             filename: SECOND.into(),
             start_utc: IngestStamp::parse("2026-10-04T12:01:00Z").expect("instant"),
             bytes: 1,
@@ -425,7 +426,7 @@ fn a_refresh_writes_its_clips_in_one_commit_not_one_each() {
         recalld::store::insert(
             &f.ingest,
             &recalld::store::Row {
-                source: "usb".into(),
+                source: SourceId::parse("usb").expect("source id"),
                 filename: name.clone(),
                 start_utc: IngestStamp::parse(&format!("2026-10-04T12:{minute:02}:00Z"))
                     .expect("instant"),

@@ -5,10 +5,11 @@ use audiocore::instant::IngestStamp;
 use recalld::store::{self, Row};
 use rusqlite::Connection;
 use transcript::Instant;
+use transcript::SourceId;
 
 fn row(source: &str, filename: &str, start: &str) -> Row {
     Row {
-        source: source.into(),
+        source: SourceId::parse(source).expect("source id"),
         filename: filename.into(),
         start_utc: IngestStamp::parse(start).expect("instant"),
         bytes: 1,

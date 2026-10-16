@@ -8,6 +8,7 @@ use recalld::sessions::{
     set_language,
 };
 use rusqlite::Connection;
+use transcript::SourceId;
 
 const NOW: &str = "2026-09-07T09:00:00+00:00";
 
@@ -178,7 +179,7 @@ fn diarized_meeting(source: &str) -> tempfile::TempDir {
         recalld::store::insert(
             &ingest,
             &recalld::store::Row {
-                source: source.to_owned(),
+                source: SourceId::parse(source).expect("source id"),
                 filename: filename.clone(),
                 start_utc: IngestStamp::parse("2026-07-03T09:50:00Z").expect("instant"),
                 bytes: 1,
@@ -686,7 +687,7 @@ fn deleting_a_session_forgets_its_words_in_the_ingest_plane_too() {
         recalld::store::insert(
             &ingest,
             &recalld::store::Row {
-                source: source.into(),
+                source: SourceId::parse(source).expect("source id"),
                 filename: name.into(),
                 start_utc: IngestStamp::parse("2026-10-04T12:00:00Z").expect("instant"),
                 bytes: 1,

@@ -8,6 +8,7 @@ use runner::client::Client;
 use runner::shim::{self, Shim};
 use std::path::Path;
 use std::sync::Arc;
+use transcript::SourceId;
 
 const READ_TOKEN: &str = "read-me";
 
@@ -50,7 +51,7 @@ fn queued_clip(root: &Path, name: &str, bytes: &[u8]) {
     recalld::store::insert(
         &conn,
         &recalld::store::Row {
-            source: "usb".to_owned(),
+            source: SourceId::parse("usb").expect("source id"),
             filename: name.to_owned(),
             start_utc: IngestStamp::parse("2026-09-06T10:00:00Z").expect("instant"),
             bytes: bytes.len() as u64,

@@ -6,6 +6,7 @@ use recalld::live_tier::live_health;
 use recalld::store;
 use rusqlite::Connection;
 use std::path::Path;
+use transcript::SourceId;
 
 const WINDOW_SINCE: &str = "2026-09-21T11:40:00+00:00";
 const WINDOW_UNTIL: &str = "2026-09-21T12:00:00+00:00";
@@ -49,7 +50,7 @@ fn clip(root: &Path, source_id: &str, name: &str, minute: u32, speech: Option<f6
     store::insert(
         &conn,
         &store::Row {
-            source: source_id.to_owned(),
+            source: SourceId::parse(source_id).expect("source id"),
             filename: name.to_owned(),
             start_utc: IngestStamp::parse(&start).expect("instant"),
             bytes: 1,

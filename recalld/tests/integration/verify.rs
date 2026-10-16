@@ -8,6 +8,7 @@ use recalld::verify::{self, Verified};
 use rusqlite::Connection;
 use sha2::{Digest, Sha256};
 use std::path::PathBuf;
+use transcript::SourceId;
 
 struct Archive {
     _dir: tempfile::TempDir,
@@ -46,7 +47,7 @@ impl Archive {
         recalld::store::insert(
             &self.ingest,
             &Row {
-                source: "geb".to_owned(),
+                source: SourceId::parse("geb").expect("source id"),
                 filename: filename.to_owned(),
                 start_utc: IngestStamp::parse("2026-10-01T12:00:00Z").expect("instant"),
                 bytes: u64::try_from(recorded.len()).expect("small"),

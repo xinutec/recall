@@ -5,6 +5,7 @@ use audiocore::job::Kind;
 use chrono::{DateTime, Duration, Utc};
 use recalld::queue::{done, lease};
 use recalld::store;
+use transcript::SourceId;
 
 /// A room block from when the room stream ran in production: history now.
 fn room_row(root: &std::path::Path, stamp: &str) {
@@ -12,7 +13,7 @@ fn room_row(root: &std::path::Path, stamp: &str) {
     store::insert(
         &conn,
         &store::Row {
-            source: "room".into(),
+            source: SourceId::parse("room").expect("source id"),
             filename: format!("room-{stamp}.flac"),
             // As production stores it: the name's stamp, parsed.
             start_utc: audiocore::names::parse("room", &format!("room-{stamp}.flac"))
@@ -260,7 +261,7 @@ fn unmeasured_file(root: &std::path::Path, source: &str, stamp: &str, ext: &str)
     store::insert(
         &conn,
         &store::Row {
-            source: source.into(),
+            source: SourceId::parse(source).expect("source id"),
             filename: name.clone(),
             // The ingest plane's spelling: a trailing Z.
             start_utc: IngestStamp::parse(&format!(
@@ -511,7 +512,7 @@ fn a_lease_picks_the_newest_clip_across_sources_not_the_alphabetical_one() {
         store::insert(
             &ingest,
             &store::Row {
-                source: source.into(),
+                source: SourceId::parse(source).expect("source id"),
                 filename: filename.clone(),
                 start_utc: IngestStamp::parse(iso).expect("instant"),
                 bytes: 1,
