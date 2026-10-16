@@ -3,6 +3,7 @@
 //! delivered. It never evicts: the Mac's archive stays the master. Its own
 //! process, off the segment ffmpeg has open.
 
+use audiocore::ingest::Receipt;
 use audiocore::names;
 use sha2::{Digest, Sha256};
 use std::path::{Path, PathBuf};
@@ -151,12 +152,12 @@ fn deliver(config: &Config, candidate: &Candidate, agent: &ureq::Agent) -> Deliv
         Ok(body) => body,
         Err(err) => return Delivery::Failed(format!("receipt read: {err}")),
     };
-    let receipt: serde_json::Value = match serde_json::from_str(&body) {
+    let receipt: Receipt = match serde_json::from_str(&body) {
         Ok(receipt) => receipt,
         Err(err) => return Delivery::Failed(format!("receipt parse: {err}")),
     };
     // A 2xx alone proves nothing: the receipt must match our own hash.
-    if receipt["sha256"] == sha256.as_str() && receipt["bytes"] == bytes.len() {
+    if receipt.sha256 == sha256 && receipt.bytes == bytes.len() {
         Delivery::Verified {
             sha256,
             bytes: bytes.len(),

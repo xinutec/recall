@@ -12,6 +12,7 @@ use crate::meter::{SILENCE_PEAK, StreamMeter};
 use crate::pause;
 use crate::segmenter::{CaptureConfig, build_segment_argv, segment_output_pattern};
 use audiocore::decode::decode_native_s16;
+use audiocore::devices::Heartbeat;
 use audiocore::names::{parse_segment_start, segment_glob};
 use chrono::{DateTime, Utc};
 use std::io::{Read, Write};
@@ -397,14 +398,15 @@ const BEAT_EVERY: Duration = Duration::from_mins(1);
 
 /// What this recorder tells the fleet. `streaming` is false: audio goes by
 /// upload. `mic_ok` is what the last producer start did.
-pub fn beat_body(source_id: &str, mic_ok: bool) -> serde_json::Value {
-    serde_json::json!({
-        "device": source_id,
-        "app": "linux",
-        "version": env!("CARGO_PKG_VERSION"),
-        "streaming": false,
-        "micOk": mic_ok,
-    })
+pub fn beat_body(source_id: &str, mic_ok: bool) -> Heartbeat {
+    Heartbeat {
+        device: source_id.to_owned(),
+        app: Some("linux".to_owned()),
+        version: Some(env!("CARGO_PKG_VERSION").to_owned()),
+        streaming: Some(false),
+        mic_ok: Some(mic_ok),
+        ..Heartbeat::default()
+    }
 }
 
 /// Beat until the process ends, on its own thread.

@@ -1,8 +1,9 @@
 //! The capture-control state machine, and the fingerprint every client's
 //! long-poll depends on.
 
+use audiocore::capture::CaptureState;
 use chrono::{DateTime, Utc};
-use recalld::capture::{CaptureState, fleet_capture_state, intent_until, reported_state};
+use recalld::capture::{self, fleet_capture_state, intent_until, reported_state};
 use rusqlite::Connection;
 
 fn at(offset_s: i64) -> DateTime<Utc> {
@@ -33,7 +34,7 @@ fn state(
     settled: bool,
     mic: bool,
 ) -> CaptureState {
-    CaptureState {
+    capture::stamped(CaptureState {
         running,
         paused_until: paused.map(ToOwned::to_owned),
         desired_running,
@@ -41,8 +42,7 @@ fn state(
         settled,
         mic_reachable: mic,
         state_token: String::new(),
-    }
-    .stamped()
+    })
 }
 
 #[test]

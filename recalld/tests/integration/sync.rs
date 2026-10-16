@@ -2,7 +2,7 @@
 //! the Mac's agents read.
 
 use recalld::capture::{intent_pause, record_reported, reported_state};
-use recalld::sync::{IntentOut, bearer, check};
+use recalld::sync::{bearer, check};
 use rusqlite::Connection;
 
 /// A one-shot HTTP agent with no connection pool.
@@ -24,10 +24,10 @@ fn setting(conn: &Connection, key: &str) -> Option<String> {
     .ok()
 }
 
-fn liveness(pairs: &[(&str, &str)]) -> serde_json::Map<String, serde_json::Value> {
+fn liveness(pairs: &[(&str, &str)]) -> std::collections::BTreeMap<String, String> {
     pairs
         .iter()
-        .map(|(k, v)| ((*k).to_owned(), serde_json::Value::String((*v).to_owned())))
+        .map(|(k, v)| ((*k).to_owned(), (*v).to_owned()))
         .collect()
 }
 
@@ -121,8 +121,8 @@ fn the_report_stamps_the_freshness_clock_python_spells_it_with() {
 }
 
 #[test]
-fn source_liveness_is_stored_in_the_macs_key_order() {
-    // `preserve_order`: not serde's alphabetical one.
+fn source_liveness_is_stored_whole_by_source_id() {
+    // The Mac's order is its directory listing's, which says nothing.
     let conn = store();
 
     record_reported(
@@ -139,7 +139,7 @@ fn source_liveness_is_stored_in_the_macs_key_order() {
 
     assert_eq!(
         setting(&conn, "capture_reported_source_liveness").as_deref(),
-        Some(r#"{"usb":"2026-09-08T02:31:00+00:00","pixel5":"2026-09-08T02:30:00+00:00"}"#)
+        Some(r#"{"pixel5":"2026-09-08T02:30:00+00:00","usb":"2026-09-08T02:31:00+00:00"}"#)
     );
 }
 
@@ -153,24 +153,6 @@ fn an_absent_liveness_map_stores_an_empty_object() {
     assert_eq!(
         setting(&conn, "capture_reported_source_liveness").as_deref(),
         Some("{}")
-    );
-}
-
-// --- the wire shape ----------------------------------------------------------
-
-#[test]
-fn the_reply_is_camel_case_and_null_when_running() {
-    // `pausedUntil`, with an explicit null.
-    assert_eq!(
-        serde_json::to_string(&IntentOut { paused_until: None }).unwrap(),
-        r#"{"pausedUntil":null}"#
-    );
-    assert_eq!(
-        serde_json::to_string(&IntentOut {
-            paused_until: Some("2026-09-09T21:15:05.645698+00:00".into()),
-        })
-        .unwrap(),
-        r#"{"pausedUntil":"2026-09-09T21:15:05.645698+00:00"}"#
     );
 }
 

@@ -12,7 +12,9 @@
 //! its bounded timestamp.
 
 use crate::pause::{PAUSE_FILE, paused_until};
+use audiocore::capture::{Applied, CaptureState, Intent};
 use chrono::{DateTime, SecondsFormat, Utc};
+use std::collections::BTreeMap;
 use std::path::Path;
 use std::time::Duration;
 
@@ -31,19 +33,14 @@ fn fetch(agent: &ureq::Agent, url: &str) -> Result<Desired, String> {
         .map_err(|e| e.to_string())?
         .into_string()
         .map_err(|e| e.to_string())?;
-    let body: serde_json::Value = serde_json::from_str(&text).map_err(|e| e.to_string())?;
+    let state: CaptureState = serde_json::from_str(&text).map_err(|e| e.to_string())?;
     // The fleet reports desired state alongside applied; a recorder obeys
     // desired.
-    let running = body["desiredRunning"]
-        .as_bool()
-        .ok_or("no desiredRunning field")?;
-    if running {
+    if state.desired_running {
         return Ok(Desired::Running);
     }
-    let until = body["desiredPausedUntil"]
-        .as_str()
-        .ok_or("paused with no bound")?;
-    Ok(Desired::PausedUntil(until.to_owned()))
+    let until = state.desired_paused_until.ok_or("paused with no bound")?;
+    Ok(Desired::PausedUntil(until))
 }
 
 fn apply(root: &Path, desired: &Desired) {
@@ -124,8 +121,8 @@ pub fn decide(applied: &str, intent: Option<&str>, now: DateTime<Utc>) -> Decisi
 /// Each source's last proved recording time: its `.alive` marker's mtime. The
 /// fleet cannot see these files, so every pass ships them.
 #[must_use]
-pub fn source_liveness(root: &Path) -> serde_json::Map<String, serde_json::Value> {
-    let mut out = serde_json::Map::new();
+pub fn source_liveness(root: &Path) -> BTreeMap<String, String> {
+    let mut out = BTreeMap::new();
     let Ok(entries) = std::fs::read_dir(root) else {
         return out;
     };
@@ -141,10 +138,7 @@ pub fn source_liveness(root: &Path) -> serde_json::Map<String, serde_json::Value
             continue;
         };
         let stamp: DateTime<Utc> = modified.into();
-        out.insert(
-            name,
-            serde_json::Value::String(stamp.to_rfc3339_opts(SecondsFormat::Micros, false)),
-        );
+        out.insert(name, stamp.to_rfc3339_opts(SecondsFormat::Micros, false));
     }
     out
 }
@@ -166,27 +160,24 @@ pub fn exchange(
     now: DateTime<Utc>,
 ) -> Result<Option<String>, String> {
     let local = paused_until(root);
-    let body = serde_json::json!({
-        "running": local.is_none_or(|until| until <= now),
-        "pausedUntil": local.map(|u| u.to_rfc3339_opts(SecondsFormat::Micros, false)),
-        "sourceLiveness": source_liveness(root),
-        "wait": wait,
-        "knownIntent": if applied.is_empty() { None } else { Some(applied) },
-    });
+    let body = Applied {
+        running: local.is_none_or(|until| until <= now),
+        paused_until: local.map(|u| u.to_rfc3339_opts(SecondsFormat::Micros, false)),
+        source_liveness: source_liveness(root),
+        wait,
+        known_intent: (!applied.is_empty()).then(|| applied.to_owned()),
+    };
     // ureq is built without `json`.
     let text = agent
         .post(&format!("{url}/sync/capture"))
         .set("authorization", &format!("Bearer {token}"))
         .set("content-type", "application/json")
-        .send_string(&body.to_string())
+        .send_string(&serde_json::to_string(&body).expect("a report serialises"))
         .map_err(|e| e.to_string())?
         .into_string()
         .map_err(|e| e.to_string())?;
-    let parsed: serde_json::Value = serde_json::from_str(&text).map_err(|e| e.to_string())?;
-    Ok(parsed
-        .get("pausedUntil")
-        .and_then(serde_json::Value::as_str)
-        .map(ToOwned::to_owned))
+    let intent: Intent = serde_json::from_str(&text).map_err(|e| e.to_string())?;
+    Ok(intent.paused_until)
 }
 
 fn read_marker(root: &Path) -> String {

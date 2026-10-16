@@ -7,13 +7,14 @@
 //! vocabulary prompt (the runner), the live feed (recall-live), numbers for
 //! the doctor, and the recorders' beats and outboxes for fleetwatch.
 
+use audiocore::capture::{Applied, Intent};
 use audiocore::work::{LiveStored, LiveTurns, Prompt};
 use axum::Router;
 use axum::extract::{Query, State};
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
 use axum::routing::post;
-use serde::{Deserialize, Serialize};
+use serde::Deserialize;
 use std::sync::Arc;
 use subtle::ConstantTimeEq;
 
@@ -53,39 +54,7 @@ pub fn check(presented: Option<&str>, expected: &str) -> Result<(), (StatusCode,
     }
 }
 
-/// What the Mac reports it has applied, each mirror pass.
-#[derive(Debug, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct Applied {
-    pub running: bool,
-    /// The ISO resume-by it applied; absent while recording.
-    #[serde(default)]
-    pub paused_until: Option<String>,
-    /// Each source's last proved recording time.
-    #[serde(default)]
-    pub source_liveness: serde_json::Map<String, serde_json::Value>,
-    /// Seconds to hang while the intent still equals `known_intent`.
-    #[serde(default)]
-    pub wait: f64,
-    /// The intent the Mac has applied; `None` means running.
-    #[serde(default)]
-    pub known_intent: Option<String>,
-}
-
-/// The intent, for the Mac to mirror onto its pause file.
-#[derive(Debug, Serialize, PartialEq, Eq)]
-#[serde(rename_all = "camelCase")]
-pub struct IntentOut {
-    pub paused_until: Option<String>,
-}
-
 use crate::capture::{WAIT_CAP, WAIT_SLICE};
-
-/// `source_liveness` carries instants as strings; the reader drops anything
-/// else.
-fn all_strings(map: &serde_json::Map<String, serde_json::Value>) -> bool {
-    map.values().all(serde_json::Value::is_string)
-}
 
 /// `POST /sync/capture`: the Mac reports what it applied and reads back the
 /// intent, in one round trip. The report is recorded once, before the hang:
@@ -101,13 +70,6 @@ pub async fn capture_route(
     let Ok(body) = serde_json::from_slice::<Applied>(&body) else {
         return (StatusCode::UNPROCESSABLE_ENTITY, "bad capture report").into_response();
     };
-    if !all_strings(&body.source_liveness) {
-        return (
-            StatusCode::UNPROCESSABLE_ENTITY,
-            "sourceLiveness values must be strings",
-        )
-            .into_response();
-    }
 
     let root = st.root.clone();
     let reported = body.paused_until.clone();
@@ -123,7 +85,7 @@ pub async fn capture_route(
             reported.as_deref(),
             &body.source_liveness,
         )?;
-        Ok(IntentOut {
+        Ok(Intent {
             paused_until: crate::capture::intent_until(&conn, now)?,
         })
     })
@@ -147,7 +109,7 @@ pub async fn capture_route(
         let root = st.root.clone();
         reply = match crate::route::blocking("sync capture intent", move || {
             crate::capture::intent_until(&crate::work::open_write(&root)?, chrono::Utc::now())
-                .map(|paused_until| IntentOut { paused_until })
+                .map(|paused_until| Intent { paused_until })
         })
         .await
         {

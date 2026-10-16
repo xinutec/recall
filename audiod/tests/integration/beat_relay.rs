@@ -33,7 +33,8 @@ fn the_rust_filter_decides_every_body_the_way_the_python_did() {
             case.body
         );
         if let (Ok(out), Some(want)) = (&got, &case.forwarded) {
-            assert_eq!(out, want, "case {i}: forwarded body differs");
+            let out = serde_json::to_value(out).expect("json");
+            assert_eq!(&out, want, "case {i}: forwarded body differs");
         }
     }
 }
@@ -44,6 +45,7 @@ fn the_phone_cannot_assert_the_two_fields_it_does_not_own() {
     // this relay's testimony, so it is stamped true whatever the phone sent.
     let out = relayed(br#"{"device":"pixel5","at":"2020-01-01T00:00:00Z","viaLan":false}"#)
         .expect("accepted");
+    let out = serde_json::to_value(out).expect("json");
     assert!(
         out.get("at").is_none(),
         "a phone must not stamp its own time"
@@ -54,13 +56,14 @@ fn the_phone_cannot_assert_the_two_fields_it_does_not_own() {
 #[test]
 fn an_unknown_key_cannot_reach_the_fleet_by_being_added_to_the_app() {
     let out = relayed(br#"{"device":"pixel5","admin":true}"#).expect("accepted");
+    let out = serde_json::to_value(out).expect("json");
     assert!(out.get("admin").is_none(), "the allowlist is the boundary");
 }
 
 #[test]
 fn the_audio_a_phone_dropped_reaches_the_fleet() {
     let out = relayed(br#"{"device":"pixel5","droppedBytes":96000}"#).expect("accepted");
-    assert_eq!(out["droppedBytes"], 96_000);
+    assert_eq!(out.dropped_bytes, Some(96_000));
 }
 
 #[test]

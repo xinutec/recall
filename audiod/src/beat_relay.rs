@@ -11,6 +11,7 @@
 //! Hand-written HTTP: one route is not worth axum and tokio in the capture
 //! daemon.
 
+use audiocore::devices::Heartbeat;
 use std::io::{BufRead, BufReader, Read, Write};
 use std::net::{TcpListener, TcpStream};
 use std::time::Duration;
@@ -28,62 +29,43 @@ const MAX_HEAD_BYTES: usize = 8192;
 const FORWARD_TIMEOUT: Duration = Duration::from_secs(8);
 const READ_TIMEOUT: Duration = Duration::from_secs(10);
 
-/// What a phone may say. No `at`: the fleet stamps it. `viaLan` is the relay's
-/// to add.
-const FROM_PHONE: &[&str] = &[
-    "device",
-    "app",
-    "version",
-    "startedAt",
-    "streaming",
-    "charging",
-    "micOk",
-    "droppedBytes",
-];
-
 /// Why a body was not a beat this relay will pass on.
 #[derive(Debug, PartialEq, Eq)]
 pub struct Rejected(pub String);
 
-/// The beat to forward: an allowlist of what the phone said, plus how it
-/// arrived. The caller is unauthenticated.
+/// The beat to forward: what the phone may say (no `at`: the fleet stamps
+/// it), plus how it arrived. The caller is unauthenticated.
 ///
 /// # Errors
 /// If the body is oversized, is not a JSON object, or names no usable device.
-pub fn relayed(raw: &[u8]) -> Result<serde_json::Value, Rejected> {
+pub fn relayed(raw: &[u8]) -> Result<Heartbeat, Rejected> {
     if raw.len() > MAX_BODY_BYTES {
         return Err(Rejected(format!("body is {} bytes", raw.len())));
     }
     let parsed: serde_json::Value =
         serde_json::from_slice(raw).map_err(|e| Rejected(format!("not JSON: {e}")))?;
-    let Some(obj) = parsed.as_object() else {
+    // Serde reads a struct from an array too, field by field.
+    if !parsed.is_object() {
         return Err(Rejected("not an object".to_owned()));
-    };
-    let device = obj.get("device").and_then(serde_json::Value::as_str);
-    match device {
-        None | Some("") => return Err(Rejected("no device".to_owned())),
-        Some(d) if d.chars().count() > MAX_DEVICE_LEN => {
-            return Err(Rejected(format!(
-                "device name is {} chars",
-                d.chars().count()
-            )));
-        }
-        Some(_) => {}
     }
-    let mut out = serde_json::Map::new();
-    for key in FROM_PHONE {
-        if let Some(v) = obj.get(*key) {
-            out.insert((*key).to_owned(), v.clone());
-        }
+    // Unknown keys and `at` fall away here: the type is the allowlist.
+    let mut beat: Heartbeat =
+        serde_json::from_value(parsed).map_err(|e| Rejected(format!("not a beat: {e}")))?;
+    let chars = beat.device.chars().count();
+    if chars == 0 {
+        return Err(Rejected("no device".to_owned()));
+    }
+    if chars > MAX_DEVICE_LEN {
+        return Err(Rejected(format!("device name is {chars} chars")));
     }
     // Stamped, never copied.
-    out.insert("viaLan".to_owned(), serde_json::Value::Bool(true));
-    Ok(serde_json::Value::Object(out))
+    beat.via_lan = Some(true);
+    Ok(beat)
 }
 
 /// POST one beat to the fleet; whether it landed. The phone's own backoff
 /// handles failure.
-pub fn forward(beat: &serde_json::Value, fleet_url: &str) -> bool {
+pub fn forward(beat: &Heartbeat, fleet_url: &str) -> bool {
     let url = format!("{}{BEAT_PATH}", fleet_url.trim_end_matches('/'));
     // Its own agent: a stale socket in ureq's shared pool is a random 502.
     let agent = ureq::AgentBuilder::new()
@@ -91,7 +73,7 @@ pub fn forward(beat: &serde_json::Value, fleet_url: &str) -> bool {
         .max_idle_connections(0)
         .build();
     // ureq is built without `json`.
-    let body = beat.to_string();
+    let body = serde_json::to_string(beat).expect("a beat serialises");
     match agent
         .post(&url)
         .set("Content-Type", "application/json")
@@ -223,8 +205,7 @@ fn handle(stream: &mut TcpStream, fleet_url: &str) {
         respond(stream, 502, "Bad Gateway");
         return;
     }
-    let device = beat.get("device").and_then(serde_json::Value::as_str);
-    tracing::info!(device, "beat-relay: relayed a beat");
+    tracing::info!(device = %beat.device, "beat-relay: relayed a beat");
     respond(stream, 204, "No Content");
 }
 

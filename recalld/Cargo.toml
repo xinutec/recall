@@ -27,7 +27,7 @@ cast_sign_loss = "allow"
 [dependencies]
 transcript = { path = "../transcript" }
 clap = { version = "4", features = ["derive"] }
-audiocore = { path = "../audiocore" }
+audiocore = { path = "../audiocore", features = ["ts"] }
 axum = { version = "0.8", features = ["multipart"] }
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "net"] }
 # Bundled: no system sqlite at link time, in the Docker build too.

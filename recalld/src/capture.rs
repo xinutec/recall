@@ -5,10 +5,11 @@
 //! intended, and `settled` when they agree. A pause nobody can confirm is
 //! worthless, hence the two halves.
 
+use audiocore::capture::CaptureState;
 use chrono::{DateTime, Duration, Utc};
 use rusqlite::{Connection, OptionalExtension};
-use serde::Serialize;
 use sha2::{Digest, Sha256};
+use std::collections::BTreeMap;
 
 crate::statements! {
     SETTING: Meaning =
@@ -36,55 +37,24 @@ fn report_fresh() -> Duration {
     Duration::seconds(30)
 }
 
-/// The wire shape of `GET /api/capture`. Field order and spelling are a
-/// contract: `stateToken` is a hash over this object, so a renamed or reordered
-/// field changes every client's long-poll. The bools are the wire shape, so an
-/// enum would change the contract rather than tidy it.
-#[expect(
-    clippy::struct_excessive_bools,
-    reason = "the bools are the wire shape (doc above)"
-)]
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, ts_rs::TS)]
-#[ts(export)]
-pub struct CaptureState {
-    pub running: bool,
-    #[serde(rename = "pausedUntil")]
-    pub paused_until: Option<String>,
-    #[serde(rename = "desiredRunning")]
-    pub desired_running: bool,
-    #[serde(rename = "desiredPausedUntil")]
-    pub desired_paused_until: Option<String>,
-    pub settled: bool,
-    #[serde(rename = "micReachable")]
-    pub mic_reachable: bool,
-    #[serde(rename = "stateToken")]
-    pub state_token: String,
-}
-
-impl CaptureState {
-    #[must_use]
-    pub fn stamped(mut self) -> Self {
-        self.state_token = self.token();
-        self
-    }
-
-    /// The fingerprint a long-poll echoes back as `?known=`: the other fields'
-    /// hash. It has to be the same for the same state, or every long-poll
-    /// returns at once.
-    fn token(&self) -> String {
-        let json = serde_json::json!({
-            "desiredPausedUntil": self.desired_paused_until,
-            "desiredRunning": self.desired_running,
-            "micReachable": self.mic_reachable,
-            "pausedUntil": self.paused_until,
-            "running": self.running,
-            "settled": self.settled,
-        })
-        .to_string();
-        // sha2 0.11's digest is an array with no `LowerHex`; `hex` spells it out.
-        let digest = Sha256::digest(json.as_bytes());
-        hex::encode(digest).chars().take(12).collect()
-    }
+/// The state with its `stateToken`: the fingerprint a long-poll echoes back
+/// as `?known=`, the other fields' hash. It has to be the same for the same
+/// state, or every long-poll returns at once.
+#[must_use]
+pub fn stamped(mut state: CaptureState) -> CaptureState {
+    let json = serde_json::json!({
+        "desiredPausedUntil": state.desired_paused_until,
+        "desiredRunning": state.desired_running,
+        "micReachable": state.mic_reachable,
+        "pausedUntil": state.paused_until,
+        "running": state.running,
+        "settled": state.settled,
+    })
+    .to_string();
+    // sha2 0.11's digest is an array with no `LowerHex`; `hex` spells it out.
+    let digest = Sha256::digest(json.as_bytes());
+    state.state_token = hex::encode(digest).chars().take(12).collect();
+    state
 }
 
 /// What the Mac last said it had applied.
@@ -148,7 +118,7 @@ pub fn record_reported(
     now: DateTime<Utc>,
     running: bool,
     paused_until: Option<&str>,
-    source_liveness: &serde_json::Map<String, serde_json::Value>,
+    source_liveness: &BTreeMap<String, String>,
 ) -> rusqlite::Result<()> {
     set_setting(conn, REPORTED_RUNNING_KEY, if running { "1" } else { "0" })?;
     set_setting(conn, REPORTED_PAUSED_KEY, paused_until.unwrap_or(""))?;
@@ -160,7 +130,7 @@ pub fn record_reported(
     set_setting(
         conn,
         REPORTED_LIVENESS_KEY,
-        &serde_json::Value::Object(source_liveness.clone()).to_string(),
+        &serde_json::to_string(source_liveness).expect("a string map serialises"),
     )
 }
 
@@ -198,7 +168,7 @@ pub fn fleet_capture_state(
     let desired_running = desired_until.is_none();
 
     let Some(reported) = reported_state(conn, now)? else {
-        return Ok(CaptureState {
+        return Ok(stamped(CaptureState {
             running: desired_running,
             paused_until: desired_until.clone(),
             desired_running,
@@ -206,8 +176,7 @@ pub fn fleet_capture_state(
             settled: false,
             mic_reachable: false,
             state_token: String::new(),
-        }
-        .stamped());
+        }));
     };
 
     // When paused the resume-by must match too, so extending a pause reads as
@@ -215,7 +184,7 @@ pub fn fleet_capture_state(
     let settled = reported.running == desired_running
         && (desired_running || reported.paused_until == desired_until);
 
-    Ok(CaptureState {
+    Ok(stamped(CaptureState {
         running: reported.running,
         paused_until: reported.paused_until,
         desired_running,
@@ -223,8 +192,7 @@ pub fn fleet_capture_state(
         settled,
         mic_reachable: true,
         state_token: String::new(),
-    }
-    .stamped())
+    }))
 }
 
 /// A pause is always bounded: a forgotten one would silently lose days of the

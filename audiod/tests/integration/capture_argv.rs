@@ -58,7 +58,7 @@ use audiod::capture_run::beat_body;
 #[test]
 fn a_store_and_forward_recorder_beats_that_it_is_not_streaming() {
     // Delivery cannot tell paused from dead, so the recorder beats.
-    let beat = beat_body("geb", true);
+    let beat = serde_json::to_value(beat_body("geb", true)).expect("json");
     assert_eq!(beat["device"], "geb");
     assert_eq!(beat["app"], "linux");
     assert_eq!(
@@ -75,6 +75,5 @@ fn a_store_and_forward_recorder_beats_that_it_is_not_streaming() {
 #[test]
 fn a_producer_that_died_beats_mic_ok_false() {
     // A device that will not open is what the beat reports.
-    let beat = beat_body("geb", false);
-    assert_eq!(beat["micOk"], false);
+    assert_eq!(beat_body("geb", false).mic_ok, Some(false));
 }

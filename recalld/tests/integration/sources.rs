@@ -289,13 +289,13 @@ fn root_with(sources: &[(&str, &str, &str)]) -> (tempfile::TempDir, std::path::P
     (dir, root)
 }
 
-fn liveness(pairs: &[(&str, DateTime<Utc>)]) -> serde_json::Map<String, serde_json::Value> {
+fn liveness(pairs: &[(&str, DateTime<Utc>)]) -> std::collections::BTreeMap<String, String> {
     pairs
         .iter()
         .map(|(id, when)| {
             (
                 (*id).to_owned(),
-                serde_json::Value::String(audiocore::instant::python_isoformat_utc(*when)),
+                audiocore::instant::python_isoformat_utc(*when),
             )
         })
         .collect()

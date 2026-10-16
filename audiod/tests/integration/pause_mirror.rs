@@ -79,7 +79,7 @@ fn liveness_reads_the_marker_mtime_not_its_contents() {
         !live.contains_key("no-marker"),
         "a source with no marker reports nothing, rather than a false time"
     );
-    let stamp = live["usb"].as_str().expect("iso string");
+    let stamp = &live["usb"];
     assert!(stamp.parse::<DateTime<Utc>>().is_ok(), "{stamp}");
 }
 

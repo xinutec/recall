@@ -30,6 +30,8 @@ clap = { version = "4", features = ["derive"] }
 chrono = { version = "0.4", default-features = false, features = ["clock"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+# The web app's types (`ts`), for recalld's export; the recorders build without.
+ts-rs = { version = "12", features = ["serde-compat"], optional = true }
 # Only so `job::Kind` can be a column type.
 rusqlite = { version = "0.40", features = ["bundled"] }
 # The speech detector's ONNX runtime, Debian's system library: ort's prebuilt
@@ -43,6 +45,9 @@ ort = { version = "2.0.0-rc.13", default-features = false, features = [
     "load-dynamic",
     "api-21",
 ] }
+
+[features]
+ts = ["dep:ts-rs"]
 
 [dev-dependencies]
 tempfile = "3"

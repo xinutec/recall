@@ -7,6 +7,7 @@
 //! - Each list is one JSON value in `settings`, rewritten whole, so two
 //!   simultaneous beats can lose one; an hourly status tolerates that.
 
+use audiocore::devices::Heartbeat;
 use audiocore::instant;
 use chrono::{DateTime, Utc};
 use rusqlite::{Connection, OptionalExtension};
@@ -311,29 +312,6 @@ use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
 use std::sync::Arc;
 
-/// Every field but `device` is optional: an older app still counts as alive.
-#[derive(Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct HeartbeatIn {
-    device: String,
-    #[serde(default)]
-    app: String,
-    #[serde(default)]
-    version: String,
-    #[serde(default)]
-    started_at: Option<String>,
-    #[serde(default)]
-    streaming: bool,
-    #[serde(default)]
-    charging: Option<bool>,
-    #[serde(default)]
-    mic_ok: Option<bool>,
-    #[serde(default)]
-    via_lan: Option<bool>,
-    #[serde(default)]
-    dropped_bytes: Option<i64>,
-}
-
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct OutboxIn {
@@ -364,16 +342,16 @@ fn client_instant(value: Option<&str>) -> Option<String> {
 
 pub async fn heartbeat_post_route(
     State(st): State<Arc<reads::State>>,
-    Json(body): Json<HeartbeatIn>,
+    Json(body): Json<Heartbeat>,
 ) -> Response {
     let root = st.root.clone();
     let at = instant::python_isoformat_utc(Utc::now());
     let beat = Beat {
         device: body.device,
-        app: body.app,
-        version: body.version,
+        app: body.app.unwrap_or_default(),
+        version: body.version.unwrap_or_default(),
         started_at: client_instant(body.started_at.as_deref()),
-        streaming: body.streaming,
+        streaming: body.streaming.unwrap_or(false),
         charging: body.charging,
         mic_ok: body.mic_ok,
         via_lan: body.via_lan,

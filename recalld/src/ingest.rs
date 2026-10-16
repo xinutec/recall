@@ -100,11 +100,11 @@ pub(crate) fn sha256_hex(bytes: &[u8]) -> String {
 }
 
 fn receipt(sha256: &str, bytes: usize) -> Response {
-    (
-        StatusCode::OK,
-        axum::Json(json!({ "sha256": sha256, "bytes": bytes })),
-    )
-        .into_response()
+    axum::Json(audiocore::ingest::Receipt {
+        sha256: sha256.to_owned(),
+        bytes,
+    })
+    .into_response()
 }
 
 const DIVERGENT: &str = "a different segment already holds this name";

@@ -11,4 +11,4 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 exec nix run "git+file:../dev-lint?ref=HEAD#gen-types" -- "$@" \
   --out frontend/src/app/generated \
-  -- cargo test -p recalld export_bindings
+  -- cargo test -p recalld -p audiocore export_bindings

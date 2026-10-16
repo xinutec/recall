@@ -94,6 +94,7 @@ dependencies = [
  "serde_json",
  "tempfile",
  "transcript",
+ "ts-rs",
 ]
 
 [[package]]
