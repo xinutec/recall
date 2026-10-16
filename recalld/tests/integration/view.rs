@@ -549,3 +549,17 @@ fn an_exclusion_made_in_the_app_reads_excluded_and_one_recovered_from_the_old_ta
         ]
     );
 }
+
+#[test]
+fn a_word_timing_is_stored_as_a_three_element_array() {
+    // `rendered_lines.word_timings` already holds this shape in production.
+    let word = recalld::line::WordTiming {
+        start_us: 1_000_000,
+        end_us: 1_480_000,
+        text: " hallo".to_owned(),
+    };
+    let stored = serde_json::to_string(std::slice::from_ref(&word)).expect("json");
+    assert_eq!(stored, r#"[[1000000,1480000," hallo"]]"#);
+    let read: Vec<recalld::line::WordTiming> = serde_json::from_str(&stored).expect("reads");
+    assert_eq!(read, [word]);
+}

@@ -97,6 +97,32 @@ impl std::fmt::Display for LineId {
     }
 }
 
+/// One word of a model line, timed: `rendered_lines.word_timings` holds a
+/// JSON array of them, each stored as `[start_us, end_us, text]`.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(from = "(i64, i64, String)", into = "(i64, i64, String)")]
+pub struct WordTiming {
+    pub start_us: i64,
+    pub end_us: i64,
+    pub text: String,
+}
+
+impl From<(i64, i64, String)> for WordTiming {
+    fn from((start_us, end_us, text): (i64, i64, String)) -> Self {
+        Self {
+            start_us,
+            end_us,
+            text,
+        }
+    }
+}
+
+impl From<WordTiming> for (i64, i64, String) {
+    fn from(word: WordTiming) -> Self {
+        (word.start_us, word.end_us, word.text)
+    }
+}
+
 /// How much processing a line has had: the tier the app shows.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, ts_rs::TS)]
 #[serde(rename_all = "lowercase")]

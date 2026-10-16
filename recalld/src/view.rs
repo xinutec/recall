@@ -11,7 +11,7 @@
 
 use crate::clips::{self, ClipError};
 use crate::edit_log::{self, LogError};
-use crate::line::{HUMAN_MODEL, HiddenReason, LIVE_MODEL, Stage};
+use crate::line::{HUMAN_MODEL, HiddenReason, LIVE_MODEL, Stage, WordTiming};
 use crate::rendering;
 use crate::results::ResultError;
 use audiocore::instant::Stamp;
@@ -584,10 +584,14 @@ impl Row {
             words: if line.words().is_empty() {
                 None
             } else {
-                let timed: Vec<(i64, i64, &str)> = line
+                let timed: Vec<WordTiming> = line
                     .words()
                     .iter()
-                    .map(|(span, w)| (span.start().micros(), span.end().micros(), w.as_str()))
+                    .map(|(span, w)| WordTiming {
+                        start_us: span.start().micros(),
+                        end_us: span.end().micros(),
+                        text: w.clone(),
+                    })
                     .collect();
                 Some(
                     serde_json::to_string(&timed)

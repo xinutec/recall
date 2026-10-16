@@ -5,7 +5,7 @@
 
 use crate::clips;
 use crate::edit_log::{self, LogError};
-use crate::line::{HiddenReason, LineId};
+use crate::line::{HiddenReason, LineId, WordTiming};
 use crate::route;
 use crate::view::{self, ViewError};
 use audiocore::instant::Stamp;
@@ -101,8 +101,8 @@ struct Line {
     edit: Option<EditId>,
     by_person: bool,
     label: Option<String>,
-    /// `(start_us, end_us, text)` per word, for a model line.
-    words: Vec<(i64, i64, String)>,
+    /// Per word, for a model line.
+    words: Vec<WordTiming>,
 }
 
 fn line(meaning: &Connection, ingest: &Connection, id: LineId) -> Result<Line, WriteError> {
@@ -489,12 +489,12 @@ fn instant_at(line: &Line, offset: usize, end: bool) -> Instant {
             .unwrap_or(line.span.start());
     }
     // The line's text is the words joined and trimmed.
-    let lead = line.words.first().map_or(0, |(_, _, w)| {
-        w.chars().count() - w.trim_start().chars().count()
+    let lead = line.words.first().map_or(0, |w| {
+        w.text.chars().count() - w.text.trim_start().chars().count()
     });
     let mut at: usize = 0;
-    for (start, stop, word) in &line.words {
-        let len = word.chars().count();
+    for word in &line.words {
+        let len = word.text.chars().count();
         let (from, to) = (at.saturating_sub(lead), (at + len).saturating_sub(lead));
         at += len;
         let inside = if end {
@@ -503,7 +503,7 @@ fn instant_at(line: &Line, offset: usize, end: bool) -> Instant {
             offset < to
         };
         if inside {
-            let micros = if end { *stop } else { *start };
+            let micros = if end { word.end_us } else { word.start_us };
             return Instant::from_micros(micros).unwrap_or(line.span.start());
         }
     }
