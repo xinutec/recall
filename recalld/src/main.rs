@@ -103,6 +103,9 @@ enum Task {
         /// `tcp_pcm` for a phone, `coreaudio` for a microphone on the Mac.
         #[arg(long)]
         kind: String,
+        /// Give a row already there this name too.
+        #[arg(long)]
+        rename: bool,
     },
 }
 
@@ -178,7 +181,12 @@ fn run_task(root: &std::path::Path, task: Task) -> ExitCode {
                 recalld::forget::rename_source(meaning, ingest, root, &from, &to, apply)
             })
         }
-        Task::DeclareSource { id, name, kind } => {
+        Task::DeclareSource {
+            id,
+            name,
+            kind,
+            rename,
+        } => {
             let (Some(id), Some(kind)) = (
                 transcript::SourceId::parse(&id),
                 recalld::sources::SourceKind::parse(&kind),
@@ -187,7 +195,7 @@ fn run_task(root: &std::path::Path, task: Task) -> ExitCode {
                 return ExitCode::FAILURE;
             };
             report(root, |meaning, _ingest| {
-                recalld::sources::declare(meaning, &id, &name, kind)
+                recalld::sources::declare(meaning, &id, &name, kind, rename)
             })
         }
     }

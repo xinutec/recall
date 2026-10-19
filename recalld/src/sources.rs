@@ -14,6 +14,7 @@ crate::statements! {
         "SELECT id, name, kind FROM sources ORDER BY id";
     DECLARE: Meaning =
         "INSERT INTO sources (id, name, kind) VALUES (?1, ?2, ?3) ON CONFLICT(id) DO NOTHING";
+    RELABEL: Meaning = "UPDATE sources SET name = ?2 WHERE id = ?1 AND name <> ?2";
 }
 
 /// What `declare` found: the row made, or the one already there.
@@ -23,12 +24,14 @@ pub struct Declared {
     pub name: String,
     pub kind: &'static str,
     pub created: bool,
+    /// An existing row given the name, asked for with `rename`.
+    pub renamed: bool,
 }
 
 /// Give a capture device its `sources` row: the operator's declaration of its
 /// kind (`recalld declare-source`), which the registrar waits for before it
 /// registers the device's segments. A row already there is left as it is,
-/// name included: display names are the web UI's.
+/// name included, unless `rename`: display names are otherwise the web UI's.
 ///
 /// # Errors
 /// If the database refuses.
@@ -37,13 +40,16 @@ pub fn declare(
     id: &transcript::SourceId,
     name: &str,
     kind: SourceKind,
+    rename: bool,
 ) -> rusqlite::Result<Declared> {
     let created = DECLARE.execute(meaning, (id.as_str(), name, kind))? == 1;
+    let renamed = !created && rename && RELABEL.execute(meaning, (id.as_str(), name))? == 1;
     Ok(Declared {
         id: id.clone(),
         name: name.to_owned(),
         kind: kind.as_str(),
         created,
+        renamed,
     })
 }
 
