@@ -312,6 +312,19 @@ fn renaming_a_source_moves_its_history_and_files_and_nothing_else() {
     let mut fleet = fleet();
     let root = fleet.dir.path().to_owned();
     std::fs::create_dir_all(root.join("usb")).expect("marker dir");
+    // The measured tables reference segments by filename: the rename must
+    // carry them, and the foreign keys must let it.
+    for start in [INSIDE, OUTSIDE] {
+        fleet
+            .ingest
+            .execute_batch(&format!(
+                "INSERT INTO segment_speech (filename, source, speech_seconds, computed_utc)
+                 VALUES ('usb-{start}.flac', 'usb', 1.0, '2026-10-15T10:00:00Z');
+                 INSERT INTO segment_levels (filename, source, speech_db, floor_db, computed_utc)
+                 VALUES ('usb-{start}.flac', 'usb', -20.0, -60.0, '2026-10-15T10:00:00Z');"
+            ))
+            .expect("child rows");
+    }
     let (from, to) = (
         transcript::SourceId::parse("usb").expect("id"),
         transcript::SourceId::parse("usb-1").expect("id"),
@@ -389,27 +402,15 @@ fn assert_renamed(fleet: &Fleet, root: &std::path::Path, lines: usize) {
     ] {
         assert_eq!(count(plane, sql), 0, "{sql}");
     }
-    assert_eq!(
-        count(
-            &fleet.ingest,
-            "SELECT count(*) FROM segments WHERE source = 'usb-1' AND filename LIKE 'usb-1-2%'"
-        ),
-        2
-    );
-    assert_eq!(
-        count(
-            &fleet.ingest,
-            "SELECT count(*) FROM clips WHERE source = 'usb-1' AND path LIKE 'ingest/usb-1/usb-1-2%'"
-        ),
-        2
-    );
-    assert_eq!(
-        count(
-            &fleet.ingest,
-            "SELECT count(*) FROM jobs WHERE filename LIKE 'usb-1-2%'"
-        ),
-        2
-    );
+    for sql in [
+        "SELECT count(*) FROM segments WHERE source = 'usb-1' AND filename LIKE 'usb-1-2%'",
+        "SELECT count(*) FROM clips WHERE source = 'usb-1' AND path LIKE 'ingest/usb-1/usb-1-2%'",
+        "SELECT count(*) FROM jobs WHERE filename LIKE 'usb-1-2%'",
+        "SELECT count(*) FROM segment_speech WHERE source = 'usb-1' AND filename LIKE 'usb-1-2%'",
+        "SELECT count(*) FROM segment_levels WHERE source = 'usb-1' AND filename LIKE 'usb-1-2%'",
+    ] {
+        assert_eq!(count(&fleet.ingest, sql), 2, "{sql}");
+    }
     assert_eq!(
         count(
             &fleet.meaning,

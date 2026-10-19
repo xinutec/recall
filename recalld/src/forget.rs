@@ -477,7 +477,7 @@ fn move_source_dirs(
     from: &SourceId,
     to: &SourceId,
     on_disk: &[String],
-    renamed: impl Fn(&str) -> String,
+    renamed: &dyn Fn(&str) -> String,
 ) -> Result<(), ForgetError> {
     let old_dir = crate::store::source_dir(root, from.as_str());
     let new_dir = crate::store::source_dir(root, to.as_str());
@@ -510,6 +510,10 @@ fn rename_rows(
     root: &Path,
 ) -> Result<(), ForgetError> {
     let tx = crate::sql::write(ingest)?;
+    // `segment_speech` and `segment_levels` reference `segments` by filename:
+    // under immediate checking no order of renaming passes, so the keys are
+    // checked once, at commit, when every side has moved.
+    tx.pragma_update(None, "defer_foreign_keys", true)?;
     let args = (from.as_str(), to.as_str(), old_prefix, new_prefix);
     for statement in [
         RENAME_SPEECH_FILES,
@@ -532,6 +536,7 @@ fn rename_rows(
     );
     let new_abs = format!("{}/", crate::store::source_dir(root, to.as_str()).display());
     let tx = crate::sql::write(meaning)?;
+    tx.pragma_update(None, "defer_foreign_keys", true)?;
     INSERT_SOURCE.execute(&tx, (to.as_str(), name, kind))?;
     let paths = (
         from.as_str(),
@@ -634,9 +639,8 @@ pub fn rename_source(
         return Ok(report);
     }
 
-    move_source_dirs(root, from, to, &on_disk, renamed)?;
-
-    rename_rows(
+    move_source_dirs(root, from, to, &on_disk, &renamed)?;
+    if let Err(err) = rename_rows(
         meaning,
         ingest,
         from,
@@ -644,7 +648,19 @@ pub fn rename_source(
         (&old_prefix, &new_prefix),
         (&name, &kind),
         root,
-    )?;
+    ) {
+        // The rows did not take: put the files back under their old names, so
+        // the archive is as it was and the error is the only trace.
+        let moved: Vec<String> = on_disk.iter().map(|f| renamed(f)).collect();
+        let back = |file: &str| -> String {
+            match file.strip_prefix(&new_prefix) {
+                Some(rest) => format!("{old_prefix}{rest}"),
+                None => file.to_owned(),
+            }
+        };
+        move_source_dirs(root, to, from, &moved, &back)?;
+        return Err(err);
+    }
     report.applied = true;
     Ok(report)
 }
