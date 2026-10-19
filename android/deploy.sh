@@ -18,7 +18,7 @@ PHONES=(
   "pixel5|192.168.1.242:5555|10.100.0.10:5555|15271FDD40043S"
   # LineageOS: Wireless debugging only (a random port, TLS-paired with this Mac),
   # so 5555 refuses and the mDNS lookup finds the port.
-  "oneplus6t|192.168.1.28:5555|10.100.0.8:5555|83bf636e"
+  "oneplus6t-1|192.168.1.28:5555|10.100.0.8:5555|83bf636e"
   "oneplus6t-0|192.168.1.218:5555|10.100.0.18:5555|6e53045b"
 )
 
