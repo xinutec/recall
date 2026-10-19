@@ -104,6 +104,12 @@ recorder still holding one is refused it (410) and stops sending it (`gone` in
 Mac under `/Volumes/Backup/recall/<source>/`, on geb under
 `/var/lib/recall/geb/`.
 
+Renaming a source keeps its history under the new id, pause first:
+`recalld --root /data rename-source --from <id> --to <id>` in the pod says what
+the source holds, and `--apply` moves its rows in both planes, its files and
+its directories. The recorder is not renamed: set its id before it next
+delivers, or it starts a new source under the old name.
+
 Phones: [android](../android/README.md), [ios](../ios/README.md); protocol and
 liveness: [devices.md](devices.md).
 

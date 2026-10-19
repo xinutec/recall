@@ -304,3 +304,169 @@ fn retiring_without_apply_reports_and_changes_nothing() {
         1
     );
 }
+
+/// A rename moves the source's id, rows, files and directory in both planes;
+/// what is not its stays.
+#[test]
+fn renaming_a_source_moves_its_history_and_files_and_nothing_else() {
+    let mut fleet = fleet();
+    let root = fleet.dir.path().to_owned();
+    std::fs::create_dir_all(root.join("usb")).expect("marker dir");
+    let (from, to) = (
+        transcript::SourceId::parse("usb").expect("id"),
+        transcript::SourceId::parse("usb-1").expect("id"),
+    );
+    let seen = recalld::forget::rename_source(
+        &mut fleet.meaning,
+        &mut fleet.ingest,
+        &root,
+        &from,
+        &to,
+        false,
+    )
+    .expect("report");
+    assert_eq!(
+        (seen.applied, seen.segments, seen.audio_rows),
+        (false, 2, 2)
+    );
+    assert!(
+        file(&fleet, "usb", INSIDE).exists(),
+        "a report moves nothing"
+    );
+
+    let done = recalld::forget::rename_source(
+        &mut fleet.meaning,
+        &mut fleet.ingest,
+        &root,
+        &from,
+        &to,
+        true,
+    )
+    .expect("rename");
+    assert!(done.applied);
+    assert_renamed(&fleet, &root, seen.lines);
+}
+
+/// After `usb` became `usb-1`: everything of its under the new id, the upload untouched.
+fn assert_renamed(fleet: &Fleet, root: &std::path::Path, lines: usize) {
+    for start in [INSIDE, OUTSIDE] {
+        assert!(!file(fleet, "usb", start).exists());
+        assert!(
+            file(fleet, "usb-1", start).exists(),
+            "{start} moved under its new name"
+        );
+    }
+    assert!(!recalld::store::source_dir(root, "usb").exists());
+    assert!(
+        root.join("usb-1").is_dir() && !root.join("usb").exists(),
+        "the marker dir moved"
+    );
+    for (plane, sql) in [
+        (
+            &fleet.ingest,
+            "SELECT count(*) FROM segments WHERE source = 'usb'",
+        ),
+        (
+            &fleet.ingest,
+            "SELECT count(*) FROM clips WHERE source = 'usb' OR filename LIKE 'usb-2%'",
+        ),
+        (
+            &fleet.ingest,
+            "SELECT count(*) FROM jobs WHERE filename LIKE 'usb-2%'",
+        ),
+        (
+            &fleet.meaning,
+            "SELECT count(*) FROM audio_segments WHERE source_id = 'usb' OR path LIKE '%/ingest/usb/%'",
+        ),
+        (
+            &fleet.meaning,
+            "SELECT count(*) FROM rendered_lines WHERE source_id = 'usb'",
+        ),
+        (
+            &fleet.meaning,
+            "SELECT count(*) FROM sources WHERE id = 'usb'",
+        ),
+    ] {
+        assert_eq!(count(plane, sql), 0, "{sql}");
+    }
+    assert_eq!(
+        count(
+            &fleet.ingest,
+            "SELECT count(*) FROM segments WHERE source = 'usb-1' AND filename LIKE 'usb-1-2%'"
+        ),
+        2
+    );
+    assert_eq!(
+        count(
+            &fleet.ingest,
+            "SELECT count(*) FROM clips WHERE source = 'usb-1' AND path LIKE 'ingest/usb-1/usb-1-2%'"
+        ),
+        2
+    );
+    assert_eq!(
+        count(
+            &fleet.ingest,
+            "SELECT count(*) FROM jobs WHERE filename LIKE 'usb-1-2%'"
+        ),
+        2
+    );
+    assert_eq!(
+        count(
+            &fleet.meaning,
+            "SELECT count(*) FROM audio_segments WHERE source_id = 'usb-1' AND path LIKE '%/ingest/usb-1/usb-1-2%'"
+        ),
+        2
+    );
+    assert_eq!(
+        count(
+            &fleet.meaning,
+            "SELECT count(*) FROM rendered_lines WHERE source_id = 'usb-1'"
+        ),
+        i64::try_from(lines).expect("lines")
+    );
+    assert_eq!(
+        count(
+            &fleet.meaning,
+            "SELECT count(*) FROM sources WHERE id = 'usb-1' AND name = 'usb' AND kind = 'coreaudio'"
+        ),
+        1
+    );
+    assert_eq!(
+        count(
+            &fleet.ingest,
+            "SELECT count(*) FROM segments WHERE source = 'meeting-1'"
+        ),
+        1,
+        "the upload is untouched"
+    );
+    assert!(file(fleet, "meeting-1", INSIDE).exists());
+}
+
+#[test]
+fn a_rename_refuses_a_missing_source_and_a_taken_id() {
+    let mut fleet = fleet();
+    let root = fleet.dir.path().to_owned();
+    let id = |s: &str| transcript::SourceId::parse(s).expect("id");
+    let missing = recalld::forget::rename_source(
+        &mut fleet.meaning,
+        &mut fleet.ingest,
+        &root,
+        &id("nobody"),
+        &id("usb-1"),
+        true,
+    );
+    assert!(matches!(missing, Err(ForgetError::NoSuchSource(_))));
+    let taken = recalld::forget::rename_source(
+        &mut fleet.meaning,
+        &mut fleet.ingest,
+        &root,
+        &id("usb"),
+        &id("meeting-1"),
+        true,
+    );
+    assert!(matches!(taken, Err(ForgetError::SourceExists(_))));
+    assert!(
+        file(&fleet, "usb", INSIDE).exists(),
+        "a refusal moves nothing"
+    );
+}

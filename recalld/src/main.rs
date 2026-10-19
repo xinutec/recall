@@ -80,6 +80,18 @@ enum Task {
         #[arg(long)]
         apply: bool,
     },
+    /// Give a source a new id in both planes and on the disk, history and all
+    /// (`recalld::forget::rename_source`). Pause capture first: the recorder
+    /// must come back under the new id. Without `--apply` it only says what
+    /// the source holds.
+    RenameSource {
+        #[arg(long)]
+        from: String,
+        #[arg(long)]
+        to: String,
+        #[arg(long)]
+        apply: bool,
+    },
 }
 
 /// Open both planes as the server does, run `report` over them, and print what
@@ -140,6 +152,18 @@ fn run_task(root: &std::path::Path, task: Task) -> ExitCode {
             };
             report(root, |meaning, ingest| {
                 recalld::forget::retire_source(meaning, ingest, root, &source, apply)
+            })
+        }
+        Task::RenameSource { from, to, apply } => {
+            let (Some(from), Some(to)) = (
+                transcript::SourceId::parse(&from),
+                transcript::SourceId::parse(&to),
+            ) else {
+                eprintln!("recalld: --from and --to must be source ids");
+                return ExitCode::FAILURE;
+            };
+            report(root, |meaning, ingest| {
+                recalld::forget::rename_source(meaning, ingest, root, &from, &to, apply)
             })
         }
     }

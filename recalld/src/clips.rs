@@ -10,6 +10,14 @@ use std::path::Path;
 use transcript::{Clip, ClipId, Instant, SourceId};
 
 crate::statements! {
+    /// `?1`: the old id, `?2`: the new, `?3`: the old filename prefix, `?4`: the new.
+    RENAME_SOURCE_FILES: Ingest =
+        "UPDATE clips SET source = ?2,
+                          filename = ?4 || substr(filename, length(?3) + 1),
+                          path = 'ingest/' || ?2 || '/' || ?4 || substr(filename, length(?3) + 1)
+         WHERE source = ?1 AND substr(filename, 1, length(?3)) = ?3";
+    RENAME_SOURCE: Ingest =
+        "UPDATE clips SET source = ?2, path = 'ingest/' || ?2 || '/' || filename WHERE source = ?1";
     BY_FILENAME: Ingest =
         "SELECT id, source, start_us, filename, path FROM clips WHERE filename = ?1";
     BY_ID: Ingest =
@@ -150,6 +158,21 @@ fn relative<'a>(root: &Path, path: &'a str) -> Option<&'a str> {
 /// ([`crate::store::forget_files`]).
 pub(crate) fn forget_files(ingest: &Connection, filenames_json: &str) -> rusqlite::Result<usize> {
     FORGET_FILES.execute(ingest, [filenames_json])
+}
+
+/// A source's clips under its new id: source, filename and path, the id kept.
+/// A filename not carrying the old `<source>-` prefix keeps its name. The
+/// caller's transaction; `forget::rename_source` is the one caller.
+pub(crate) fn rename_source(
+    ingest: &Connection,
+    from: &str,
+    to: &str,
+    old_prefix: &str,
+    new_prefix: &str,
+) -> rusqlite::Result<()> {
+    RENAME_SOURCE_FILES.execute(ingest, (from, to, old_prefix, new_prefix))?;
+    RENAME_SOURCE.execute(ingest, (from, to))?;
+    Ok(())
 }
 
 /// Whether every stored file and every meaning-plane audio row has a clip.

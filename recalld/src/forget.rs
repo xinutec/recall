@@ -63,6 +63,50 @@ crate::statements! {
         "SELECT id, source_id, start_utc, path FROM audio_segments WHERE source_id = ?1";
     DROP_TOMBSTONES: Meaning = "DELETE FROM deleted_segments WHERE source_id = ?1";
     DROP_SOURCE: Meaning = "DELETE FROM sources WHERE id = ?1";
+    SOURCE_ROW: Meaning = "SELECT name, kind FROM sources WHERE id = ?1";
+    SEGMENTS_OF: Ingest = "SELECT filename FROM segments WHERE source = ?1";
+    COUNT_SOURCE_LINES: Meaning = "SELECT count(*) FROM rendered_lines WHERE source_id = ?1";
+    /// The rename, one statement per table. `?1`: the old id, `?2`: the new,
+    /// `?3`: the old filename prefix (`<id>-`), `?4`: the new. A filename
+    /// without its source's prefix keeps its name and only changes source.
+    /// The filename-keyed tables go first: they find their rows through
+    /// `segments`, which is renamed last.
+    RENAME_SPEECH_FILES: Ingest =
+        "UPDATE segment_speech SET filename = ?4 || substr(filename, length(?3) + 1)
+         WHERE source = ?1 AND substr(filename, 1, length(?3)) = ?3";
+    RENAME_LEVELS_FILES: Ingest =
+        "UPDATE segment_levels SET filename = ?4 || substr(filename, length(?3) + 1)
+         WHERE source = ?1 AND substr(filename, 1, length(?3)) = ?3";
+    RENAME_JOBS_FILES: Ingest =
+        "UPDATE jobs SET filename = ?4 || substr(filename, length(?3) + 1)
+         WHERE filename IN (SELECT filename FROM segments WHERE source = ?1)
+           AND substr(filename, 1, length(?3)) = ?3";
+    RENAME_LEDGER_FILES: Ingest =
+        "UPDATE pass_ledger SET filename = ?4 || substr(filename, length(?3) + 1)
+         WHERE filename IN (SELECT filename FROM segments WHERE source = ?1)
+           AND substr(filename, 1, length(?3)) = ?3";
+    RESOURCE_SPEECH: Ingest = "UPDATE segment_speech SET source = ?2 WHERE source = ?1";
+    RESOURCE_LEVELS: Ingest = "UPDATE segment_levels SET source = ?2 WHERE source = ?1";
+    RENAME_SEGMENTS: Ingest =
+        "UPDATE segments SET source = ?2, filename = ?4 || substr(filename, length(?3) + 1)
+         WHERE source = ?1 AND substr(filename, 1, length(?3)) = ?3";
+    RESOURCE_SEGMENTS: Ingest = "UPDATE segments SET source = ?2 WHERE source = ?1";
+    /// `?5`: the old directory with its trailing slash, `?6`: the new. A path
+    /// is absolute here, as `audio_segments` records it.
+    RENAME_AUDIO: Meaning =
+        "UPDATE audio_segments
+         SET source_id = ?2,
+             path = ?6 || ?4 || substr(path, length(?5) + length(?3) + 1)
+         WHERE source_id = ?1 AND substr(path, 1, length(?5) + length(?3)) = ?5 || ?3";
+    RESOURCE_AUDIO: Meaning =
+        "UPDATE audio_segments
+         SET source_id = ?2, path = ?6 || substr(path, length(?5) + 1)
+         WHERE source_id = ?1 AND substr(path, 1, length(?5)) = ?5";
+    RENAME_EVENTS: Meaning = "UPDATE capture_events SET source_id = ?2 WHERE source_id = ?1";
+    RENAME_TOMBSTONES: Meaning = "UPDATE deleted_segments SET source_id = ?2 WHERE source_id = ?1";
+    RENAME_EDITS: Meaning = "UPDATE edits SET source_id = ?2 WHERE source_id = ?1";
+    RENAME_LINES: Meaning = "UPDATE rendered_lines SET source_id = ?2 WHERE source_id = ?1";
+    INSERT_SOURCE: Meaning = "INSERT INTO sources (id, name, kind) VALUES (?1, ?2, ?3)";
 }
 
 /// `[from, to)`, in UTC.
@@ -113,6 +157,11 @@ pub enum ForgetError {
     Voiceprint,
     /// Only a derived source can be retired: anything else is a recording.
     NotDerived(SourceId),
+    /// A rename needs a source that has a row and a new id that has none.
+    NoSuchSource(SourceId),
+    SourceExists(SourceId),
+    /// A rename's file move failed; the rows were not changed.
+    Move(PathBuf, std::io::Error),
 }
 
 impl From<rusqlite::Error> for ForgetError {
@@ -134,6 +183,9 @@ impl std::fmt::Display for ForgetError {
             Self::Clip(err) => write!(f, "{err}"),
             Self::Voiceprint => f.write_str("a voiceprint was learnt from audio in the span"),
             Self::NotDerived(source) => write!(f, "{source} is not a derived source: refused"),
+            Self::NoSuchSource(source) => write!(f, "{source} has no sources row"),
+            Self::SourceExists(source) => write!(f, "{source} already exists"),
+            Self::Move(path, err) => write!(f, "{}: {err}", path.display()),
         }
     }
 }
@@ -402,4 +454,197 @@ pub fn retire_source(
         }
     }
     Ok(forgotten)
+}
+
+/// What a rename moved, or would.
+#[derive(Debug, Serialize)]
+pub struct Renamed {
+    pub applied: bool,
+    pub from: SourceId,
+    pub to: SourceId,
+    /// Stored files with their ingest rows.
+    pub segments: usize,
+    pub audio_rows: usize,
+    pub lines: usize,
+    /// Files under the source's directory that no row names; moved with it.
+    pub loose_files: usize,
+}
+
+/// The disk half of a rename: every file into the new directory under its new
+/// name, then the marker directory. A move that fails stops here, rows untouched.
+fn move_source_dirs(
+    root: &Path,
+    from: &SourceId,
+    to: &SourceId,
+    on_disk: &[String],
+    renamed: impl Fn(&str) -> String,
+) -> Result<(), ForgetError> {
+    let old_dir = crate::store::source_dir(root, from.as_str());
+    let new_dir = crate::store::source_dir(root, to.as_str());
+    if old_dir.exists() {
+        std::fs::create_dir_all(&new_dir).map_err(|e| ForgetError::Move(new_dir.clone(), e))?;
+        for file in on_disk {
+            let (src, dst) = (old_dir.join(file), new_dir.join(renamed(file)));
+            std::fs::rename(&src, &dst).map_err(|e| ForgetError::Move(src, e))?;
+        }
+        std::fs::remove_dir(&old_dir).map_err(|e| ForgetError::Move(old_dir.clone(), e))?;
+    }
+    let (old_marks, new_marks) = (root.join(from.as_str()), root.join(to.as_str()));
+    if old_marks.is_dir() && !new_marks.exists() {
+        std::fs::rename(&old_marks, &new_marks).map_err(|e| ForgetError::Move(old_marks, e))?;
+    }
+    Ok(())
+}
+
+/// The rows half of a rename, one transaction per plane: the ingest plane's
+/// filename-keyed tables, clips and segments; then the meaning plane's new
+/// `sources` row, its audio paths and every table naming the source, the old
+/// row dropped last so the foreign keys hold throughout.
+fn rename_rows(
+    meaning: &mut Connection,
+    ingest: &mut Connection,
+    from: &SourceId,
+    to: &SourceId,
+    (old_prefix, new_prefix): (&str, &str),
+    (name, kind): (&str, &str),
+    root: &Path,
+) -> Result<(), ForgetError> {
+    let tx = crate::sql::write(ingest)?;
+    let args = (from.as_str(), to.as_str(), old_prefix, new_prefix);
+    for statement in [
+        RENAME_SPEECH_FILES,
+        RENAME_LEVELS_FILES,
+        RENAME_JOBS_FILES,
+        RENAME_LEDGER_FILES,
+    ] {
+        statement.execute(&tx, args)?;
+    }
+    RESOURCE_SPEECH.execute(&tx, (from.as_str(), to.as_str()))?;
+    RESOURCE_LEVELS.execute(&tx, (from.as_str(), to.as_str()))?;
+    crate::clips::rename_source(&tx, from.as_str(), to.as_str(), old_prefix, new_prefix)?;
+    RENAME_SEGMENTS.execute(&tx, args)?;
+    RESOURCE_SEGMENTS.execute(&tx, (from.as_str(), to.as_str()))?;
+    tx.commit()?;
+
+    let old_abs = format!(
+        "{}/",
+        crate::store::source_dir(root, from.as_str()).display()
+    );
+    let new_abs = format!("{}/", crate::store::source_dir(root, to.as_str()).display());
+    let tx = crate::sql::write(meaning)?;
+    INSERT_SOURCE.execute(&tx, (to.as_str(), name, kind))?;
+    let paths = (
+        from.as_str(),
+        to.as_str(),
+        old_prefix,
+        new_prefix,
+        &old_abs,
+        &new_abs,
+    );
+    RENAME_AUDIO.execute(&tx, paths)?;
+    RESOURCE_AUDIO.execute(&tx, paths)?;
+    for statement in [RENAME_EVENTS, RENAME_TOMBSTONES, RENAME_EDITS, RENAME_LINES] {
+        statement.execute(&tx, (from.as_str(), to.as_str()))?;
+    }
+    DROP_SOURCE.execute(&tx, [from.as_str()])?;
+    tx.commit()?;
+    Ok(())
+}
+
+/// Give `from` the id `to` everywhere: its `sources` row, every row naming it
+/// in either plane, its files' names (`<id>-<stamp>.<ext>`, kept as the key:
+/// a clip's id survives), its directory and its marker directory. The disk
+/// moves first, inside a transaction on each plane, so a failed move leaves
+/// the rows as they were. The recorder is the one thing not renamed: set its
+/// id before it next delivers, or it starts a new source under the old name.
+pub fn rename_source(
+    meaning: &mut Connection,
+    ingest: &mut Connection,
+    root: &Path,
+    from: &SourceId,
+    to: &SourceId,
+    apply: bool,
+) -> Result<Renamed, ForgetError> {
+    use rusqlite::OptionalExtension as _;
+    let row: Option<(String, String)> = SOURCE_ROW
+        .query_row(meaning, [from.as_str()], |r| Ok((r.get(0)?, r.get(1)?)))
+        .optional()?;
+    let Some((name, kind)) = row else {
+        return Err(ForgetError::NoSuchSource(from.clone()));
+    };
+    let taken: Option<String> = SOURCE_ROW
+        .query_row(meaning, [to.as_str()], |r| r.get(0))
+        .optional()?;
+    if taken.is_some() || crate::store::source_dir(root, to.as_str()).exists() {
+        return Err(ForgetError::SourceExists(to.clone()));
+    }
+    let filenames: Vec<String> = {
+        let mut stmt = SEGMENTS_OF.prepare(ingest)?;
+        let rows = stmt.query_map([from.as_str()], |r| r.get(0))?;
+        rows.collect::<rusqlite::Result<_>>()?
+    };
+    let audio: Vec<Recording> = {
+        let mut stmt = SOURCE_AUDIO.prepare(meaning)?;
+        let rows = stmt.query_map([from.as_str()], |r| {
+            Ok(Recording {
+                id: r.get(0)?,
+                source: crate::sql::source_id(r, 1)?,
+                start: r.get(2)?,
+                path: r.get(3)?,
+            })
+        })?;
+        rows.collect::<rusqlite::Result<_>>()?
+    };
+    let lines: usize = {
+        let n: i64 = COUNT_SOURCE_LINES.query_row(meaning, [from.as_str()], |r| r.get(0))?;
+        usize::try_from(n).unwrap_or(0)
+    };
+    let old_dir = crate::store::source_dir(root, from.as_str());
+    let old_prefix = format!("{}-", from.as_str());
+    let new_prefix = format!("{}-", to.as_str());
+    let renamed = |file: &str| -> String {
+        match file.strip_prefix(&old_prefix) {
+            Some(rest) => format!("{new_prefix}{rest}"),
+            None => file.to_owned(),
+        }
+    };
+    let on_disk: Vec<String> = match std::fs::read_dir(&old_dir) {
+        Ok(entries) => entries
+            .filter_map(Result::ok)
+            .filter_map(|e| e.file_name().into_string().ok())
+            .collect(),
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => Vec::new(),
+        Err(err) => return Err(ForgetError::Move(old_dir.clone(), err)),
+    };
+    let named: BTreeSet<&str> = filenames.iter().map(String::as_str).collect();
+    let loose_files = on_disk
+        .iter()
+        .filter(|f| !named.contains(f.as_str()))
+        .count();
+    let mut report = Renamed {
+        applied: apply,
+        from: from.clone(),
+        to: to.clone(),
+        segments: filenames.len(),
+        audio_rows: audio.len(),
+        lines,
+        loose_files,
+    };
+    if !apply {
+        return Ok(report);
+    }
+
+    move_source_dirs(root, from, to, &on_disk, renamed)?;
+
+    rename_rows(
+        meaning,
+        ingest,
+        from,
+        to,
+        (&old_prefix, &new_prefix),
+        (&name, &kind),
+        root,
+    )?;
+    report.applied = true;
+    Ok(report)
 }
