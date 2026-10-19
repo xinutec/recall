@@ -513,3 +513,84 @@ async fn a_recorder_that_streams_to_nothing_proves_itself_by_delivering() {
         "a delivered speech-bearing segment is the only proof it can offer"
     );
 }
+
+/// A declared device's segments register; an undeclared one's wait.
+#[test]
+fn a_device_is_registered_only_once_declared() {
+    use crate::fixture::Fleet;
+    let fleet = Fleet::new();
+    let id = transcript::SourceId::parse("oneplus6t-9").expect("id");
+    let dir = recalld::store::source_dir(fleet.root(), id.as_str());
+    std::fs::create_dir_all(&dir).expect("dir");
+    let at = chrono::DateTime::parse_from_rfc3339("2026-10-15T08:57:00+00:00")
+        .expect("stamp")
+        .with_timezone(&chrono::Utc);
+    let filename = "oneplus6t-9-20261015T085700.flac".to_owned();
+    std::fs::copy(
+        "../tests/fixtures/speech/dialogue-en.flac",
+        dir.join(&filename),
+    )
+    .expect("a real file");
+    recalld::store::insert(
+        &fleet.ingest,
+        &recalld::store::Row {
+            source: id.clone(),
+            filename,
+            start_utc: audiocore::instant::IngestStamp::of(at),
+            bytes: 5,
+            sha256: "x".into(),
+            received_utc: audiocore::instant::IngestStamp::of(at),
+            sent_utc: None,
+        },
+    )
+    .expect("segment");
+    let now = crate::stamp("2026-10-15T10:00:00+00:00");
+    let count = |sql: &str| -> i64 {
+        fleet
+            .meaning
+            .query_row(sql, [], |r| r.get(0))
+            .expect("count")
+    };
+    let pass = recalld::registrar::register_segments(
+        &fleet.meaning,
+        &fleet.ingest,
+        fleet.root(),
+        &now,
+        10,
+    )
+    .expect("pass");
+    assert_eq!(
+        (pass.waiting, pass.added),
+        (1, 0),
+        "undeclared: the registrar waits"
+    );
+    assert_eq!(
+        count("SELECT count(*) FROM audio_segments WHERE source_id = 'oneplus6t-9'"),
+        0
+    );
+    let first = recalld::sources::declare(&fleet.meaning, &id, "OnePlus 6T 9", SourceKind::TcpPcm)
+        .expect("declare");
+    let again = recalld::sources::declare(&fleet.meaning, &id, "other name", SourceKind::TcpPcm)
+        .expect("declare again");
+    assert!(first.created && !again.created);
+    assert_eq!(
+        count(
+            "SELECT count(*) FROM sources WHERE id = 'oneplus6t-9' AND name = 'OnePlus 6T 9' AND kind = 'tcp_pcm'"
+        ),
+        1,
+        "the first declaration stands"
+    );
+    let pass = recalld::registrar::register_segments(
+        &fleet.meaning,
+        &fleet.ingest,
+        fleet.root(),
+        &now,
+        10,
+    )
+    .expect("pass");
+    assert_eq!((pass.waiting, pass.added), (0, 1), "declared: registered");
+    assert_eq!(
+        count("SELECT count(*) FROM audio_segments WHERE source_id = 'oneplus6t-9'"),
+        1
+    );
+}

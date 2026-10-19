@@ -12,6 +12,39 @@ use std::collections::HashMap;
 crate::statements! {
     SOURCES: Meaning =
         "SELECT id, name, kind FROM sources ORDER BY id";
+    DECLARE: Meaning =
+        "INSERT INTO sources (id, name, kind) VALUES (?1, ?2, ?3) ON CONFLICT(id) DO NOTHING";
+}
+
+/// What `declare` found: the row made, or the one already there.
+#[derive(Debug, serde::Serialize)]
+pub struct Declared {
+    pub id: transcript::SourceId,
+    pub name: String,
+    pub kind: &'static str,
+    pub created: bool,
+}
+
+/// Give a capture device its `sources` row: the operator's declaration of its
+/// kind (`recalld declare-source`), which the registrar waits for before it
+/// registers the device's segments. A row already there is left as it is,
+/// name included: display names are the web UI's.
+///
+/// # Errors
+/// If the database refuses.
+pub fn declare(
+    meaning: &Connection,
+    id: &transcript::SourceId,
+    name: &str,
+    kind: SourceKind,
+) -> rusqlite::Result<Declared> {
+    let created = DECLARE.execute(meaning, (id.as_str(), name, kind))? == 1;
+    Ok(Declared {
+        id: id.clone(),
+        name: name.to_owned(),
+        kind: kind.as_str(),
+        created,
+    })
 }
 
 /// How a source's PCM stream is produced.

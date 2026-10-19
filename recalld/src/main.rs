@@ -92,6 +92,18 @@ enum Task {
         #[arg(long)]
         apply: bool,
     },
+    /// Declare a capture device's kind (`recalld::sources::declare`): the
+    /// registrar holds a device's segments until its `sources` row exists. A
+    /// row already there is left as it is.
+    DeclareSource {
+        #[arg(long)]
+        id: String,
+        #[arg(long)]
+        name: String,
+        /// `tcp_pcm` for a phone, `coreaudio` for a microphone on the Mac.
+        #[arg(long)]
+        kind: String,
+    },
 }
 
 /// Open both planes as the server does, run `report` over them, and print what
@@ -164,6 +176,18 @@ fn run_task(root: &std::path::Path, task: Task) -> ExitCode {
             };
             report(root, |meaning, ingest| {
                 recalld::forget::rename_source(meaning, ingest, root, &from, &to, apply)
+            })
+        }
+        Task::DeclareSource { id, name, kind } => {
+            let (Some(id), Some(kind)) = (
+                transcript::SourceId::parse(&id),
+                recalld::sources::SourceKind::parse(&kind),
+            ) else {
+                eprintln!("recalld: --id must be a source id and --kind a known kind");
+                return ExitCode::FAILURE;
+            };
+            report(root, |meaning, _ingest| {
+                recalld::sources::declare(meaning, &id, &name, kind)
             })
         }
     }
