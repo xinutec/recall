@@ -293,7 +293,7 @@ fn a_cookie_minted_by_the_python_verifies_here() {
 
 use axum::Router;
 use axum::routing::{get, post};
-use recalld::webauth::{AuthError, exchange_code, fetch_userinfo, server_call};
+use recalld::webauth::{AuthError, StateMatched, exchange_code, fetch_userinfo, server_call};
 use std::net::SocketAddr;
 
 /// Serve `routes` on an ephemeral port and return its base URL.
@@ -351,7 +351,10 @@ async fn a_code_is_exchanged_for_a_token_and_the_user_is_resolved() {
 
     let token = tokio::task::spawn_blocking({
         let c = c.clone();
-        move || exchange_code(&c, "the-code")
+        move || {
+            let proof = StateMatched::check("s", "s").expect("a matching state");
+            exchange_code(&c, "the-code", proof)
+        }
     })
     .await
     .unwrap()
@@ -386,7 +389,13 @@ async fn a_response_missing_what_it_must_carry_is_an_error_not_an_empty_identity
 
     let e = tokio::task::spawn_blocking({
         let c = c.clone();
-        move || exchange_code(&c, "x")
+        move || {
+            exchange_code(
+                &c,
+                "x",
+                StateMatched::check("s", "s").expect("a matching state"),
+            )
+        }
     })
     .await
     .unwrap()
@@ -654,4 +663,60 @@ async fn me_without_a_session_is_refused_rather_than_anonymous() {
         status(&app, Request::get("/api/me").body(Body::empty()).unwrap()).await,
         401
     );
+}
+
+/// Login CSRF (RFC 6749 §10.12): a state this server signed, fetched by
+/// someone else's browser from /login, is refused without this browser's
+/// pending cookie; with it, the callback goes on to Nextcloud.
+#[tokio::test]
+async fn a_valid_state_from_another_browser_is_refused() {
+    // Nothing listens on the configured port: a 403 shows no call was made, a
+    // 502 that the state was accepted and the exchange attempted.
+    let mut c = cfg(None);
+    c.nc_internal_url = "http://127.0.0.1:1".into();
+    let app = gated(c);
+
+    let resp = app
+        .clone()
+        .oneshot(Request::get("/login").body(Body::empty()).unwrap())
+        .await
+        .expect("call");
+    let location = resp.headers().get("location").unwrap().to_str().unwrap();
+    let state = url::Url::parse(location)
+        .unwrap()
+        .query_pairs()
+        .find(|(k, _)| k == "state")
+        .map(|(_, v)| v.into_owned())
+        .expect("a state");
+    let pending = resp
+        .headers()
+        .get_all("set-cookie")
+        .iter()
+        .filter_map(|v| v.to_str().ok())
+        .find(|v| v.starts_with("recall_signin="))
+        .expect("login sets the pending cookie")
+        .to_owned();
+    assert!(pending.contains("HttpOnly"), "{pending}");
+    let carried = pending.split(';').next().unwrap().to_owned();
+
+    let callback = format!("/auth/callback?code=x&state={state}");
+    let without = Request::get(&callback).body(Body::empty()).unwrap();
+    assert_eq!(status(&app, without).await, 403);
+
+    let with = Request::get(&callback)
+        .header("cookie", carried)
+        .body(Body::empty())
+        .unwrap();
+    assert_eq!(status(&app, with).await, 502);
+}
+
+/// The proof `exchange_code` demands is made only by a present `state` equal to
+/// the one the browser carries.
+#[test]
+fn the_proof_is_made_only_by_a_present_matching_state() {
+    assert!(StateMatched::check("n0nce", "n0nce").is_some());
+    assert!(StateMatched::check("", "").is_none());
+    assert!(StateMatched::check("", "n0nce").is_none());
+    assert!(StateMatched::check("nonce", "n0nce").is_none());
+    assert!(StateMatched::check("n0nc", "n0nce").is_none());
 }

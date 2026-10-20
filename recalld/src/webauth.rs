@@ -17,6 +17,9 @@ use std::collections::HashSet;
 type HmacSha256 = Hmac<Sha256>;
 
 pub const COOKIE_NAME: &str = "recall_session";
+/// The sign-in this browser started: the `state` it was sent with, so the
+/// callback can prove the URL's `state` came back to the same browser.
+const PENDING_COOKIE: &str = "recall_signin";
 const SESSION_TTL_SECS: i64 = 7 * 24 * 60 * 60;
 const STATE_TTL_SECS: i64 = 10 * 60;
 
@@ -390,7 +393,24 @@ fn agent() -> ureq::Agent {
         .build()
 }
 
-pub fn exchange_code(cfg: &Config, code: &str) -> Result<String, AuthError> {
+/// Proof that a callback's `state` equalled the nonce this server stored for
+/// the sign-in. [`exchange_code`] takes one by value and only
+/// [`StateMatched::check`] makes one, so no code is redeemed on a path that
+/// skipped the comparison (RFC 6749 §10.12; dev-lint
+/// DL-RUST-OAUTH-EXCHANGE-UNPROVEN checks the shape).
+#[derive(Debug, PartialEq, Eq)]
+pub struct StateMatched(());
+
+impl StateMatched {
+    /// The proof, when `url_state` is present and equals `stored`.
+    pub fn check(url_state: &str, stored: &str) -> Option<Self> {
+        use subtle::ConstantTimeEq;
+        let equal: bool = url_state.as_bytes().ct_eq(stored.as_bytes()).into();
+        (!url_state.is_empty() && equal).then_some(Self(()))
+    }
+}
+
+pub fn exchange_code(cfg: &Config, code: &str, _proof: StateMatched) -> Result<String, AuthError> {
     let (url, host) = server_call(cfg, "/index.php/apps/oauth2/api/v1/token");
     let mut req = agent().post(&url);
     if let Some(h) = host.as_deref() {
@@ -455,7 +475,7 @@ pub fn fetch_userinfo(cfg: &Config, access_token: &str) -> Result<Session, AuthE
 
 use axum::extract::{Query, State};
 use axum::http::{HeaderMap, StatusCode, header};
-use axum::response::{IntoResponse, Response};
+use axum::response::{AppendHeaders, IntoResponse, Response};
 use axum::routing::{get, post};
 use axum::{Json, Router};
 use std::sync::Arc;
@@ -546,7 +566,16 @@ pub fn routes(st: GateState) -> Router {
             get(
                 |State(st): State<GateState>, Query(q): Query<LoginQuery>| async move {
                     match make_state(&st.cfg.session_secret, q.return_to.as_deref(), (st.now)()) {
-                        Some(state) => Redirect(authorize_url(&st.cfg, &state)).into_response(),
+                        Some(state) => (
+                            [(
+                                header::SET_COOKIE,
+                                format!(
+                                    "{PENDING_COOKIE}={state}; Max-Age={STATE_TTL_SECS}; {COOKIE_ATTRS}"
+                                ),
+                            )],
+                            Redirect(authorize_url(&st.cfg, &state)),
+                        )
+                            .into_response(),
                         None => sign_in_problem(
                             StatusCode::INTERNAL_SERVER_ERROR,
                             "The sign-in could not be started.",
@@ -606,14 +635,22 @@ impl IntoResponse for Redirect {
     }
 }
 
-async fn callback(State(st): State<GateState>, Query(q): Query<CallbackQuery>) -> Response {
+async fn callback(
+    State(st): State<GateState>,
+    headers: HeaderMap,
+    Query(q): Query<CallbackQuery>,
+) -> Response {
     let now = (st.now)();
-    // State first, so a stranger cannot make this server call Nextcloud.
-    let Some(return_to) = q
-        .state
-        .as_deref()
-        .and_then(|s| read_state(&st.cfg.session_secret, s, now))
-    else {
+    // State first, so a stranger cannot make this server call Nextcloud. A
+    // signed state proves this server issued it, not that THIS browser asked:
+    // anyone can fetch one from /login, so it must also equal the one this
+    // browser's cookie carries (login CSRF, RFC 6749 §10.12).
+    let url_state = q.state.as_deref().unwrap_or_default();
+    let pending = cookie_value(&headers, PENDING_COOKIE).unwrap_or_default();
+    let (Some(proof), Some(return_to)) = (
+        StateMatched::check(url_state, &pending),
+        read_state(&st.cfg.session_secret, url_state, now),
+    ) else {
         return sign_in_problem(
             StatusCode::FORBIDDEN,
             "This sign-in did not start here, or it took too long.",
@@ -627,7 +664,7 @@ async fn callback(State(st): State<GateState>, Query(q): Query<CallbackQuery>) -
     };
     let cfg = Arc::clone(&st.cfg);
     let resolved = tokio::task::spawn_blocking(move || {
-        exchange_code(&cfg, &code).and_then(|t| fetch_userinfo(&cfg, &t))
+        exchange_code(&cfg, &code, proof).and_then(|t| fetch_userinfo(&cfg, &t))
     })
     .await;
     let session = match resolved {
@@ -657,7 +694,14 @@ async fn callback(State(st): State<GateState>, Query(q): Query<CallbackQuery>) -
         );
     };
     (
-        [(header::SET_COOKIE, set_cookie(&token))],
+        AppendHeaders([
+            (header::SET_COOKIE, set_cookie(&token)),
+            // Spent: a second callback cannot use it.
+            (
+                header::SET_COOKIE,
+                format!("{PENDING_COOKIE}=; Max-Age=0; {COOKIE_ATTRS}"),
+            ),
+        ]),
         Redirect(return_to),
     )
         .into_response()
