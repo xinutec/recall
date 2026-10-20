@@ -213,6 +213,7 @@ pub fn router(config: Arc<Config>) -> Router {
         })
     });
     let base = Router::new()
+        // dev-lint: allow-unauthenticated-route the devices' liveness probe, before they hold a token
         .route("/ingest/v1/health", get(ingest::health))
         .route("/ingest/v1/segments", get(ingest::list_segments))
         .route(
