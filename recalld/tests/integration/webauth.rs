@@ -78,6 +78,30 @@ fn a_cookie_expires_and_a_state_expires_much_sooner() {
     assert_eq!(read_state(SECRET, &state, NOW + 11 * 60), None);
 }
 
+/// A browser's URL parser drops tabs and newlines and folds `\` to `/`:
+/// `/\t/evil` is `//evil`. So the check is where that parser lands.
+#[test]
+fn every_accepted_return_to_resolves_to_this_site() {
+    let site = url::Url::parse("https://recall.example/").unwrap();
+    for attempt in [
+        "/\t/evil.example",
+        "/\n/evil.example",
+        "/\r/evil.example",
+        "/\\evil.example",
+        "/\t\\evil.example",
+        "/ /evil.example",
+        "/sessions/42",
+    ] {
+        let dest = validate_return_to(Some(attempt));
+        let landed = site.join(&dest).unwrap();
+        assert_eq!(
+            landed.host_str(),
+            Some("recall.example"),
+            "{attempt:?} was let through as {dest:?}"
+        );
+    }
+}
+
 #[test]
 fn a_crafted_return_to_cannot_turn_sign_in_into_an_open_redirect() {
     // Anything that could leave the origin becomes "/"; `//host` looks local.

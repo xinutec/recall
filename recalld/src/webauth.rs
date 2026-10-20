@@ -119,11 +119,16 @@ pub fn request_origin(
     format!("anon {host}")
 }
 
-/// A local redirect target: a single-slash absolute path, else `/`, so
-/// `?return_to=` cannot make sign-in an open redirect.
+/// A local redirect target, else `/`, so `?return_to=` cannot make sign-in an
+/// open redirect. Judged where a browser lands: its URL parser drops tabs and
+/// newlines and folds `\` to `/`, so `/\t/host` is `//host`. Returns the path
+/// as that parser resolves it.
 pub fn validate_return_to(raw: Option<&str>) -> String {
-    match raw {
-        Some(r) if r.starts_with('/') && !r.starts_with("//") => r.to_owned(),
+    let site = url::Url::parse("https://site.invalid/").expect("a fixed URL");
+    match raw.filter(|r| r.starts_with('/')).map(|r| site.join(r)) {
+        Some(Ok(dest)) if dest.origin() == site.origin() => {
+            dest[url::Position::BeforePath..].to_owned()
+        }
         _ => "/".to_owned(),
     }
 }

@@ -1225,6 +1225,7 @@ dependencies = [
  "transcript",
  "ts-rs",
  "ureq",
+ "url",
 ]
 
 [[package]]

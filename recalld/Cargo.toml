@@ -37,6 +37,8 @@ sha2 = "0.11"
 hmac = "0.13"
 base64 = "0.23"
 form_urlencoded = "1"
+# `?return_to=` is judged where a browser's URL parser lands.
+url = "2"
 # The OAuth calls. rustls: native TLS needs an openssl `rust:1-slim` lacks.
 ureq = { version = "2", features = ["json", "tls"] }
 hex = "0.4"
