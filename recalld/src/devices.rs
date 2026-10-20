@@ -152,6 +152,45 @@ pub fn forget(conn: &Connection, key: &str, device: &str) -> rusqlite::Result<bo
     Ok(true)
 }
 
+/// Move one device's row to a new id, as a source rename does. A row already
+/// under `to` is the app's newer word, so it stays and `from`'s goes. Returns
+/// whether `from` had one.
+pub fn rename(conn: &Connection, key: &str, from: &str, to: &str) -> rusqlite::Result<bool> {
+    let mut map = stored(conn, key)?;
+    let Some(entry) = map.remove(from) else {
+        return Ok(false);
+    };
+    map.entry(to.to_owned()).or_insert(entry);
+    store(conn, key, &map)?;
+    Ok(true)
+}
+
+/// How many of the two lists hold a row for `device`.
+pub fn status_rows(conn: &Connection, device: &str) -> rusqlite::Result<usize> {
+    let mut n = 0;
+    for key in [BEATS, REPORTS] {
+        n += usize::from(stored(conn, key)?.contains_key(device));
+    }
+    Ok(n)
+}
+
+/// What [`forget_device`] found.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct Forgot {
+    pub device: String,
+    pub heartbeat: bool,
+    pub outbox: bool,
+}
+
+/// Both of a device's rows, as the web UI's two deletes do.
+pub fn forget_device(conn: &Connection, device: &str) -> rusqlite::Result<Forgot> {
+    Ok(Forgot {
+        device: device.to_owned(),
+        heartbeat: forget(conn, BEATS, device)?,
+        outbox: forget(conn, REPORTS, device)?,
+    })
+}
+
 /// Every app's last beat, by device id.
 pub fn read_beats(conn: &Connection) -> rusqlite::Result<Vec<Beat>> {
     Ok(readable::<StoredBeat>(BEATS, stored(conn, BEATS)?)

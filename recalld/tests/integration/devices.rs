@@ -2,7 +2,8 @@
 //! its own detail and nothing else.
 
 use recalld::devices::{
-    BEATS, Beat, REPORTS, Report, forget, read_beats, read_reports, record_beat, record_report,
+    BEATS, Beat, REPORTS, Report, forget, forget_device, read_beats, read_reports, record_beat,
+    record_report, rename,
 };
 use rusqlite::Connection;
 
@@ -679,6 +680,55 @@ async fn a_signed_in_person_can_forget_a_stray_row() {
         .map(|b| b.device)
         .collect();
     assert_eq!(devices, ["real"], "no sqlite3 in the pod required");
+}
+
+fn beat_devices(conn: &Connection) -> Vec<(String, String)> {
+    read_beats(conn)
+        .expect("read")
+        .into_iter()
+        .map(|b| (b.device, b.at))
+        .collect()
+}
+
+/// A renamed source's recorder: its status follows it, and a beat already
+/// under the new id is the app's newer word.
+#[test]
+fn a_rename_carries_a_devices_status_and_a_beat_under_the_new_id_wins() {
+    let conn = db();
+    record_beat(&conn, &beat("old", "2026-09-07T10:00:00+00:00"), now()).expect("beat");
+    record_beat(&conn, &beat("new", "2026-09-07T11:00:00+00:00"), now()).expect("beat");
+    record_report(&conn, &report("old", "2026-09-07T10:00:00+00:00"), now()).expect("report");
+
+    assert!(rename(&conn, BEATS, "old", "new").expect("rename"));
+    assert!(rename(&conn, REPORTS, "old", "new").expect("rename"));
+    assert!(!rename(&conn, BEATS, "nobody", "new").expect("rename"));
+
+    assert_eq!(
+        beat_devices(&conn),
+        [("new".to_owned(), "2026-09-07T11:00:00+00:00".to_owned())]
+    );
+    let reports: Vec<String> = read_reports(&conn)
+        .expect("read")
+        .into_iter()
+        .map(|r| r.device)
+        .collect();
+    assert_eq!(reports, ["new"]);
+}
+
+/// The operator's verb for what the web UI's two deletes do: both lists.
+#[test]
+fn forgetting_a_device_clears_its_beat_and_its_outbox_and_nothing_else() {
+    let conn = db();
+    record_beat(&conn, &beat("gone", "2026-09-07T10:00:00+00:00"), now()).expect("beat");
+    record_beat(&conn, &beat("kept", "2026-09-07T10:00:00+00:00"), now()).expect("beat");
+    record_report(&conn, &report("gone", "2026-09-07T10:00:00+00:00"), now()).expect("report");
+
+    let forgot = forget_device(&conn, "gone").expect("forget");
+    assert_eq!((forgot.heartbeat, forgot.outbox), (true, true));
+    assert_eq!(beat_devices(&conn).len(), 1);
+    assert!(read_reports(&conn).expect("read").is_empty());
+    let again = forget_device(&conn, "gone").expect("forget");
+    assert_eq!((again.heartbeat, again.outbox), (false, false));
 }
 
 /// A cross-repo contract: Android's `Heartbeat.EVERY_MINUTES` and fleetwatch's

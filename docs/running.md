@@ -107,8 +107,11 @@ Mac under `/Volumes/Backup/recall/<source>/`, on geb under
 Renaming a source keeps its history under the new id, pause first:
 `recalld --root /data rename-source --from <id> --to <id>` in the pod says what
 the source holds, and `--apply` moves its rows in both planes, its files and
-its directories. The recorder is not renamed: set its id before it next
-delivers, or it starts a new source under the old name.
+its directories, and its recorder's heartbeat and outbox rows. The recorder is
+not renamed: set its id before it next delivers, or it starts a new source
+under the old name. `forget-device --id <id>` drops the heartbeat and outbox
+rows of an id no recorder uses any more, which fleetwatch otherwise reads as a
+silent phone.
 
 Phones: [android](../android/README.md), [ios](../ios/README.md); protocol and
 liveness: [devices.md](devices.md).

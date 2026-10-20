@@ -468,6 +468,8 @@ pub struct Renamed {
     pub lines: usize,
     /// Files under the source's directory that no row names; moved with it.
     pub loose_files: usize,
+    /// Its recorder's heartbeat and outbox rows (`crate::devices`).
+    pub device_status: usize,
 }
 
 /// The disk half of a rename: every file into the new directory under its new
@@ -552,6 +554,9 @@ fn rename_rows(
         statement.execute(&tx, (from.as_str(), to.as_str()))?;
     }
     DROP_SOURCE.execute(&tx, [from.as_str()])?;
+    for key in [crate::devices::BEATS, crate::devices::REPORTS] {
+        crate::devices::rename(&tx, key, from.as_str(), to.as_str())?;
+    }
     tx.commit()?;
     Ok(())
 }
@@ -634,6 +639,7 @@ pub fn rename_source(
         audio_rows: audio.len(),
         lines,
         loose_files,
+        device_status: crate::devices::status_rows(meaning, from.as_str())?,
     };
     if !apply {
         return Ok(report);

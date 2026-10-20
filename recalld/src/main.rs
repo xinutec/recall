@@ -107,6 +107,12 @@ enum Task {
         #[arg(long)]
         rename: bool,
     },
+    /// Forget a device's heartbeat and outbox rows, as the web UI's deletes do
+    /// (`recalld::devices::forget_device`): for an id no recorder uses any more.
+    ForgetDevice {
+        #[arg(long)]
+        id: String,
+    },
 }
 
 /// Open both planes as the server does, run `report` over them, and print what
@@ -198,6 +204,9 @@ fn run_task(root: &std::path::Path, task: Task) -> ExitCode {
                 recalld::sources::declare(meaning, &id, &name, kind, rename)
             })
         }
+        Task::ForgetDevice { id } => report(root, |meaning, _ingest| {
+            recalld::devices::forget_device(meaning, &id)
+        }),
     }
 }
 

@@ -329,6 +329,24 @@ fn renaming_a_source_moves_its_history_and_files_and_nothing_else() {
         transcript::SourceId::parse("usb").expect("id"),
         transcript::SourceId::parse("usb-1").expect("id"),
     );
+    // The recorder's status is filed under its id too.
+    recalld::devices::record_beat(
+        &fleet.meaning,
+        &recalld::devices::Beat {
+            device: "usb".into(),
+            app: "recall-mic".into(),
+            version: "1".into(),
+            started_at: None,
+            streaming: true,
+            charging: None,
+            mic_ok: None,
+            via_lan: None,
+            dropped_bytes: None,
+            at: chrono::Utc::now().to_rfc3339(),
+        },
+        chrono::Utc::now(),
+    )
+    .expect("beat");
     let seen = recalld::forget::rename_source(
         &mut fleet.meaning,
         &mut fleet.ingest,
@@ -357,6 +375,13 @@ fn renaming_a_source_moves_its_history_and_files_and_nothing_else() {
     )
     .expect("rename");
     assert!(done.applied);
+    assert_eq!((seen.device_status, done.device_status), (1, 1));
+    let beats: Vec<String> = recalld::devices::read_beats(&fleet.meaning)
+        .expect("beats")
+        .into_iter()
+        .map(|b| b.device)
+        .collect();
+    assert_eq!(beats, ["usb-1"], "the heartbeat moved with the source");
     assert_renamed(&fleet, &root, seen.lines);
 }
 
