@@ -275,6 +275,7 @@ pub fn register(
     Ok(())
 }
 
+// dev-lint: sanitises path argv — one of the fixed audio suffixes
 pub fn is_supported(suffix: &str) -> bool {
     AUDIO_SUFFIXES.contains(&suffix)
 }
