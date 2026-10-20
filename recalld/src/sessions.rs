@@ -534,6 +534,11 @@ pub async fn delete_route(
     State(st): State<Arc<reads::State>>,
     Path(source): Path<String>,
 ) -> Response {
+    // Checked where its paths are built, not only by the lookup inside
+    // `delete_session`: a `..` must never reach `remove_dir_all`.
+    if !audiocore::names::valid_source(&source) {
+        return SessionError::Missing.into_response("session delete");
+    }
     let root = st.root.clone();
     let now = audiocore::instant::Stamp::now();
     let done = tokio::task::spawn_blocking(move || -> Result<(), SessionError> {

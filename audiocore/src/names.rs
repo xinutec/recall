@@ -93,11 +93,13 @@ impl NameError {
 }
 
 /// A filesystem-safe source id: [`transcript::SourceId`] holds the one rule.
+// dev-lint: sanitises path — `SourceId`'s rule: lowercase, digits, `_` and `-`
 pub fn valid_source(source: &str) -> bool {
     transcript::SourceId::parse(source).is_some()
 }
 
 /// Parse `filename` as a segment of `source`, or say exactly why not.
+// dev-lint: sanitises path — a valid source and a filename of the exact segment shape
 pub fn parse(source: &str, filename: &str) -> Result<SegmentName, NameError> {
     let id = transcript::SourceId::parse(source).ok_or(NameError::BadSource)?;
     let rest = filename

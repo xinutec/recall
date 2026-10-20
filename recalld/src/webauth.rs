@@ -126,6 +126,7 @@ pub fn request_origin(
 /// open redirect. Judged where a browser lands: its URL parser drops tabs and
 /// newlines and folds `\` to `/`, so `/\t/host` is `//host`. Returns the path
 /// as that parser resolves it.
+// dev-lint: sanitises redirect — resolved where the browser lands, and only the same origin passes
 pub fn validate_return_to(raw: Option<&str>) -> String {
     let site = url::Url::parse("https://site.invalid/").expect("a fixed URL");
     match raw.filter(|r| r.starts_with('/')).map(|r| site.join(r)) {

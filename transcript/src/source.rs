@@ -17,6 +17,7 @@ impl TryFrom<String> for SourceId {
 }
 
 impl SourceId {
+    // dev-lint: sanitises path — lowercase, digits, `_` and `-` only, at most 64
     pub fn parse(text: &str) -> Option<Self> {
         let mut chars = text.chars();
         let first = chars.next()?;
