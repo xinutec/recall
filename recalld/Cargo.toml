@@ -60,7 +60,7 @@ tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 # The speech detector's ONNX runtime, Debian's system library: ort's prebuilt
 # one needs AVX2, which the fleet's Ivy Bridge servers lack (SIGILL). `api-21`
 # matches Debian trixie's 1.21.
-ort = { version = "2.0.0-rc.13", default-features = false, features = [
+ort = { version = "2.0.0-rc.15", default-features = false, features = [
     "std",
     "ndarray",
     "tracing",

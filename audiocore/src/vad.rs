@@ -106,7 +106,11 @@ pub fn self_test() -> Result<(), Error> {
 }
 
 fn build_session() -> Result<ort::session::Session, Error> {
-    ort::session::Session::builder()
+    // The session keeps its own handle on the environment.
+    let environment = ort::init()
+        .build()
+        .map_err(|e| Error::Model(e.to_string()))?;
+    ort::session::Session::builder(&environment)
         .map_err(|e| Error::Model(e.to_string()))?
         // One thread: a background scanner on a shared 4-core server.
         .with_intra_threads(1)
