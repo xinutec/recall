@@ -58,6 +58,9 @@ overrides:
   browserslist: ^4.28.7
   fast-uri: ^3.1.6
   hono: ^4.13.5
+  # @angular/build 22.2.3 pins vite 8.3.0, whose launch-editor has three advisories
+  # fixed in 8.3.3. Drop once Angular's own pin passes it.
+  vite: ~8.3.4
 
 # The catalog names only versions a day old (dev-lint tables/deps.dhall);
 # strict, so a younger install fails instead of writing itself an exclusion.
