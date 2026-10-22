@@ -58,6 +58,10 @@ impl Region {
 /// destructors would run after the library is unloaded and segfault at exit.
 static SESSION: OnceLock<Mutex<ort::session::Session>> = OnceLock::new();
 
+/// Held while the session is first built: ONNX Runtime allows one environment
+/// per process, so a load arriving mid-build would otherwise fail.
+static BUILDING: Mutex<()> = Mutex::new(());
+
 /// A handle to the process-wide detector. Cheap to create; holding one across a
 /// batch serialises inference, which is what the single-thread policy wants.
 pub struct Detector {
@@ -145,7 +149,12 @@ impl Detector {
     pub fn load() -> Result<Self, Error> {
         // Not `get_or_init`: a missing runtime is an error, not a panic.
         if SESSION.get().is_none() {
-            let _ = SESSION.set(Mutex::new(build_session()?));
+            let _building = BUILDING
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            if SESSION.get().is_none() {
+                let _ = SESSION.set(Mutex::new(build_session()?));
+            }
         }
         let cell = SESSION
             .get()

@@ -38,9 +38,11 @@ fn latest_speech(conn: &rusqlite::Connection, source: &str) -> Option<String> {
         .map(|speech| speech.to_string())
 }
 
-fn silent_wav(seconds: u32) -> Vec<u8> {
+/// Written under the test's own directory: tests sharing one path would read
+/// each other's half-written file.
+fn silent_wav(dir: &Path, seconds: u32) -> Vec<u8> {
     let samples = vec![0.0_f32; (16_000 * seconds) as usize];
-    let path = std::env::temp_dir().join(format!("recalld-silence-{seconds}.wav"));
+    let path = dir.join(format!("silence-{seconds}.wav"));
     audiocore::wav::write_mono16(&path, 16_000, &samples).expect("wav");
     std::fs::read(&path).expect("read")
 }
@@ -49,7 +51,12 @@ fn silent_wav(seconds: u32) -> Vec<u8> {
 fn silence_is_measured_as_no_speech_not_as_unknown() {
     // 0.0 (nobody spoke) and unknown (nobody looked) stay apart.
     let dir = tempfile::tempdir().expect("tempdir");
-    stored(dir.path(), "usb", "usb-20260905T120000.wav", &silent_wav(3));
+    stored(
+        dir.path(),
+        "usb",
+        "usb-20260905T120000.wav",
+        &silent_wav(dir.path(), 3),
+    );
     assert_eq!(speech::scan_once(dir.path(), 10).expect("scan"), 1);
 
     let conn = store::open(dir.path()).expect("db");
@@ -89,7 +96,7 @@ fn an_undecodable_blob_is_recorded_as_unknown_and_never_retried() {
 #[test]
 fn the_scan_is_idempotent_and_bounded() {
     let dir = tempfile::tempdir().expect("tempdir");
-    let quiet = silent_wav(1);
+    let quiet = silent_wav(dir.path(), 1);
     for n in ["usb-20260905T120000.wav", "usb-20260905T120100.wav"] {
         stored(dir.path(), "usb", n, &quiet);
     }
@@ -113,7 +120,12 @@ fn the_scan_is_idempotent_and_bounded() {
 #[test]
 fn a_source_with_only_silence_has_no_latest_speech() {
     let dir = tempfile::tempdir().expect("tempdir");
-    stored(dir.path(), "usb", "usb-20260905T120000.wav", &silent_wav(2));
+    stored(
+        dir.path(),
+        "usb",
+        "usb-20260905T120000.wav",
+        &silent_wav(dir.path(), 2),
+    );
     speech::scan_once(dir.path(), 10).expect("scan");
     let conn = store::open(dir.path()).expect("db");
     assert_eq!(latest_speech(&conn, "usb"), None);
@@ -151,7 +163,12 @@ fn real_speech_is_measured_and_becomes_the_source_latest_speech() {
 fn an_unmeasured_segment_still_counts_as_possible_speech() {
     // Not looked at yet is not silence.
     let dir = tempfile::tempdir().expect("tempdir");
-    stored(dir.path(), "usb", "usb-20260905T120000.wav", &silent_wav(2));
+    stored(
+        dir.path(),
+        "usb",
+        "usb-20260905T120000.wav",
+        &silent_wav(dir.path(), 2),
+    );
     // deliberately not scanned
     let conn = store::open(dir.path()).expect("db");
     assert_eq!(
@@ -174,7 +191,7 @@ fn an_undecodable_segment_counts_too_because_it_was_never_heard() {
 fn the_scan_takes_the_newest_segments_first() {
     // New audio is scanned before the backlog.
     let dir = tempfile::tempdir().expect("tempdir");
-    let quiet = silent_wav(1);
+    let quiet = silent_wav(dir.path(), 1);
     for (name, stamp) in [
         ("usb-20260901T120000.wav", "2026-09-01T12:00:00Z"),
         ("usb-20260905T120000.wav", "2026-09-05T12:00:00Z"),
