@@ -123,6 +123,8 @@ pub struct Segment {
     pub source_id: Option<SourceId>,
     pub audio_segment_id: Option<i64>,
     pub words_checked: bool,
+    /// Its words with their times; empty for a line nobody timed.
+    pub words: Vec<crate::line::WordTiming>,
 }
 
 impl Segment {
@@ -159,6 +161,19 @@ impl Segment {
             },
             audio_segment_id: row.get("audio_segment_id")?,
             words_checked: row.get::<_, Option<i64>>("words_checked")? == Some(1),
+            words: {
+                let stored: Option<String> = row.get("word_timings")?;
+                match stored {
+                    Some(json) => serde_json::from_str(&json).map_err(|e| {
+                        rusqlite::Error::FromSqlConversionFailure(
+                            0,
+                            rusqlite::types::Type::Text,
+                            Box::new(e),
+                        )
+                    })?,
+                    None => Vec::new(),
+                }
+            },
         })
     }
 }

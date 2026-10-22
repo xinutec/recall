@@ -53,7 +53,9 @@ recall-cli day 2026-02-09 --conv 3
 
 Times are local. The date is `YYYY-MM-DD`, `today` or `yesterday`; `--conv N`
 (or `last`) reads one conversation. Mics that heard the same moment are folded
-to one line.
+to one line. Their clocks can sit seconds apart, so each conversation first puts
+every mic on one clock, measured from the words two mics both heard
+(`conversations::clock_offsets`); a mic with too few shared words keeps its own.
 
 ## Machine-readable
 
@@ -75,9 +77,9 @@ Tapping a line opens its sheet at the bottom of the screen:
 - **Part of it was someone else**: tap the first and the last word they said, then
   the name. A phrase across two lines takes one split per line.
 - **Fix words**, **Copy words**, and a link to the line on its own.
-- **Other mics**: a small number after a line counts the mics that heard it; the
-  sheet lists their versions to read and hear. A wavy underline means the mics
-  disagree on who spoke.
+- **Other mics**: the sheet names the line's mic and lists the other mics'
+  versions to read and hear. A wavy underline means the mics disagree on who
+  spoke.
 - **Grey lines** have no speakers separated yet. They are editable; every pass
   keeps a correction. Only a live line, minutes old, waits for its transcription.
 

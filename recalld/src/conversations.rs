@@ -26,6 +26,120 @@ pub struct Turn {
     pub speaker_score: Option<f64>,
     /// The clip it came from: a mic's two clips of one span are copies.
     pub audio_segment_id: Option<i64>,
+    /// Its words as [`spoken`] spells them, each with its start in
+    /// microseconds: what [`clock_offsets`] matches across mics.
+    pub words: Vec<(i64, String)>,
+}
+
+/// How far apart two mics' clocks are searched for: phones have been seen
+/// a few seconds out.
+const MAX_OFFSET_US: i64 = 10_000_000;
+
+/// Word time differences this close count as one offset: a model times a
+/// word to about a tenth of a second.
+const AGREE_US: i64 = 250_000;
+
+/// The fewest words that must agree on an offset before a clock moves: a
+/// short reply on its own matches anything.
+const MIN_AGREEING_WORDS: usize = 4;
+
+/// A word as matched across mics: lower case, letters and digits only.
+#[must_use]
+pub fn spoken(word: &str) -> String {
+    word.chars()
+        .filter(|c| c.is_alphanumeric())
+        .flat_map(char::to_lowercase)
+        .collect()
+}
+
+/// Each source's clock offset in microseconds, to add to its stamps to land on
+/// the clock of the source with the most words. Taken from the words both
+/// heard: the time difference most of them agree on. A source with fewer than
+/// [`MIN_AGREEING_WORDS`] agreeing keeps its own clock, so it is absent.
+#[must_use]
+pub fn clock_offsets<'a>(turns: &'a [Turn], group: &[usize]) -> HashMap<&'a SourceId, i64> {
+    let mut order: Vec<&SourceId> = Vec::new();
+    let mut words: HashMap<&SourceId, Vec<(i64, &str)>> = HashMap::new();
+    for &i in group {
+        let Some(source) = turns[i].source_id.as_ref() else {
+            continue;
+        };
+        let heard = words.entry(source).or_insert_with(|| {
+            order.push(source);
+            Vec::new()
+        });
+        heard.extend(
+            turns[i]
+                .words
+                .iter()
+                .filter(|(_, w)| !w.is_empty())
+                .map(|(t, w)| (*t, w.as_str())),
+        );
+    }
+    // The most words, the first on a tie.
+    let Some(reference) = order.iter().copied().reduce(|best, s| {
+        if words[s].len() > words[best].len() {
+            s
+        } else {
+            best
+        }
+    }) else {
+        return HashMap::new();
+    };
+    let mut at: HashMap<&str, Vec<i64>> = HashMap::new();
+    for &(t, w) in &words[reference] {
+        at.entry(w).or_default().push(t);
+    }
+    for times in at.values_mut() {
+        times.sort_unstable();
+    }
+    let mut out = HashMap::new();
+    for &source in order.iter().filter(|&&s| s != reference) {
+        let mut deltas: Vec<i64> = Vec::new();
+        for &(t, w) in &words[source] {
+            let Some(times) = at.get(w) else { continue };
+            let from = times.partition_point(|&r| r < t - MAX_OFFSET_US);
+            let to = times.partition_point(|&r| r <= t + MAX_OFFSET_US);
+            deltas.extend(times[from..to].iter().map(|&r| r - t));
+        }
+        deltas.sort_unstable();
+        // The window of agreeing differences holding the most, the first on
+        // a tie; its median is the offset.
+        let (mut best, mut end) = ((0, 0), 0);
+        for start in 0..deltas.len() {
+            while end < deltas.len() && deltas[end] - deltas[start] <= 2 * AGREE_US {
+                end += 1;
+            }
+            if end - start > best.1 - best.0 {
+                best = (start, end);
+            }
+        }
+        if best.1 - best.0 >= MIN_AGREEING_WORDS {
+            out.insert(source, deltas[usize::midpoint(best.0, best.1)]);
+        }
+    }
+    out
+}
+
+/// The turns with the group's on one clock ([`clock_offsets`]), for deciding
+/// which lines are the same speech; what is shown keeps its stored times.
+#[must_use]
+pub fn aligned(turns: &[Turn], group: &[usize]) -> Vec<Turn> {
+    let offsets = clock_offsets(turns, group);
+    let mut out = turns.to_vec();
+    for &i in group {
+        let Some(&offset) = turns[i].source_id.as_ref().and_then(|s| offsets.get(s)) else {
+            continue;
+        };
+        let shift = chrono::TimeDelta::microseconds(offset);
+        let turn = &mut out[i];
+        turn.start += shift;
+        turn.end += shift;
+        for (t, _) in &mut turn.words {
+            *t += offset;
+        }
+    }
+    out
 }
 
 /// Split turns sorted by start into conversations, as index groups. Silence is
@@ -400,6 +514,11 @@ fn turns_of(segments: &[reads::Segment]) -> (Vec<Turn>, Vec<usize>) {
             speaker_guess: segment.speaker_guess.clone(),
             speaker_score: segment.speaker_score,
             audio_segment_id: segment.audio_segment_id,
+            words: segment
+                .words
+                .iter()
+                .map(|w| (w.start_us, spoken(&w.text)))
+                .collect(),
         });
         kept.push(index);
     }
@@ -441,7 +560,11 @@ fn conversation_out(
     group: &[usize],
 ) -> ConversationOut {
     let row = |i: usize| &segments[kept[i]];
-    let moments = cluster_moments(turns, group);
+    let on_one_clock = aligned(turns, group);
+    // Folding reads the group in start order, which moving a clock changes.
+    let mut by_start = group.to_vec();
+    by_start.sort_by_key(|&i| (on_one_clock[i].start, on_one_clock[i].id));
+    let moments = cluster_moments(&on_one_clock, &by_start);
     let shown: Vec<usize> = moments.iter().map(|m| m.primary).collect();
     let preview = shown
         .iter()
@@ -470,7 +593,7 @@ fn conversation_out(
         preview,
         moments: moments
             .iter()
-            .map(|moment| moment_out(segments, turns, kept, moment))
+            .map(|moment| moment_out(segments, &on_one_clock, kept, moment))
             .collect(),
     }
 }

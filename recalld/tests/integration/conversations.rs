@@ -23,6 +23,7 @@ fn turn(id: i64, start: i64, end: i64, source: &str) -> Turn {
         speaker_guess: None,
         speaker_score: None,
         audio_segment_id: None,
+        words: Vec::new(),
     }
 }
 
@@ -416,6 +417,7 @@ fn segment(id: i64, start: i64, end: i64, text: &str) -> recalld::reads::Segment
         source_id: Some(SourceId::parse("usb").expect("source id")),
         audio_segment_id: None,
         words_checked: false,
+        words: Vec::new(),
     }
 }
 
@@ -534,4 +536,144 @@ fn the_gap_is_tunable_and_the_summary_splits_with_it() {
 /// The instants are the stored strings, not reformatted.
 fn reads_iso(seconds: i64) -> String {
     at(seconds).to_rfc3339()
+}
+
+// --- mics whose clocks disagree ----------------------------------------------
+
+/// A line one mic heard: its words at their true times (seconds), stamped by a
+/// clock running `late` seconds behind. The id is `mic * 10 + slot`, so a test
+/// can say which spoken line a row is.
+fn heard(mic: usize, slot: i64, late: f64, words: &[(f64, f64, &str)]) -> recalld::reads::Segment {
+    let base = at(0).timestamp_micros();
+    let us = |t: f64| base + ((t + late) * 1e6).round() as i64;
+    let stamp = |t: f64| Stamp::of(DateTime::from_timestamp_micros(us(t)).expect("in range"));
+    let (first, last) = (words[0].0, words[words.len() - 1].1);
+    let mut s = from_mic(
+        confident(
+            segment(
+                i64::try_from(mic).expect("a few mics") * 10 + slot,
+                0,
+                0,
+                "",
+            ),
+            0.9,
+        ),
+        ["usb", "geb", "phone-a", "phone-b", "phone-c", "phone-d"][mic],
+    );
+    s.start_utc = stamp(first);
+    s.end_utc = stamp(last);
+    s.text = words.iter().map(|w| w.2).collect::<Vec<_>>().join(" ");
+    s.words = words
+        .iter()
+        .map(|&(a, b, w)| recalld::line::WordTiming {
+            start_us: us(a),
+            end_us: us(b),
+            text: format!(" {w}"),
+        })
+        .collect();
+    s
+}
+
+/// Words spoken one after another from `from`, half a second each.
+fn said_from(from: f64, text: &str) -> Vec<(f64, f64, &str)> {
+    text.split(' ')
+        .enumerate()
+        .map(|(i, w)| (from + 0.5 * i as f64, from + 0.5 * i as f64 + 0.45, w))
+        .collect()
+}
+
+/// Six mics' clocks, in seconds behind the first, as measured on a real call.
+const LATE: [f64; 6] = [0.0, 0.36, 0.76, 0.84, 1.66, 2.12];
+
+/// Every moment as its shown line's slot and its versions' slots.
+fn slots(out: &recalld::conversations::ConversationsOut) -> Vec<(i64, Vec<i64>)> {
+    out.items[0]
+        .moments
+        .iter()
+        .map(|m| {
+            let mut alts: Vec<i64> = m.alternates.iter().map(|a| a.id % 10).collect();
+            alts.sort_unstable();
+            (m.primary.id % 10, alts)
+        })
+        .collect()
+}
+
+/// A short reply heard by six mics whose clocks sit up to 2.1 s apart: their
+/// stamps do not overlap, but the words the mics share say how far apart the
+/// clocks are, so the reply is one line.
+#[test]
+fn a_reply_six_mics_stamp_seconds_apart_is_one_line() {
+    let mut segments = Vec::new();
+    for (mic, &late) in LATE.iter().enumerate() {
+        segments.push(heard(
+            mic,
+            1,
+            late,
+            &said_from(0.0, "how is the pain today compared with yesterday"),
+        ));
+        segments.push(heard(mic, 2, late, &[(4.5, 4.8, "Yeah.")]));
+        segments.push(heard(
+            mic,
+            3,
+            late,
+            &said_from(5.2, "good and are you eating and drinking normally"),
+        ));
+    }
+    segments.sort_by(|a, b| a.start_utc.cmp(&b.start_utc));
+
+    let out = fold(&segments, 60.0, 200);
+
+    assert_eq!(
+        slots(&out),
+        vec![(1, vec![1; 5]), (2, vec![2; 5]), (3, vec![3; 5])],
+        "each spoken line once, with the other five mics' versions"
+    );
+}
+
+/// Two replies a second apart are two lines, on every mic.
+#[test]
+fn two_replies_a_second_apart_stay_two_lines() {
+    let mut segments = Vec::new();
+    for (mic, &late) in LATE.iter().enumerate() {
+        segments.push(heard(
+            mic,
+            1,
+            late,
+            &said_from(0.0, "how is the pain today compared with yesterday"),
+        ));
+        segments.push(heard(mic, 2, late, &[(4.5, 4.8, "Yeah.")]));
+        segments.push(heard(mic, 3, late, &[(5.5, 5.8, "Yeah.")]));
+        segments.push(heard(
+            mic,
+            4,
+            late,
+            &said_from(6.2, "good and are you eating and drinking normally"),
+        ));
+    }
+    segments.sort_by(|a, b| a.start_utc.cmp(&b.start_utc));
+
+    let out = fold(&segments, 60.0, 200);
+
+    assert_eq!(
+        slots(&out),
+        vec![
+            (1, vec![1; 5]),
+            (2, vec![2; 5]),
+            (3, vec![3; 5]),
+            (4, vec![4; 5])
+        ]
+    );
+}
+
+/// One shared word is no evidence of a clock: a mic keeps its own stamps.
+#[test]
+fn one_shared_word_does_not_move_a_clock() {
+    let segments = vec![
+        heard(0, 1, 0.0, &[(0.0, 0.3, "Yeah.")]),
+        heard(1, 1, 2.0, &[(0.0, 0.3, "Yeah.")]),
+    ];
+
+    let out = fold(&segments, 60.0, 200);
+
+    assert_eq!(slots(&out), vec![(1, vec![]), (1, vec![])]);
 }
