@@ -152,19 +152,6 @@ export class Turns implements OnDestroy {
     return out;
   });
 
-  /** The mic, shown where it changes, and only when more than one is in view. */
-  protected readonly sourceTags = computed(() => {
-    const out = new Map<number, string>();
-    const turns = this.turns();
-    if (new Set(turns.map((t) => t.source)).size < 2) return out;
-    let last: string | null = null;
-    for (const t of turns) {
-      if (t.source && t.source !== last) out.set(t.id, t.source);
-      last = t.source;
-    }
-    return out;
-  });
-
   /** Names to offer: everyone named in these turns, else the roster. */
   protected readonly palette = computed(() => {
     const names: string[] = [];
@@ -190,11 +177,6 @@ export class Turns implements OnDestroy {
 
   protected pct(value: number): string {
     return `${Math.round(value * 100)}%`;
-  }
-
-  /** The mics that heard this line: its own and those with a version of it. */
-  protected mics(t: Transcript): number {
-    return new Set([t.source, ...this.alternates(t).map((a) => a.source)]).size;
   }
 
   /** The other mics' versions of this line: its moment's, one line each. */

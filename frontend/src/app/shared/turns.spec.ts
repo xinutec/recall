@@ -205,16 +205,15 @@ describe('Turns', () => {
     expect(player.playing()).toBeNull();
   });
 
-  it('flags a line the mics disagree on, and counts the mics', async () => {
+  it('flags a line the mics disagree on', async () => {
     const usb = said(1, 'P', { source: 'usb' });
     const phone = said(2, 'D', { source: 'phone' });
     const { c } = await setup([line(usb, [phone])]);
     expect(c.disputed(usb)).toBe(true);
-    expect(c.mics(usb)).toBe(2);
     expect(c.alternates(usb)).toEqual([phone]);
   });
 
-  it('shows a line’s own moment’s versions, counting its mic once', async () => {
+  it('keeps a line’s own moment’s versions', async () => {
     const first = said(1, 'P', { source: 'usb' });
     const second = said(2, 'P', { source: 'usb' });
     const same = said(3, 'D', { source: 'phone' });
@@ -222,8 +221,6 @@ describe('Turns', () => {
     const later = said(4, 'D', { source: 'phone' });
     const { c } = await setup([line(first, [same, copy]), line(second, [later])]);
     expect(c.alternates(first)).toEqual([same, copy]);
-    // The mic's own second copy is not a second mic.
-    expect(c.mics(first)).toBe(2);
     expect(c.alternates(second)).toEqual([later]);
   });
 
@@ -242,19 +239,12 @@ describe('Turns', () => {
     expect(c.disputed(usb)).toBe(false);
   });
 
-  it('tags the mic where it changes, only when several are in view', async () => {
-    const one = await setup(lines(said(1, 'P'), said(2, 'P')));
-    expect(one.c.sourceTags().size).toBe(0);
-    TestBed.resetTestingModule();
-    const two = await setup([
-      line(said(1, 'P', { source: 'usb' })),
-      line(said(2, 'P', { source: 'usb' })),
-      line(said(3, 'P', { source: 'phone' })),
-    ]);
-    expect([...two.c.sourceTags().entries()]).toEqual([
-      [1, 'usb'],
-      [3, 'phone'],
-    ]);
+  it('shows only the words in a paragraph: which mics heard a line is on its sheet', async () => {
+    const usb = said(1, 'P', { source: 'usb', text: 'first words' });
+    const phone = said(2, 'P', { source: 'phone', text: 'second words' });
+    const { fixture } = await setup([line(usb, [said(3, 'P', { source: 'phone' })]), line(phone)]);
+    const body: HTMLElement = fixture.nativeElement.querySelector('.body');
+    expect(body.textContent?.replace(/\s+/g, ' ').trim()).toBe('first words second words');
   });
 
   it('excludes a stretch picked from one line to a later one, and undoes it from its row', async () => {

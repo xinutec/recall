@@ -85,22 +85,9 @@
       }
     }
 
-    .mics {
-      margin-inline-end: 0.3rem;
-      font: var(--mat-sys-label-small);
-      color: var(--mat-sys-primary);
-    }
   }
 }
 
-.src {
-  margin-inline-end: 0.3rem;
-  padding: 0 0.3rem;
-  border-radius: 4px;
-  font: var(--mat-sys-label-small);
-  color: var(--mat-sys-on-surface-variant);
-  background: var(--mat-sys-surface-container-high);
-}
 
 // Picking a stretch to exclude: stays in view while the person scrolls to its end.
 .excluding {

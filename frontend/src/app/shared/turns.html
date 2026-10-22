@@ -44,9 +44,6 @@
       </div>
       <p class="body">
         @for (t of run.turns; track t.id) {
-          @if (sourceTags().get(t.id); as src) {
-            <span class="src">{{ src }}</span>
-          }
           <span
             class="t"
             role="button"
@@ -62,9 +59,6 @@
             (keydown.enter)="openLine(t)"
             >{{ t.text }} </span
           >
-          @if (mics(t) > 1) {
-            <sup class="mics" [title]="'Heard by ' + mics(t) + ' mics'">{{ mics(t) }}</sup>
-          }
         }
       </p>
     </div>
