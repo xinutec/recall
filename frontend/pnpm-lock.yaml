@@ -47,8 +47,8 @@ importers:
         specifier: ^5.3.0
         version: 5.3.0
       '@xinutec/ui-scaffold':
-        specifier: github:xinutec/ui-harness#46178d2d0b6781e7bdd5430ecaa0c27bfae386e9&path:/scaffold
-        version: https://codeload.github.com/xinutec/ui-harness/tar.gz/46178d2d0b6781e7bdd5430ecaa0c27bfae386e9#path:/scaffold(55af3ff2f242b4c0cc98876aef40e66c)
+        specifier: github:xinutec/ui-harness#9acbc25d8f25e3a52b956cdc8aee544d3e0591de&path:/scaffold
+        version: https://codeload.github.com/xinutec/ui-harness/tar.gz/9acbc25d8f25e3a52b956cdc8aee544d3e0591de#path:/scaffold(55af3ff2f242b4c0cc98876aef40e66c)
       material-icons:
         specifier: ^1.13.14
         version: 1.13.14
@@ -72,8 +72,8 @@ importers:
         specifier: 1.63.0
         version: 1.63.0
       '@xinutec/ui-harness':
-        specifier: github:xinutec/ui-harness#46178d2d0b6781e7bdd5430ecaa0c27bfae386e9
-        version: https://codeload.github.com/xinutec/ui-harness/tar.gz/46178d2d0b6781e7bdd5430ecaa0c27bfae386e9(@playwright/test@1.63.0)
+        specifier: github:xinutec/ui-harness#9acbc25d8f25e3a52b956cdc8aee544d3e0591de
+        version: https://codeload.github.com/xinutec/ui-harness/tar.gz/9acbc25d8f25e3a52b956cdc8aee544d3e0591de(@playwright/test@1.63.0)
       angular-eslint:
         specifier: ^22.6.0
         version: 22.6.0(chokidar@5.0.0)(eslint@10.13.0(supports-color@10.2.2))(supports-color@10.2.2)(typescript-eslint@8.71.2(eslint@10.13.0(supports-color@10.2.2))(supports-color@10.2.2)(typescript@6.0.3))(typescript@6.0.3)
@@ -1597,8 +1597,8 @@ packages:
   '@vitest/utils@4.1.12':
     resolution: {integrity: sha512-Q3awXrwOfEV+qc3WmO5ONyE0yO7Q1gQ9/oyHxGLZ/pl7N3NO/ZztqQwKLuwMkV+CA1JYSIeO3gkHnRDIo4AVaA==}
 
-  '@xinutec/ui-harness@https://codeload.github.com/xinutec/ui-harness/tar.gz/46178d2d0b6781e7bdd5430ecaa0c27bfae386e9':
-    resolution: {gitHosted: true, integrity: sha512-D9BpYImUaYzGwVfz4PKVOrOr2Ho5tUHidTSOlcnA8Tf3dAb2K9jyCbQ0gtv02rL5ONHYyd9oPTs9w8y3yM5KyA==, tarball: https://codeload.github.com/xinutec/ui-harness/tar.gz/46178d2d0b6781e7bdd5430ecaa0c27bfae386e9}
+  '@xinutec/ui-harness@https://codeload.github.com/xinutec/ui-harness/tar.gz/9acbc25d8f25e3a52b956cdc8aee544d3e0591de':
+    resolution: {gitHosted: true, integrity: sha512-TYm7D3XtsqkiSEAacrZHQEmOFuSSy5PjcfRpgQ5k8cooP3kfFwRMUequJ60nF8jFko1w8jcFJdPMdC4CnwuKcw==, tarball: https://codeload.github.com/xinutec/ui-harness/tar.gz/9acbc25d8f25e3a52b956cdc8aee544d3e0591de}
     version: 0.1.0
     peerDependencies:
       '@playwright/test': '>=1.61.0'
@@ -1606,8 +1606,8 @@ packages:
       '@playwright/test':
         optional: true
 
-  '@xinutec/ui-scaffold@https://codeload.github.com/xinutec/ui-harness/tar.gz/46178d2d0b6781e7bdd5430ecaa0c27bfae386e9#path:/scaffold':
-    resolution: {gitHosted: true, integrity: sha512-D9BpYImUaYzGwVfz4PKVOrOr2Ho5tUHidTSOlcnA8Tf3dAb2K9jyCbQ0gtv02rL5ONHYyd9oPTs9w8y3yM5KyA==, path: /scaffold, tarball: https://codeload.github.com/xinutec/ui-harness/tar.gz/46178d2d0b6781e7bdd5430ecaa0c27bfae386e9}
+  '@xinutec/ui-scaffold@https://codeload.github.com/xinutec/ui-harness/tar.gz/9acbc25d8f25e3a52b956cdc8aee544d3e0591de#path:/scaffold':
+    resolution: {gitHosted: true, integrity: sha512-TYm7D3XtsqkiSEAacrZHQEmOFuSSy5PjcfRpgQ5k8cooP3kfFwRMUequJ60nF8jFko1w8jcFJdPMdC4CnwuKcw==, path: /scaffold, tarball: https://codeload.github.com/xinutec/ui-harness/tar.gz/9acbc25d8f25e3a52b956cdc8aee544d3e0591de}
     version: 0.1.0
     peerDependencies:
       '@angular/cdk': ^22.1.7
@@ -4363,13 +4363,13 @@ snapshots:
       convert-source-map: 2.0.0
       tinyrainbow: 3.2.0
 
-  '@xinutec/ui-harness@https://codeload.github.com/xinutec/ui-harness/tar.gz/46178d2d0b6781e7bdd5430ecaa0c27bfae386e9(@playwright/test@1.63.0)':
+  '@xinutec/ui-harness@https://codeload.github.com/xinutec/ui-harness/tar.gz/9acbc25d8f25e3a52b956cdc8aee544d3e0591de(@playwright/test@1.63.0)':
     dependencies:
       '@types/node': 24.19.2
     optionalDependencies:
       '@playwright/test': 1.63.0
 
-  '@xinutec/ui-scaffold@https://codeload.github.com/xinutec/ui-harness/tar.gz/46178d2d0b6781e7bdd5430ecaa0c27bfae386e9#path:/scaffold(55af3ff2f242b4c0cc98876aef40e66c)':
+  '@xinutec/ui-scaffold@https://codeload.github.com/xinutec/ui-harness/tar.gz/9acbc25d8f25e3a52b956cdc8aee544d3e0591de#path:/scaffold(55af3ff2f242b4c0cc98876aef40e66c)':
     dependencies:
       '@angular/cdk': 22.2.3(@angular/common@22.2.3(@angular/core@22.2.3(@angular/compiler@22.2.3)(rxjs@7.8.2))(rxjs@7.8.2))(@angular/core@22.2.3(@angular/compiler@22.2.3)(rxjs@7.8.2))(@angular/forms@22.2.3(@angular/common@22.2.3(@angular/core@22.2.3(@angular/compiler@22.2.3)(rxjs@7.8.2))(rxjs@7.8.2))(@angular/core@22.2.3(@angular/compiler@22.2.3)(rxjs@7.8.2))(@angular/platform-browser@22.2.3(@angular/common@22.2.3(@angular/core@22.2.3(@angular/compiler@22.2.3)(rxjs@7.8.2))(rxjs@7.8.2))(@angular/core@22.2.3(@angular/compiler@22.2.3)(rxjs@7.8.2)))(rxjs@7.8.2))(@angular/platform-browser@22.2.3(@angular/common@22.2.3(@angular/core@22.2.3(@angular/compiler@22.2.3)(rxjs@7.8.2))(rxjs@7.8.2))(@angular/core@22.2.3(@angular/compiler@22.2.3)(rxjs@7.8.2)))(rxjs@7.8.2)
       '@angular/common': 22.2.3(@angular/core@22.2.3(@angular/compiler@22.2.3)(rxjs@7.8.2))(rxjs@7.8.2)

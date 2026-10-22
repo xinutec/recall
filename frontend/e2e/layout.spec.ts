@@ -8,6 +8,7 @@ import {
   expectNoOccludedControls,
   expectRecoversFromMissingBundle,
 } from '@xinutec/ui-harness';
+import { routesFrom, screens } from '@xinutec/ui-harness/routes';
 
 import type {
   CaptureState,
@@ -181,16 +182,26 @@ const screenMocks: Record<string, TranscriptList | LabelList | SessionList | Voc
   } satisfies CaptureState,
 };
 
-const screens: { path: string; anchor: string }[] = [
-  { path: '/', anchor: '.turns' },
-  { path: '/search', anchor: '.search-field' },
-  { path: '/check?ids=21', anchor: '.line' },
-  { path: '/labels', anchor: '.vocab' },
-  { path: '/sessions', anchor: '.page' },
-];
+/**
+ * What each routed screen draws once loaded, and any query it needs. The routes
+ * come from `routes.json`, the route table; one added there without an entry
+ * here fails rather than going unchecked.
+ */
+const LOADED: Record<string, { query?: string; anchor: string }> = {
+  '/': { anchor: '.turns' },
+  '/search': { anchor: '.search-field' },
+  '/check': { query: '?ids=21', anchor: '.line' },
+  '/labels': { anchor: '.vocab' },
+  '/sessions': { anchor: '.page' },
+  '/sessions/:id': { anchor: '.run .play' },
+};
 
-for (const { path, anchor } of screens) {
+for (const { route, url } of screens(routesFrom('e2e/routes.json'), { id: 'test' })) {
+  const loaded = LOADED[route];
+  const path = url + (loaded?.query ?? '');
   test(`${path} holds phone geometry`, async ({ page }, testInfo) => {
+    if (!loaded) throw new Error(`${route} is routed but has no entry in LOADED`);
+    const { anchor } = loaded;
     await page.route('**/api/**', (route: Route) => {
       const url = new URL(route.request().url());
       for (const [prefix, json] of Object.entries(screenMocks)) {
