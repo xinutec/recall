@@ -34,10 +34,10 @@ fn fetch(agent: &ureq::Agent, url: &str) -> Result<Option<Window>, String> {
 /// Write the window, or for a fault (`None`) remove the file, which records.
 fn apply(root: &Path, desired: Option<Window>) {
     let Some(desired) = desired else {
-        tracing::warn!("pause-mirror: the fleet's window does not read — recording");
+        tracing::warn!("window-mirror: the fleet's window does not read — recording");
         match std::fs::remove_file(root.join(GATE_FILE)) {
             Err(err) if err.kind() != std::io::ErrorKind::NotFound => {
-                tracing::warn!(%err, "pause-mirror: cannot clear the gate");
+                tracing::warn!(%err, "window-mirror: cannot clear the gate");
             }
             _ => {}
         }
@@ -47,8 +47,8 @@ fn apply(root: &Path, desired: Option<Window>) {
         return;
     }
     match crate::gate::write(root, desired) {
-        Ok(()) => tracing::info!(window = %desired.spell(), "pause-mirror: applied"),
-        Err(err) => tracing::warn!(%err, "pause-mirror: cannot write the gate"),
+        Ok(()) => tracing::info!(window = %desired.spell(), "window-mirror: applied"),
+        Err(err) => tracing::warn!(%err, "window-mirror: cannot write the gate"),
     }
 }
 
@@ -62,7 +62,7 @@ pub fn run(root: &Path, url: &str) -> ! {
         match fetch(&agent, url) {
             Ok(desired) => apply(root, desired),
             Err(err) => {
-                tracing::debug!(%err, "pause-mirror: unreachable; keeping last state");
+                tracing::debug!(%err, "window-mirror: unreachable; keeping last state");
             }
         }
         std::thread::sleep(POLL);
@@ -192,14 +192,14 @@ pub fn run_exchange(root: &Path, url: &str, token: &str, interval: Duration) -> 
                     apply(root, window);
                     // Recorded even when unparseable; see `decide`.
                     if let Err(err) = std::fs::write(root.join(MARKER_FILE), &record) {
-                        tracing::warn!(%err, "pause-mirror: cannot record applied intent");
+                        tracing::warn!(%err, "window-mirror: cannot record applied intent");
                     }
-                    tracing::info!(intent = %record, "pause-mirror: fleet intent changed — applied");
+                    tracing::info!(intent = %record, "window-mirror: fleet intent changed — applied");
                     true
                 }
             },
             Err(err) => {
-                tracing::debug!(%err, "pause-mirror: exchange failed; keeping last state");
+                tracing::debug!(%err, "window-mirror: exchange failed; keeping last state");
                 false
             }
         };
@@ -213,7 +213,7 @@ pub fn run_exchange(root: &Path, url: &str, token: &str, interval: Duration) -> 
 }
 
 /// One exchange, applied, then exit: for checking a real fleet by hand without
-/// a second mirror competing for the pause file. Prints what it saw and did.
+/// a second mirror competing for the gate file. Prints what it saw and did.
 pub fn exchange_once(root: &Path, url: &str, token: &str) -> std::process::ExitCode {
     let agent = ureq::AgentBuilder::new()
         .timeout_connect(Duration::from_secs(5))

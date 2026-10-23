@@ -14,7 +14,7 @@ fn every_mode_is_in_the_help() {
         "ingest",
         "capture",
         "capture-mirror",
-        "pause-mirror",
+        "window-mirror",
         "upload",
         "beat-relay",
         "logrotate",

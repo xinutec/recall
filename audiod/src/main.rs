@@ -4,7 +4,7 @@
 //! * `ingest`: the network-mic ingest server.
 //! * `capture`: the local-mic capture pipeline.
 //! * `capture-mirror`: the Mac's window mirror, which reports what it applied.
-//! * `pause-mirror`: the window mirror for a recorder that reports nothing.
+//! * `window-mirror`: the window mirror for a recorder that reports nothing.
 //! * `upload`: one store-and-forward delivery pass (stage B).
 //! * `beat-relay`: the LAN heartbeat fallback.
 //! * `logrotate`: bound the agents' log files.
@@ -69,7 +69,7 @@ enum Mode {
         once: bool,
     },
     /// The window mirror for a recorder that reports nothing.
-    PauseMirror {
+    WindowMirror {
         #[command(flatten)]
         root: Root,
         #[arg(long)]
@@ -236,7 +236,7 @@ fn main() -> ExitCode {
             seconds,
             url.as_deref(),
         ),
-        Mode::PauseMirror { root, url } => audiod::pause_mirror::run(&root.path, &url),
+        Mode::WindowMirror { root, url } => audiod::window_mirror::run(&root.path, &url),
         // Reports what it applied, then long-polls for intent.
         Mode::CaptureMirror {
             root,
@@ -317,9 +317,9 @@ fn run_capture_mirror(
         return ExitCode::FAILURE;
     }
     if once {
-        return audiod::pause_mirror::exchange_once(root, url, &token);
+        return audiod::window_mirror::exchange_once(root, url, &token);
     }
-    audiod::pause_mirror::run_exchange(root, url, &token, std::time::Duration::from_secs(5))
+    audiod::window_mirror::run_exchange(root, url, &token, std::time::Duration::from_secs(5))
 }
 
 /// One bounded upload pass. The token comes from a file or env, never argv,

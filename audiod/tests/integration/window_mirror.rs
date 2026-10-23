@@ -2,7 +2,7 @@
 //! edge-triggering and the unparseable-value trap.
 
 use audiocore::capture::Window;
-use audiod::pause_mirror::{Decision, decide, source_liveness};
+use audiod::window_mirror::{Decision, decide, source_liveness};
 use chrono::{DateTime, Utc};
 
 fn at(s: &str) -> DateTime<Utc> {

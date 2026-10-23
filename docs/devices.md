@@ -16,7 +16,7 @@ audiod capture + audiod upload   # a Linux host's own mic (geb): store-and-forwa
 |---|---|
 | USB mic (`audiod capture`) | sox into ffmpeg, no socket and none of our code: a real-time device has no buffer to absorb a stall |
 | Phones | TCP to the ingest port, plus their own capture-stamped segments delivered with verified receipts |
-| Linux hosts (geb) | store-and-forward only: ffmpeg reads ALSA into audiod's segmenter, closed segments go to recalld with verified receipts; `audiod pause-mirror` honours the recording window |
+| Linux hosts (geb) | store-and-forward only: ffmpeg reads ALSA into audiod's segmenter, closed segments go to recalld with verified receipts; `audiod window-mirror` honours the recording window |
 
 The ingest server pumps socket bytes into ffmpeg's stdin; the kernel's receive
 buffer absorbs a momentary stall.
