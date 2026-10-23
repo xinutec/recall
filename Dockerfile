@@ -49,7 +49,9 @@ FROM debian:trixie-slim
 # The tools recalld runs; a missing one fails at request time, not at boot. `flac`
 # decodes older archive segments. libonnxruntime1.21 is loaded by the speech detector
 # (ORT_DYLIB_PATH below); Debian's build targets baseline x86-64 and runs on the
-# fleet's Ivy Bridge CPUs, where ort's prebuilt one crashed with SIGILL.
+# fleet's Ivy Bridge CPUs, where ort's prebuilt one crashed with SIGILL. Its first
+# session prints ~570 "Schema error ... already registered" lines: it links Debian's
+# libonnx, which registers the same operators. Harmless, once per process.
 RUN apt-get update \
     && apt-get install -y --no-install-recommends ffmpeg sox flac libonnxruntime1.21 \
     && rm -rf /var/lib/apt/lists/*
