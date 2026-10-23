@@ -242,6 +242,11 @@ use std::sync::Arc;
 use tower::ServiceExt;
 
 fn gated(root: &std::path::Path) -> axum::Router {
+    gated_for(root, &[], None)
+}
+
+/// [`gated`], admitting `allowed` and accepting `device_token`.
+fn gated_for(root: &std::path::Path, allowed: &[&str], device_token: Option<&str>) -> axum::Router {
     recalld::app::prepare(root).expect("planes");
     router(Arc::new(Config {
         root: root.to_path_buf(),
@@ -257,8 +262,8 @@ fn gated(root: &std::path::Path) -> axum::Router {
                 nc_base_url: "https://dash.example.org".into(),
                 nc_internal_url: "https://dash.example.org".into(),
                 redirect_uri: "http://127.0.0.1/auth/callback".into(),
-                allowed_users: std::collections::HashSet::new(),
-                device_token: None,
+                allowed_users: allowed.iter().map(|u| (*u).to_owned()).collect(),
+                device_token: device_token.map(str::to_owned),
             }),
             now: Arc::new(|| NOW),
         }),
@@ -767,4 +772,53 @@ async fn a_recording_over_two_megabytes_is_accepted() {
         bytes.len(),
         String::from_utf8_lossy(&out)
     );
+}
+
+/// The phones' shared device token names no person: with one person allowed it
+/// speaks for them, so a phone's meeting is theirs; with several it speaks for
+/// nobody, and an upload that would belong to nobody is refused.
+#[tokio::test]
+async fn a_device_token_upload_is_the_one_persons_and_refused_among_several() {
+    let send = |app: axum::Router, bytes: Vec<u8>| async move {
+        let (ctype, body) = multipart("phone.flac", &bytes, "", "2026-07-03T09:50:00+01:00");
+        app.oneshot(
+            Request::post("/api/sessions")
+                .header("content-type", ctype)
+                .header("authorization", "Bearer device-secret")
+                .body(Body::from(body))
+                .unwrap(),
+        )
+        .await
+        .expect("call")
+        .status()
+    };
+    let dir = scratch();
+    let clip = dir.path().join("phone.flac");
+    if !make_flac(&clip, 2.0) {
+        eprintln!("skipped: no ffmpeg on this host");
+        return;
+    }
+    let bytes = std::fs::read(&clip).expect("read");
+
+    let one = send(
+        gated_for(dir.path(), &["user"], Some("device-secret")),
+        bytes.clone(),
+    )
+    .await;
+    assert_eq!(one, 200);
+    let owner: Option<String> = Connection::open(dir.path().join("recall.sqlite"))
+        .expect("db")
+        .query_row("SELECT owner FROM sources WHERE kind = 'upload'", [], |r| {
+            r.get(0)
+        })
+        .expect("the session");
+    assert_eq!(owner.as_deref(), Some("user"));
+
+    let several = scratch();
+    let two = send(
+        gated_for(several.path(), &["a", "b"], Some("device-secret")),
+        bytes,
+    )
+    .await;
+    assert_eq!(two, 403, "nobody's session would be nobody's to see");
 }

@@ -317,6 +317,16 @@ impl Config {
         })
     }
 
+    /// The one person allowed to sign in, if exactly one is.
+    #[must_use]
+    pub fn sole_user(&self) -> Option<&str> {
+        let mut users = self.allowed_users.iter();
+        match (users.next(), users.next()) {
+            (Some(user), None) => Some(user),
+            _ => None,
+        }
+    }
+
     #[must_use]
     pub fn permits(&self, user_id: &str) -> bool {
         self.allowed_users.is_empty() || self.allowed_users.contains(user_id)
@@ -547,6 +557,19 @@ pub async fn gate(
             .get(header::AUTHORIZATION)
             .and_then(|v| v.to_str().ok());
         if st.cfg.presents_device_token(&method, &path, auth) {
+            // The shared token names no person: it speaks for the one person
+            // allowed, and among several for nobody, whose upload would be
+            // nobody's to see.
+            let Some(user) = st.cfg.sole_user() else {
+                return (
+                    StatusCode::FORBIDDEN,
+                    Json(serde_json::json!({"error": "a device must say whose it is"})),
+                )
+                    .into_response();
+            };
+            request.extensions_mut().insert(Viewer {
+                user_id: user.to_owned(),
+            });
             return next.run(request).await;
         }
         return (

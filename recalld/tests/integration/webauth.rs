@@ -533,7 +533,9 @@ async fn a_signed_in_user_outside_the_allowlist_is_forbidden_not_unauthenticated
 
 #[tokio::test]
 async fn a_device_token_opens_its_route_through_the_middleware_and_no_other() {
-    let c = cfg(Some("device-secret"));
+    // One person allowed: the shared token speaks for them.
+    let mut c = cfg(Some("device-secret"));
+    c.allowed_users = ["user".to_owned()].into();
     let st = GateState {
         cfg: Arc::new(c),
         now: Arc::new(|| NOW),
