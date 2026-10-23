@@ -1,6 +1,6 @@
 //! API turns as the lines a person reads. Pure apart from the local offset.
 
-use crate::api::{Conversation, Export, Session, Turn};
+use crate::api::{Conversation, Export, Session, Speaker, Turn};
 use chrono::{DateTime, Local};
 
 fn local(iso: &str) -> Option<DateTime<Local>> {
@@ -22,17 +22,20 @@ fn when(iso: &str, format: &str) -> String {
 /// nearly all read "unknown".
 #[must_use]
 pub fn attribution(turn: &Turn) -> String {
-    if turn.speaker_confirmed
-        && let Some(name) = &turn.speaker
-    {
-        return name.clone();
+    match &turn.speaker {
+        Some(Speaker::Named { name }) => name.clone(),
+        Some(Speaker::Guessed { name, score }) => format!("{name}{}", strength(*score)),
+        None => voice(turn),
     }
-    if let Some(guess) = &turn.speaker {
-        let strength = turn
-            .speaker_confidence
-            .map_or_else(String::new, |s| format!(" ~{}%", (s * 100.0).round()));
-        return format!("{guess}{strength}");
-    }
+}
+
+/// A guess's score as the CLI prints it, " ~76%".
+fn strength(score: f64) -> String {
+    format!(" ~{}%", (score * 100.0).round())
+}
+
+/// The diarized voice, else "unknown".
+fn voice(turn: &Turn) -> String {
     turn.cluster.clone().unwrap_or_else(|| "unknown".to_owned())
 }
 
@@ -40,12 +43,10 @@ pub fn attribution(turn: &Turn) -> String {
 /// else the diarized voice, else "unknown". No guesses.
 #[must_use]
 pub fn who(turn: &Turn) -> String {
-    if turn.speaker_confirmed
-        && let Some(name) = &turn.speaker
-    {
-        return name.clone();
+    match &turn.speaker {
+        Some(Speaker::Named { name }) => name.clone(),
+        Some(Speaker::Guessed { .. }) | None => voice(turn),
     }
-    turn.cluster.clone().unwrap_or_else(|| "unknown".to_owned())
 }
 
 #[must_use]
@@ -69,16 +70,9 @@ pub fn hit(turn: &Turn) -> String {
 /// Attribution for the diagnostic view, tagged confirmed or guess.
 fn who_detail(turn: &Turn) -> String {
     match &turn.speaker {
-        Some(name) if turn.speaker_confirmed => {
-            format!("{name} (confirmed)")
-        }
-        Some(guess) if !turn.speaker_confirmed => {
-            let pct = turn
-                .speaker_confidence
-                .map_or_else(String::new, |s| format!(" ~{}%", (s * 100.0).round()));
-            format!("{guess}{pct} (guess)")
-        }
-        _ => "unknown".to_owned(),
+        Some(Speaker::Named { name }) => format!("{name} (confirmed)"),
+        Some(Speaker::Guessed { name, score }) => format!("{name}{} (guess)", strength(*score)),
+        None => "unknown".to_owned(),
     }
 }
 

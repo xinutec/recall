@@ -3,7 +3,7 @@
 
 use recalld::line::HiddenReason;
 use recalld::line::Stage;
-use recalld::reads;
+use recalld::reads::{self, SpeakerOut};
 use rusqlite::Connection;
 
 /// The real `recall.sqlite` schema, built by the migration ladder.
@@ -140,16 +140,28 @@ fn a_human_label_wins_and_drops_the_score_a_guess_keeps_it() {
     let confirmed = &page.items[0];
     let guessed = &page.items[1];
 
-    assert_eq!(confirmed.speaker.as_deref(), Some("Alex"));
-    assert!(confirmed.speaker_confirmed);
     assert_eq!(
-        confirmed.speaker_confidence, None,
-        "a confirmed speaker carries no score — there is nothing to be unsure about"
+        confirmed.speaker,
+        Some(SpeakerOut::Named {
+            name: "Alex".to_owned()
+        })
     );
-
-    assert_eq!(guessed.speaker.as_deref(), Some("Sam"));
-    assert!(!guessed.speaker_confirmed);
-    assert_eq!(guessed.speaker_confidence, Some(0.31));
+    assert_eq!(
+        guessed.speaker,
+        Some(SpeakerOut::Guessed {
+            name: "Sam".to_owned(),
+            score: 0.31
+        })
+    );
+    // On the wire, a name has no score field at all.
+    assert_eq!(
+        serde_json::to_value(&confirmed.speaker).unwrap(),
+        serde_json::json!({"kind": "named", "name": "Alex"})
+    );
+    assert_eq!(
+        serde_json::to_value(&guessed.speaker).unwrap(),
+        serde_json::json!({"kind": "guessed", "name": "Sam", "score": 0.31})
+    );
 }
 
 #[test]

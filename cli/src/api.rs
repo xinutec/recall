@@ -15,15 +15,21 @@ pub struct Turn {
     pub end: String,
     pub text: String,
     pub language: Option<String>,
-    pub speaker: Option<String>,
-    pub speaker_confirmed: bool,
-    pub speaker_confidence: Option<f64>,
+    pub speaker: Option<Speaker>,
     pub confidence: Option<f64>,
     pub model: Option<String>,
     pub tier: String,
     pub hidden: Option<String>,
     pub source: Option<String>,
     pub cluster: Option<String>,
+}
+
+/// Who a turn is put down to, as `recalld::reads::SpeakerOut` serialises it.
+#[derive(Debug, Clone, Deserialize, PartialEq)]
+#[serde(tag = "kind", rename_all = "camelCase")]
+pub enum Speaker {
+    Named { name: String },
+    Guessed { name: String, score: f64 },
 }
 
 #[derive(Debug, Deserialize)]

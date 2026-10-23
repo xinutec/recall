@@ -104,8 +104,8 @@ export class Session implements OnDestroy {
       };
       byCluster.set(t.cluster, e);
       e.turns.push(t);
-      if (t.speakerConfirmed && t.speaker) {
-        e.counts.set(t.speaker, (e.counts.get(t.speaker) ?? 0) + 1);
+      if (t.speaker?.kind === 'named') {
+        e.counts.set(t.speaker.name, (e.counts.get(t.speaker.name) ?? 0) + 1);
       }
     }
     return [...byCluster.entries()]

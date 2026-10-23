@@ -20,9 +20,7 @@ function turn(o: Partial<Transcript>): Transcript {
     text: 't',
     language: 'en',
     speaker: null,
-    speakerConfirmed: false,
     wordsChecked: false,
-    speakerConfidence: null,
     confidence: null,
     model: 'diarized',
     tier: 'diarized',
@@ -36,7 +34,7 @@ function turn(o: Partial<Transcript>): Transcript {
 }
 
 const said = (id: number, speaker: string | null, o: Partial<Transcript> = {}): Transcript =>
-  turn({ id, speaker, speakerConfirmed: !!speaker, audioUrl: `/api/audio/${id}`, ...o });
+  turn({ id, speaker: speaker ? { kind: 'named', name: speaker } : null, audioUrl: `/api/audio/${id}`, ...o });
 
 const line = (primary: Transcript, alternates: Transcript[] = []): Moment => ({
   start: primary.start,
@@ -92,7 +90,7 @@ describe('runsOf', () => {
   });
 
   it('keeps a guess apart from the confirmed name, with its strength', () => {
-    const guess = turn({ id: 2, speaker: 'P', speakerConfidence: 0.31 });
+    const guess = turn({ id: 2, speaker: { kind: 'guessed', name: 'P', score: 0.31 } });
     const runs = runsOf([said(1, 'P'), guess]);
     expect(runs.map((r) => [r.speaker, r.confirmed, r.guess])).toEqual([
       ['P', true, null],
@@ -226,14 +224,14 @@ describe('Turns', () => {
 
   it('does not flag a machine guess that differs from a person’s name', async () => {
     const named = said(1, 'P', { source: 'usb' });
-    const guessed = said(2, null, { source: 'phone', speaker: 'D', speakerConfirmed: false });
+    const guessed = said(2, null, { source: 'phone', speaker: { kind: 'guessed', name: 'D', score: 0.5 } });
     const { c } = await setup([line(named, [guessed])]);
     expect(c.disputed(named)).toBe(false);
   });
 
   it('flags only a disagreement with a confirmed name', async () => {
-    const usb = said(1, null, { source: 'usb', speaker: 'P', speakerConfirmed: false });
-    const phone = said(2, null, { source: 'phone', speaker: 'D', speakerConfirmed: false });
+    const usb = said(1, null, { source: 'usb', speaker: { kind: 'guessed', name: 'P', score: 0.5 } });
+    const phone = said(2, null, { source: 'phone', speaker: { kind: 'guessed', name: 'D', score: 0.5 } });
     const { c } = await setup([line(usb, [phone])]);
     // Two guesses that differ are two guesses, not a finding.
     expect(c.disputed(usb)).toBe(false);

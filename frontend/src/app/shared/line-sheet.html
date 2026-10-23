@@ -133,7 +133,7 @@
           >
             <mat-icon>{{ playing(a) ? 'pause' : 'play_arrow' }}</mat-icon>
           </button>
-          <span matListItemTitle>{{ a.source }}{{ a.speaker ? ' · ' + a.speaker : '' }}</span>
+          <span matListItemTitle>{{ a.source }}{{ a.speaker ? ' · ' + a.speaker.name : '' }}</span>
           <span matListItemLine class="alt-text">{{ a.text }}</span>
         </mat-list-item>
       }

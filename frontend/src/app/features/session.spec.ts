@@ -17,9 +17,7 @@ function turn(o: Partial<Transcript>): Transcript {
     text: 't',
     language: 'en',
     speaker: null,
-    speakerConfirmed: false,
     wordsChecked: false,
-    speakerConfidence: null,
     confidence: null,
     model: 'diarized',
     tier: 'diarized',
@@ -33,7 +31,7 @@ function turn(o: Partial<Transcript>): Transcript {
 }
 
 const said = (id: number, cluster: string, speaker?: string): Transcript =>
-  turn({ id, cluster, speaker: speaker ?? null, speakerConfirmed: !!speaker });
+  turn({ id, cluster, speaker: speaker ? { kind: 'named', name: speaker } : null });
 
 function pageOf(turns: Transcript[]): ConversationPage {
   const start = turns[0]?.start ?? '2026-01-15T10:33:00Z';

@@ -18,9 +18,7 @@ function line(id: number, source: string, o: Partial<Transcript> = {}): Transcri
     text: `line ${id}`,
     language: 'en',
     speaker: null,
-    speakerConfirmed: false,
     wordsChecked: false,
-    speakerConfidence: null,
     confidence: null,
     model: 'diarized',
     tier: 'diarized',
@@ -53,7 +51,7 @@ describe('pickLines', () => {
   });
 
   it("offers a line only renamed, since its words are still the machine's", () => {
-    const picked = pickLines([moment(line(1, 'usb', { tier: 'corrected', speaker: 'Dr. 1' }))]);
+    const picked = pickLines([moment(line(1, 'usb', { tier: 'corrected', speaker: { kind: 'named', name: 'Dr. 1' } }))]);
     expect(picked.map((t) => t.id)).toEqual([1]);
   });
 

@@ -65,8 +65,32 @@ crate::statements! {
         current!(), " AND t.source_id = ?2", ties!(), " ORDER BY t.id ASC";
 }
 
-/// One turn as the app shows it. Absent values serialise as `null`: a null
-/// confidence means a person confirmed it, a number is a guess's strength.
+/// Who a line is put down to, as the app shows it.
+#[derive(Debug, Clone, Serialize, PartialEq, ts_rs::TS)]
+#[ts(export, rename = "Speaker")]
+#[serde(tag = "kind", rename_all = "camelCase")]
+pub enum SpeakerOut {
+    /// A name a person gave: nothing to be unsure about.
+    Named { name: String },
+    /// The voiceprint's best match, and how sure, 0 to 1.
+    Guessed { name: String, score: f64 },
+}
+
+impl From<&Attribution> for SpeakerOut {
+    fn from(who: &Attribution) -> Self {
+        match who {
+            Attribution::Named(name) => Self::Named {
+                name: name.as_str().to_owned(),
+            },
+            Attribution::Guessed { name, score } => Self::Guessed {
+                name: name.as_str().to_owned(),
+                score: *score,
+            },
+        }
+    }
+}
+
+/// One turn as the app shows it. Absent values serialise as `null`.
 #[derive(Debug, Serialize, PartialEq, ts_rs::TS)]
 #[ts(export, rename = "Transcript")]
 #[serde(rename_all = "camelCase")]
@@ -76,9 +100,7 @@ pub struct TranscriptOut {
     pub end: String,
     pub text: String,
     pub language: Option<String>,
-    pub speaker: Option<String>,
-    pub speaker_confirmed: bool,
-    pub speaker_confidence: Option<f64>,
+    pub speaker: Option<SpeakerOut>,
     pub confidence: Option<f64>,
     pub model: Option<String>,
     pub tier: Stage,
@@ -242,17 +264,9 @@ pub fn to_out(segment: &Segment) -> TranscriptOut {
     to_out_with(segment, segment.speaker.as_ref())
 }
 
-/// The display rules: a person's name carries no score, a guess its strength
-/// ("Alice 31%", not "unknown"). `speaker` is the line's own, or for a folded
-/// moment the one [`crate::conversations::shown_speaker`] chose.
+/// The line under `speaker`: its own, or for a folded moment the one
+/// [`crate::conversations::shown_speaker`] chose.
 pub fn to_out_with(segment: &Segment, speaker: Option<&Attribution>) -> TranscriptOut {
-    let (speaker, speaker_confirmed, speaker_confidence) = match speaker {
-        Some(Attribution::Named(name)) => (Some(name.as_str().to_owned()), true, None),
-        Some(Attribution::Guessed { name, score }) => {
-            (Some(name.as_str().to_owned()), false, Some(*score))
-        }
-        None => (None, false, None),
-    };
     TranscriptOut {
         id: segment.id,
         // The stored spelling: chrono's could only change it (a `Z` for
@@ -261,9 +275,7 @@ pub fn to_out_with(segment: &Segment, speaker: Option<&Attribution>) -> Transcri
         end: segment.end_utc.to_string(),
         text: segment.text.clone(),
         language: segment.language.clone(),
-        speaker,
-        speaker_confirmed,
-        speaker_confidence,
+        speaker: speaker.map(SpeakerOut::from),
         confidence: segment.asr_confidence,
         model: segment.asr_model.clone(),
         tier: segment.tier,

@@ -1,7 +1,7 @@
 //! The display rules. The private helpers are tested through
 //! [`cli::render::details`].
 
-use cli::api::Turn;
+use cli::api::{Speaker, Turn};
 use cli::render::{attribution, details, hit, transcript, who};
 
 fn turn() -> Turn {
@@ -12,8 +12,6 @@ fn turn() -> Turn {
         text: "hello".to_owned(),
         language: Some("en".to_owned()),
         speaker: None,
-        speaker_confirmed: false,
-        speaker_confidence: None,
         confidence: Some(0.5),
         model: Some("whisper".to_owned()),
         tier: "transcribed".to_owned(),
@@ -24,11 +22,11 @@ fn turn() -> Turn {
 }
 
 #[test]
-fn a_confirmed_name_wins_and_carries_no_score() {
+fn a_confirmed_name_carries_no_score() {
     let t = Turn {
-        speaker: Some("Oskar".to_owned()),
-        speaker_confirmed: true,
-        speaker_confidence: Some(0.4),
+        speaker: Some(Speaker::Named {
+            name: "Oskar".to_owned(),
+        }),
         ..turn()
     };
     assert_eq!(attribution(&t), "Oskar");
@@ -38,8 +36,10 @@ fn a_confirmed_name_wins_and_carries_no_score() {
 #[test]
 fn a_search_hit_shows_an_unconfirmed_guess_with_its_strength() {
     let t = Turn {
-        speaker: Some("Oskar".to_owned()),
-        speaker_confidence: Some(0.764),
+        speaker: Some(Speaker::Guessed {
+            name: "Oskar".to_owned(),
+            score: 0.764,
+        }),
         ..turn()
     };
     assert_eq!(attribution(&t), "Oskar ~76%");
@@ -48,20 +48,13 @@ fn a_search_hit_shows_an_unconfirmed_guess_with_its_strength() {
 #[test]
 fn a_transcript_never_asserts_an_unconfirmed_guess() {
     let t = Turn {
-        speaker: Some("Oskar".to_owned()),
-        speaker_confidence: Some(0.764),
+        speaker: Some(Speaker::Guessed {
+            name: "Oskar".to_owned(),
+            score: 0.764,
+        }),
         ..turn()
     };
     assert_eq!(who(&t), "SPEAKER_01");
-}
-
-#[test]
-fn a_guess_with_no_score_gets_no_percentage() {
-    let t = Turn {
-        speaker: Some("Oskar".to_owned()),
-        ..turn()
-    };
-    assert_eq!(attribution(&t), "Oskar");
 }
 
 #[test]

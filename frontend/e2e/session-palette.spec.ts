@@ -13,9 +13,7 @@ function turn(id: number, speaker: string, cluster: string, text: string): Trans
     end: '2026-01-15T09:35:55Z',
     text,
     language: 'en',
-    speaker,
-    speakerConfirmed: true,
-    speakerConfidence: null,
+    speaker: { kind: 'named', name: speaker },
     confidence: 0.9,
     model: 'diarized',
     tier: 'diarized', // diarized => session is "ready", so the palette is offered

@@ -38,9 +38,14 @@ export function speakerOf(
   t: Transcript,
   voiceNames: ReadonlyMap<string, string>,
 ): { name: string; confirmed: boolean } {
-  if (t.speaker) return { name: t.speaker, confirmed: t.speakerConfirmed };
+  if (t.speaker) return { name: t.speaker.name, confirmed: t.speaker.kind === 'named' };
   const voice = t.cluster ? voiceNames.get(t.cluster) : undefined;
   return { name: voice ?? 'unknown', confirmed: false };
+}
+
+/** The name a person gave this line, if any. */
+function named(t: Transcript): string | null {
+  return t.speaker?.kind === 'named' ? t.speaker.name : null;
 }
 
 export function runsOf(
@@ -54,7 +59,7 @@ export function runsOf(
     if (last?.speaker === name && last.confirmed === confirmed) {
       last.turns.push(t);
     } else {
-      const guess = !confirmed && t.speaker ? t.speakerConfidence : null;
+      const guess = t.speaker?.kind === 'guessed' ? t.speaker.score : null;
       out.push({ key: t.id, speaker: name, confirmed, guess, start: t.start, turns: [t] });
     }
   }
@@ -156,7 +161,7 @@ export class Turns implements OnDestroy {
   protected readonly palette = computed(() => {
     const names: string[] = [];
     for (const t of this.turns()) {
-      if (t.speaker && !names.includes(t.speaker)) names.push(t.speaker);
+      if (t.speaker && !names.includes(t.speaker.name)) names.push(t.speaker.name);
     }
     return names.length ? names : [...this.roster()];
   });
@@ -189,9 +194,8 @@ export class Turns implements OnDestroy {
    * the person's name is the answer. */
   protected disputed(t: Transcript): boolean {
     return (
-      !!t.speaker &&
-      t.speakerConfirmed &&
-      this.alternates(t).some((a) => !!a.speaker && a.speakerConfirmed && a.speaker !== t.speaker)
+      !!named(t) &&
+      this.alternates(t).some((a) => !!named(a) && named(a) !== named(t))
     );
   }
 
