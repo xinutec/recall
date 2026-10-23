@@ -4,9 +4,10 @@
 //! one, each shown line is a *moment*, carrying the other microphones' versions
 //! of the same speech.
 
+use crate::reads::Attribution;
 use crate::same_speech::same_span;
 use std::collections::HashMap;
-use transcript::{Instant, SourceId, Span};
+use transcript::{Instant, Name, SourceId, Span};
 
 /// A conversation breaks after a silence longer than this; the `gap` query
 /// parameter overrides it.
@@ -17,11 +18,9 @@ pub const DEFAULT_GAP_SECONDS: f64 = 300.0;
 pub struct Turn {
     pub id: i64,
     pub span: Span,
-    pub speaker_label: Option<String>,
+    pub speaker: Option<Attribution>,
     pub source_id: Option<SourceId>,
     pub asr_confidence: Option<f64>,
-    pub speaker_guess: Option<String>,
-    pub speaker_score: Option<f64>,
     /// The clip it came from: a mic's two clips of one span are copies.
     pub audio_segment_id: Option<i64>,
     /// Its words as [`spoken`] spells them, each with its start: what
@@ -394,52 +393,39 @@ fn spine(turns: &[Turn], stretch: &[usize]) -> (Vec<usize>, Vec<usize>) {
     (primary, rest)
 }
 
-/// The speaker guess for a shown line, helped by its overlapping alternates:
-/// another mic may carry a stronger voiceprint match.
+/// Who a shown line is put down to, helped by its overlapping alternates:
+/// another mic may carry a stronger voiceprint match. A person's name stands.
 ///
 /// A missing guess is filled from the most confident overlap; an existing one
 /// only has its score raised by mics naming the same person, never replaced,
 /// since lagging phone clocks make overlap weak proof of the same speaker.
-pub fn best_colocated_guess(
-    turns: &[Turn],
-    line: usize,
-    alternates: &[usize],
-) -> (Option<String>, Option<f64>) {
+#[must_use]
+pub fn shown_speaker(turns: &[Turn], line: usize, alternates: &[usize]) -> Option<Attribution> {
     let turn = &turns[line];
-    let overlapping: Vec<&Turn> = alternates
+    let guesses = alternates
         .iter()
         .map(|&i| &turns[i])
-        .filter(|alt| alt.speaker_guess.is_some() && alt.span.overlaps(turn.span))
-        .collect();
-    let (mut guess, mut score) = (turn.speaker_guess.clone(), turn.speaker_score);
-    match &guess {
-        None => {
-            // The first on a tie.
-            let mut best: Option<&&Turn> = None;
-            for alt in &overlapping {
-                let strength = alt.speaker_score.unwrap_or(-1.0);
-                if best.is_none_or(|b| strength > b.speaker_score.unwrap_or(-1.0)) {
-                    best = Some(alt);
-                }
-            }
-            if let Some(best) = best {
-                guess.clone_from(&best.speaker_guess);
-                score = best.speaker_score;
-            }
-        }
-        Some(name) => {
-            for alt in &overlapping {
-                let agrees = alt.speaker_guess.as_deref() == Some(name.as_str());
-                if let Some(strength) = alt.speaker_score
-                    && agrees
-                    && score.is_none_or(|s| strength > s)
-                {
-                    score = Some(strength);
-                }
-            }
-        }
+        .filter(|alt| alt.span.overlaps(turn.span))
+        .filter_map(|alt| match &alt.speaker {
+            Some(Attribution::Guessed { name, score }) => Some((name, *score)),
+            _ => None,
+        });
+    match &turn.speaker {
+        Some(Attribution::Named(_)) => turn.speaker.clone(),
+        Some(Attribution::Guessed { name, score }) => Some(Attribution::Guessed {
+            name: name.clone(),
+            score: guesses
+                .filter(|(other, _)| *other == name)
+                .fold(*score, |most, (_, s)| most.max(s)),
+        }),
+        // The first on a tie.
+        None => guesses
+            .reduce(|best, g| if g.1 > best.1 { g } else { best })
+            .map(|(name, score)| Attribution::Guessed {
+                name: name.clone(),
+                score,
+            }),
     }
-    (guess, score)
 }
 
 // --- the HTTP surface -------------------------------------------------------
@@ -505,11 +491,9 @@ fn turns_of(segments: &[reads::Segment]) -> (Vec<Turn>, Vec<usize>) {
         turns.push(Turn {
             id: segment.id,
             span: segment.span,
-            speaker_label: segment.speaker_label.clone(),
+            speaker: segment.speaker.clone(),
             source_id: segment.source_id.clone(),
             asr_confidence: segment.asr_confidence,
-            speaker_guess: segment.speaker_guess.clone(),
-            speaker_score: segment.speaker_score,
             audio_segment_id: segment.audio_segment_id,
             words: segment
                 .words
@@ -531,17 +515,17 @@ fn moment_out(
 ) -> MomentOut {
     let row = |i: usize| &segments[kept[i]];
     let line = row(moment.primary);
-    let guess = best_colocated_guess(turns, moment.primary, &moment.alternates);
+    let speaker = shown_speaker(turns, moment.primary, &moment.alternates);
     // The stored spelling, not chrono's: it trims trailing zeros (.960 for
     // .960000), changing every timestamp on the wire.
     MomentOut {
         start: line.start_utc.to_string(),
         end: line.end_utc.to_string(),
-        primary: reads::to_out_with(line, Some(guess)),
+        primary: reads::to_out_with(line, speaker.as_ref()),
         alternates: moment
             .alternates
             .iter()
-            .map(|&i| reads::to_out_with(row(i), None))
+            .map(|&i| reads::to_out(row(i)))
             .collect(),
         sources: distinct(
             std::iter::once(moment.primary)
@@ -587,7 +571,13 @@ fn conversation_out(
             .map(|i| row(i).end_utc.to_string())
             .unwrap_or_default(),
         turn_count: shown.len(),
-        speakers: distinct(group.iter().map(|&i| turns[i].speaker_label.as_deref())),
+        speakers: distinct(group.iter().map(|&i| {
+            turns[i]
+                .speaker
+                .as_ref()
+                .and_then(Attribution::named)
+                .map(Name::as_str)
+        })),
         preview,
         moments: moments
             .iter()

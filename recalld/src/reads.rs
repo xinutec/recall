@@ -5,7 +5,7 @@ use rusqlite::{Connection, OptionalExtension, Row};
 use serde::Serialize;
 use std::path::Path;
 use std::time::Duration;
-use transcript::{Instant, SourceId, Span};
+use transcript::{Instant, Name, SourceId, Span};
 
 use crate::line::{HiddenKind, HiddenReason, Stage};
 use audiocore::instant::Stamp;
@@ -117,9 +117,8 @@ pub struct Segment {
     pub language: Option<String>,
     pub asr_confidence: Option<f64>,
     pub asr_model: Option<String>,
-    pub speaker_label: Option<String>,
-    pub speaker_guess: Option<String>,
-    pub speaker_score: Option<f64>,
+    pub speaker: Option<Attribution>,
+    /// The diarizer's voice label, beside whoever the line is put down to.
     pub speaker_cluster: Option<String>,
     pub tier: Stage,
     pub hidden_reason: Option<HiddenReason>,
@@ -154,9 +153,7 @@ impl Segment {
             language: row.get("language")?,
             asr_confidence: row.get("asr_confidence")?,
             asr_model: row.get("asr_model")?,
-            speaker_label: row.get("speaker_label")?,
-            speaker_guess: row.get("speaker_guess")?,
-            speaker_score: row.get("speaker_score")?,
+            speaker: Attribution::read(row)?,
             speaker_cluster: row.get("speaker_cluster")?,
             tier: {
                 let stored: String = row.get("tier")?;
@@ -195,25 +192,66 @@ impl Segment {
     }
 }
 
-fn to_out(segment: &Segment) -> TranscriptOut {
-    to_out_with(segment, None)
+/// Who a line is put down to, as stored.
+#[derive(Debug, Clone, PartialEq)]
+pub enum Attribution {
+    /// A name a person gave, to the line or to its voice.
+    Named(Name),
+    /// The voiceprint's best match, and how sure.
+    Guessed { name: Name, score: f64 },
 }
 
-/// The display rules: a person's label wins and carries no score; otherwise
-/// the guess with its strength ("Alice 31%", not "unknown"). `guess` overrides
-/// the turn's own for a folded moment, whose strongest match may sit on
-/// another mic's version; a person's label still wins.
-pub fn to_out_with(
-    segment: &Segment,
-    guess: Option<(Option<String>, Option<f64>)>,
-) -> TranscriptOut {
-    let confirmed = segment.speaker_label.is_some();
-    let (speaker, speaker_confidence) = if confirmed {
-        (segment.speaker_label.clone(), None)
-    } else if let Some((name, score)) = guess {
-        (name, score)
-    } else {
-        (segment.speaker_guess.clone(), segment.speaker_score)
+impl Attribution {
+    /// A name or a guess with its score, never both nor half of one; and a
+    /// name exactly as [`Name`] spells it, so the wire repeats what is stored.
+    fn read(row: &Row<'_>) -> rusqlite::Result<Option<Self>> {
+        let label: Option<String> = row.get("speaker_label")?;
+        let guess: Option<String> = row.get("speaker_guess")?;
+        let score: Option<f64> = row.get("speaker_score")?;
+        let refuse = |why: String| {
+            rusqlite::Error::FromSqlConversionFailure(0, rusqlite::types::Type::Text, why.into())
+        };
+        let name = |raw: String| {
+            Name::new(&raw)
+                .filter(|n| n.as_str() == raw)
+                .ok_or_else(|| refuse(format!("not a name as stored: {raw:?}")))
+        };
+        match (label, guess, score) {
+            (None, None, None) => Ok(None),
+            (Some(label), None, None) => Ok(Some(Self::Named(name(label)?))),
+            (None, Some(guess), Some(score)) => Ok(Some(Self::Guessed {
+                name: name(guess)?,
+                score,
+            })),
+            half => Err(refuse(format!("a speaker stored half: {half:?}"))),
+        }
+    }
+
+    /// The name, if a person gave it.
+    #[must_use]
+    pub fn named(&self) -> Option<&Name> {
+        match self {
+            Self::Named(name) => Some(name),
+            Self::Guessed { .. } => None,
+        }
+    }
+}
+
+/// The line as the app shows it, under its own speaker.
+pub fn to_out(segment: &Segment) -> TranscriptOut {
+    to_out_with(segment, segment.speaker.as_ref())
+}
+
+/// The display rules: a person's name carries no score, a guess its strength
+/// ("Alice 31%", not "unknown"). `speaker` is the line's own, or for a folded
+/// moment the one [`crate::conversations::shown_speaker`] chose.
+pub fn to_out_with(segment: &Segment, speaker: Option<&Attribution>) -> TranscriptOut {
+    let (speaker, speaker_confirmed, speaker_confidence) = match speaker {
+        Some(Attribution::Named(name)) => (Some(name.as_str().to_owned()), true, None),
+        Some(Attribution::Guessed { name, score }) => {
+            (Some(name.as_str().to_owned()), false, Some(*score))
+        }
+        None => (None, false, None),
     };
     TranscriptOut {
         id: segment.id,
@@ -224,7 +262,7 @@ pub fn to_out_with(
         text: segment.text.clone(),
         language: segment.language.clone(),
         speaker,
-        speaker_confirmed: confirmed,
+        speaker_confirmed,
         speaker_confidence,
         confidence: segment.asr_confidence,
         model: segment.asr_model.clone(),

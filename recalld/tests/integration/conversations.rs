@@ -3,9 +3,10 @@
 use audiocore::instant::Stamp;
 use chrono::{DateTime, Utc};
 use recalld::conversations::{
-    DEFAULT_GAP_SECONDS, Turn, best_colocated_guess, cluster_moments, fold, segment_conversations,
+    DEFAULT_GAP_SECONDS, Turn, cluster_moments, fold, segment_conversations, shown_speaker,
 };
-use transcript::{Instant, SourceId, Span};
+use recalld::reads::Attribution;
+use transcript::{Instant, Name, SourceId, Span};
 
 fn at(seconds: i64) -> DateTime<Utc> {
     DateTime::from_timestamp(1_780_000_000 + seconds, 0).expect("in range")
@@ -23,11 +24,9 @@ fn turn(id: i64, start: i64, end: i64, source: &str) -> Turn {
     Turn {
         id,
         span: millis(start * 1_000, end * 1_000),
-        speaker_label: None,
+        speaker: None,
         source_id: Some(SourceId::parse(source).expect("source id")),
         asr_confidence: None,
-        speaker_guess: None,
-        speaker_score: None,
         audio_segment_id: None,
         words: Vec::new(),
     }
@@ -59,9 +58,15 @@ fn scored(mut t: Turn, confidence: f64) -> Turn {
     t
 }
 
+fn guess(name: &str, score: f64) -> Attribution {
+    Attribution::Guessed {
+        name: Name::new(name).expect("a name"),
+        score,
+    }
+}
+
 fn guessed(mut t: Turn, name: &str, score: f64) -> Turn {
-    t.speaker_guess = Some(name.to_owned());
-    t.speaker_score = Some(score);
+    t.speaker = Some(guess(name, score));
     t
 }
 
@@ -298,11 +303,11 @@ fn a_missing_guess_is_filled_from_the_most_confident_overlapping_mic() {
         guessed(turn(4, 50, 60, "pixel"), "Robin", 0.9), // no overlap: ignored
     ];
 
-    let chosen = best_colocated_guess(&turns, 0, &[1, 2, 3]);
+    let chosen = shown_speaker(&turns, 0, &[1, 2, 3]);
 
     assert_eq!(
         chosen,
-        (Some("Sam".to_owned()), Some(0.7)),
+        Some(guess("Sam", 0.7)),
         "the strongest co-located guess, and not the non-overlapping one"
     );
 }
@@ -318,11 +323,11 @@ fn an_existing_guess_is_strengthened_by_agreement_but_never_flipped() {
         guessed(turn(3, 2, 8, "oneplus"), "Sam", 0.95), // disagrees, strongest
     ];
 
-    let chosen = best_colocated_guess(&turns, 0, &[1, 2]);
+    let chosen = shown_speaker(&turns, 0, &[1, 2]);
 
     assert_eq!(
         chosen,
-        (Some("Alex".to_owned()), Some(0.8)),
+        Some(guess("Alex", 0.8)),
         "Alex at the corroborated strength — never Sam, however confident"
     );
 }
@@ -334,9 +339,9 @@ fn a_weaker_agreeing_mic_does_not_lower_the_confidence() {
         guessed(turn(2, 1, 9, "pixel"), "Alex", 0.2),
     ];
 
-    let chosen = best_colocated_guess(&turns, 0, &[1]);
+    let chosen = shown_speaker(&turns, 0, &[1]);
 
-    assert_eq!(chosen, (Some("Alex".to_owned()), Some(0.8)));
+    assert_eq!(chosen, Some(guess("Alex", 0.8)));
 }
 
 #[test]
@@ -412,9 +417,7 @@ fn segment(id: i64, start: i64, end: i64, text: &str) -> recalld::reads::Segment
         language: None,
         asr_confidence: None,
         asr_model: Some("whisper".to_owned()),
-        speaker_label: None,
-        speaker_guess: None,
-        speaker_score: None,
+        speaker: None,
         speaker_cluster: None,
         tier: recalld::line::Stage::Transcribed,
         hidden_reason: None,
@@ -426,7 +429,7 @@ fn segment(id: i64, start: i64, end: i64, text: &str) -> recalld::reads::Segment
 }
 
 fn named(mut s: recalld::reads::Segment, who: &str) -> recalld::reads::Segment {
-    s.speaker_label = Some(who.to_owned());
+    s.speaker = Some(Attribution::Named(Name::new(who).expect("a name")));
     s
 }
 

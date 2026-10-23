@@ -126,7 +126,7 @@ fn a_human_label_wins_and_drops_the_score_a_guess_keeps_it() {
         1,
         "2026-09-01T10:00:00+00:00",
         "confirmed",
-        &[("speaker_label", "Alex"), ("speaker_score", "0.9")],
+        &[("speaker_label", "Alex")],
     );
     turn(
         &conn,
@@ -194,6 +194,30 @@ fn the_tier_badge_is_the_stored_tier_and_an_unknown_one_fails_the_read() {
 
     turn(&conn, 5, "2026-09-01T10:00:05+00:00", "t", &[("tier", "?")]);
     assert!(reads::timeline(&conn, 50, None).is_err());
+}
+
+/// A speaker is a name a person gave or a guess with its strength; a row
+/// holding both, half a guess, or a name the app would respell is refused
+/// rather than shown as one of them.
+#[test]
+fn a_half_stored_speaker_fails_the_read() {
+    for bad in [
+        &[
+            ("speaker_label", "Alex"),
+            ("speaker_guess", "Sam"),
+            ("speaker_score", "0.5"),
+        ][..],
+        &[("speaker_guess", "Sam")][..],
+        &[("speaker_score", "0.5")][..],
+        &[("speaker_label", " Alex")][..],
+        &[("speaker_label", "")][..],
+    ] {
+        let conn = db();
+        turn(&conn, 1, "2026-09-01T10:00:05+00:00", "t", &[]);
+        assert!(reads::timeline(&conn, 50, None).is_ok());
+        turn(&conn, 2, "2026-09-01T10:00:06+00:00", "t", bad);
+        assert!(reads::timeline(&conn, 50, None).is_err(), "{bad:?}");
+    }
 }
 
 /// A line that ends before it starts cannot be placed, so the read refuses it

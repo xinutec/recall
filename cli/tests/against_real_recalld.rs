@@ -225,7 +225,7 @@ fn a_confirmed_name_reaches_both_renderings() {
         dir.path(),
         "marmalade on the windowsill",
         Some("Oskar"),
-        Some(("Someone Else", 0.9)),
+        None,
     );
     let api = Api::new(&serve(dir.path()), Some(session()));
 
