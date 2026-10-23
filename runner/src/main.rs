@@ -199,7 +199,7 @@ fn one(queue: &Queue, shim: &mut Shim) -> Result<bool, Failed> {
     // Unreachable, the job fails and is retried: an unbiased transcript would
     // have to be redone.
     let prompt = if biased && kind == Kind::TranscribeSegment {
-        client.prompt().map_err(Failed::Server)?
+        client.prompt(&source).map_err(Failed::Server)?
     } else {
         None
     };

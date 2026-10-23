@@ -142,8 +142,9 @@ fn main() {
     let token = std::env::var("RECALL_SYNC_TOKEN")
         .expect("RECALL_SYNC_TOKEN must be set — the glossary is behind the sync plane");
     let client = runner::client::Client::new("https://recall.xinutec.org", &token);
+    // The Mac's own mic's: the household's names and glossary.
     let prompt = client
-        .prompt()
+        .prompt("usb")
         .expect("the household glossary")
         .expect("a non-empty glossary");
     println!("prompt is {} chars; not printed\n", prompt.chars().count());

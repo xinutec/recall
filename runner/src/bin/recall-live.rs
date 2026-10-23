@@ -22,6 +22,7 @@ struct Config {
     base: String,
     token: String,
     tap: String,
+    source: String,
     program: String,
     args: Vec<String>,
 }
@@ -37,6 +38,10 @@ struct Cli {
     /// The UDP tap to listen on.
     #[arg(long, value_name = "UDP_URL", default_value = live::TAP)]
     tap: String,
+    /// The source whose capture feeds the tap: its owner's names and glossary
+    /// bias the transcription.
+    #[arg(long, default_value = "usb")]
+    source: String,
     /// The shim and its arguments: everything after it, verbatim [default:
     /// `python -m recall.shim_asr`].
     #[arg(long, num_args = 1.., allow_hyphen_values = true, value_name = "PROGRAM [ARGS]")]
@@ -54,6 +59,7 @@ fn parse_args() -> Config {
         base: cli.url,
         token,
         tap: cli.tap,
+        source: cli.source,
         program,
         args,
     }
@@ -119,7 +125,7 @@ fn main() {
         }
         // Unlike the runner, not fatal: a live turn is replaced within the
         // hour anyway.
-        let mut prompt = client.prompt().unwrap_or_else(|err| {
+        let mut prompt = client.prompt(&config.source).unwrap_or_else(|err| {
             tracing::warn!(%err, "no vocabulary; the live feed is unbiased for now");
             None
         });
@@ -127,7 +133,7 @@ fn main() {
         live::drain(&utterances, |utterance| {
             if refreshed.elapsed() >= PROMPT_EVERY {
                 refreshed = Instant::now();
-                if let Ok(fresh) = client.prompt() {
+                if let Ok(fresh) = client.prompt(&config.source) {
                     prompt = fresh;
                 }
             }

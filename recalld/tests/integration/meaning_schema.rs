@@ -395,3 +395,47 @@ fn owners_arrive_without_losing_a_name_or_its_prints() {
         .expect("count");
     assert_eq!(alexes, 3);
 }
+
+/// v64: a glossary term belongs to someone, as names do. Terms already there
+/// keep their ids; a term is unique per owner, and unowned terms still collide.
+#[test]
+fn glossary_terms_arrive_with_an_owner() {
+    let conn = rusqlite::Connection::open_in_memory().expect("db");
+    ensure_to(&conn, 63).expect("v63");
+    conn.execute(
+        "INSERT INTO vocabulary (id, term, created_utc) VALUES (4, 'Zerobase', '2026-10-01T10:00:00+00:00')",
+        [],
+    )
+    .expect("v63 row");
+
+    ensure_to(&conn, 64).expect("v64");
+
+    let kept: (i64, Option<String>) = conn
+        .query_row(
+            "SELECT id, owner FROM vocabulary WHERE term = 'Zerobase'",
+            [],
+            |r| Ok((r.get(0)?, r.get(1)?)),
+        )
+        .expect("term");
+    assert_eq!(kept, (4, None));
+    let add = |owner: Option<&str>| {
+        conn.execute(
+            "INSERT OR IGNORE INTO vocabulary (owner, term, created_utc)
+             VALUES (?1, 'Zerobase', '2026-10-01T10:00:00+00:00')",
+            [owner],
+        )
+        .expect("insert")
+    };
+    assert_eq!(add(None), 0, "an unowned duplicate collides");
+    assert_eq!(add(Some("a")), 1);
+    assert_eq!(add(Some("b")), 1, "each person may have it");
+    assert_eq!(add(Some("a")), 0, "but once");
+    assert!(
+        conn.execute(
+            "INSERT INTO vocabulary (owner, term, created_utc) VALUES ('a', 'x', 'yesterday')",
+            [],
+        )
+        .is_err(),
+        "the instant guard survives the rebuild"
+    );
+}

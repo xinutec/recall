@@ -117,7 +117,7 @@ Each source and each named person belongs to one sign-in user: an upload to
 its uploader, a device to the `--owner` it was declared with, a name to the
 owner of the recording it was given on. `claim-unowned --owner <user>` counts
 what nobody owns (what was recorded before owners existed), and `--apply`
-gives it to that user.
+gives it to that user, glossary terms included.
 
 A signed-in person sees and changes only their own: every browsing route reads
 through views of the tables filtered to the person (`reads::open_as`), and a
@@ -129,7 +129,8 @@ are its source's owner's; a row whose id has no source at all is anyone's to
 clear. The capture pause is per person: the household's (asked by nobody in
 particular, or by whoever owns the Mac's own mic) is the one the Mac applies and
 confirms; anyone else's is their own, applied by their own phone
-(`capture::Whose`). Still one for everybody: the glossary. A recorder
+(`capture::Whose`). The glossary is per person too: a recording is transcribed
+with its owner's names and terms only (`/sync/vocabulary/prompt?source=`). A recorder
 says whose it is with its own segment token (the ingest token table): on the
 routes open to devices it speaks for its source's owner, so its list of
 recorders is theirs and a meeting it uploads is theirs; with no identity at all

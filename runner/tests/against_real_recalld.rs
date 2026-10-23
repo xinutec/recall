@@ -200,12 +200,12 @@ fn the_vocabulary_prompt_is_read_and_an_empty_one_is_no_biasing() {
     let base = format!("http://{}", rx.recv().expect("addr"));
 
     let prompt = runner::client::Client::new(&base, "any")
-        .prompt()
+        .prompt("usb")
         .expect("fetch");
     assert_eq!(prompt.as_deref(), Some("Oskar, Kat"));
 
     let empty = runner::client::Client::new(&format!("{base}/empty"), "any")
-        .prompt()
+        .prompt("usb")
         .expect("fetch");
     assert_eq!(
         empty, None,

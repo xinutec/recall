@@ -23,7 +23,7 @@ fn shim_adding_a_term(meaning: &std::path::Path) -> Vec<String> {
          \x20       result = {{'language': 'en', 'segments': [{{'text': 'prompt=' + str(msg.get('initial_prompt'))}}]}}\n\
          \x20       if not added:\n\
          \x20           db = sqlite3.connect({path:?})\n\
-         \x20           db.execute(\"INSERT INTO vocabulary (term, created_utc) VALUES ('Zerobase', '2026-10-10T00:00:01+00:00')\")\n\
+         \x20           db.execute(\"INSERT INTO vocabulary (owner, term, created_utc) VALUES ('p', 'Zerobase', '2026-10-10T00:00:01+00:00')\")\n\
          \x20           db.commit()\n\
          \x20           added = True\n\
          \x20   print(json.dumps({{'id': msg['id'], 'ok': True, 'result': result}}))\n\
@@ -40,9 +40,9 @@ fn a_term_added_while_running_reaches_the_next_clip() {
     let meaning = root.path().join("recall.sqlite");
     rusqlite::Connection::open(&meaning)
         .expect("meaning")
-        .execute(
-            "INSERT INTO vocabulary (term, created_utc) VALUES ('Hexwick', '2026-10-10T00:00:00+00:00')",
-            [],
+        .execute_batch(
+            "INSERT INTO sources (id, name, kind, owner) VALUES ('usb', 'USB', 'coreaudio', 'p');
+             INSERT INTO vocabulary (owner, term, created_utc) VALUES ('p', 'Hexwick', '2026-10-10T00:00:00+00:00');",
         )
         .expect("term");
     let (first, second) = ("usb-20261010T100000.flac", "usb-20261010T100100.flac");

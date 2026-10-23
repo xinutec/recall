@@ -1,4 +1,4 @@
-//! Whose recordings and names are whose. A source and a name belong to one
+//! Whose recordings, names and glossary terms are whose. Each belongs to one
 //! sign-in user; what was recorded before owners existed belongs to nobody
 //! until an operator claims it (`recalld claim-unowned`).
 
@@ -10,6 +10,8 @@ crate::statements! {
     UNOWNED_SPEAKERS: Meaning = "SELECT count(*) FROM speakers WHERE owner IS NULL";
     CLAIM_SOURCES: Meaning = "UPDATE sources SET owner = ?1 WHERE owner IS NULL";
     CLAIM_SPEAKERS: Meaning = "UPDATE speakers SET owner = ?1 WHERE owner IS NULL";
+    UNOWNED_TERMS: Meaning = "SELECT count(*) FROM vocabulary WHERE owner IS NULL";
+    CLAIM_TERMS: Meaning = "UPDATE vocabulary SET owner = ?1 WHERE owner IS NULL";
     SOURCE_OWNER: Meaning = "SELECT owner FROM sources WHERE id = ?1";
 }
 
@@ -19,6 +21,8 @@ pub struct Claimed {
     pub owner: String,
     pub sources: i64,
     pub speakers: i64,
+    /// Glossary terms.
+    pub terms: i64,
     pub applied: bool,
 }
 
@@ -34,11 +38,13 @@ pub fn claim_unowned(meaning: &Connection, owner: &str, apply: bool) -> rusqlite
         owner: owner.to_owned(),
         sources: count(&UNOWNED_SOURCES)?,
         speakers: count(&UNOWNED_SPEAKERS)?,
+        terms: count(&UNOWNED_TERMS)?,
         applied: apply,
     };
     if apply {
         CLAIM_SOURCES.execute(&tx, [owner])?;
         CLAIM_SPEAKERS.execute(&tx, [owner])?;
+        CLAIM_TERMS.execute(&tx, [owner])?;
         tx.commit()?;
     }
     Ok(claimed)
@@ -60,13 +66,18 @@ pub fn ready_for<S: std::hash::BuildHasher>(
         stmt.query_row(meaning, [], |r| r.get::<_, i64>(0))
             .map_err(|err| err.to_string())
     };
-    let (sources, speakers) = (count(&UNOWNED_SOURCES)?, count(&UNOWNED_SPEAKERS)?);
-    if sources + speakers == 0 {
+    let (sources, speakers, terms) = (
+        count(&UNOWNED_SOURCES)?,
+        count(&UNOWNED_SPEAKERS)?,
+        count(&UNOWNED_TERMS)?,
+    );
+    if sources + speakers + terms == 0 {
         return Ok(());
     }
     Err(format!(
-        "{sources} sources and {speakers} names belong to nobody, and more than one person can \
-         sign in: claim them first (`recalld claim-unowned --owner <user> --apply`)"
+        "{sources} sources, {speakers} names and {terms} glossary terms belong to nobody, and \
+         more than one person can sign in: claim them first \
+         (`recalld claim-unowned --owner <user> --apply`)"
     ))
 }
 

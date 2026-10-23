@@ -19,9 +19,9 @@ crate::statements! {
     VOCABULARY: Meaning =
         "SELECT id, term FROM vocabulary ORDER BY term COLLATE NOCASE";
     ADD_TERM: Meaning =
-        "INSERT INTO vocabulary (term, created_utc) VALUES (?1, ?2) ON CONFLICT(term) DO NOTHING";
+        "INSERT OR IGNORE INTO vocabulary (term, created_utc, owner) VALUES (?1, ?2, ?3)";
     TERM_ID: Meaning =
-        "SELECT id FROM vocabulary WHERE term = ?1";
+        "SELECT id FROM vocabulary WHERE term = ?1 AND owner IS ?2";
     DELETE_TERM: Meaning =
         "DELETE FROM vocabulary WHERE id = ?1";
     LIVE_TURN_EXISTS: Meaning =
@@ -79,14 +79,19 @@ impl From<rusqlite::Error> for TermError {
     }
 }
 
-/// Add a term, returning its id; idempotent.
-pub fn add_term(conn: &Connection, term: &str, now: &Stamp) -> Result<i64, TermError> {
+/// Add a term to `owner`'s glossary, returning its id; idempotent.
+pub fn add_term(
+    conn: &Connection,
+    owner: Option<&str>,
+    term: &str,
+    now: &Stamp,
+) -> Result<i64, TermError> {
     let cleaned = term.trim();
     if cleaned.is_empty() {
         return Err(TermError::Blank);
     }
-    ADD_TERM.execute(conn, (cleaned, now))?;
-    Ok(TERM_ID.query_row(conn, [cleaned], |r| r.get(0))?)
+    ADD_TERM.execute(conn, (cleaned, now, owner))?;
+    Ok(TERM_ID.query_row(conn, (cleaned, owner), |r| r.get(0))?)
 }
 
 pub fn delete_term(conn: &Connection, id: i64) -> rusqlite::Result<()> {
@@ -102,19 +107,31 @@ pub struct TermIn {
     term: String,
 }
 
-pub async fn vocabulary_route(State(st): State<Arc<reads::State>>) -> Response {
+/// The asker's own glossary.
+pub async fn vocabulary_route(
+    State(st): State<Arc<reads::State>>,
+    asked: crate::webauth::Asked,
+) -> Response {
+    let viewer = crate::webauth::viewer(asked);
     let root = st.root.clone();
-    route::json("vocabulary", move || vocabulary(&reads::open(&root)?)).await
+    route::json("vocabulary", move || {
+        vocabulary(&reads::open_as(&root, viewer.as_ref())?)
+    })
+    .await
 }
 
+/// A term for the asker's own glossary.
 pub async fn vocabulary_add_route(
     State(st): State<Arc<reads::State>>,
+    asked: crate::webauth::Asked,
     Json(body): Json<TermIn>,
 ) -> Response {
+    let owner = crate::webauth::viewer(asked).map(|v| v.user_id);
     let root = st.root.clone();
     let now = audiocore::instant::Stamp::now();
-    let added =
-        tokio::task::spawn_blocking(move || add_term(&open_write(&root)?, &body.term, &now));
+    let added = tokio::task::spawn_blocking(move || {
+        add_term(&open_write(&root)?, owner.as_deref(), &body.term, &now)
+    });
     match added.await {
         Ok(Ok(id)) => Json(route::NewId { new_id: id }).into_response(),
         Ok(Err(TermError::Blank)) => {
@@ -125,10 +142,18 @@ pub async fn vocabulary_add_route(
     }
 }
 
+/// Only the asker's own term.
 pub async fn vocabulary_delete_route(
     State(st): State<Arc<reads::State>>,
+    asked: crate::webauth::Asked,
     axum::extract::Path(id): axum::extract::Path<i64>,
 ) -> Response {
+    let viewer = crate::webauth::viewer(asked);
+    if let Err(refused) =
+        reads::check(&st.root, viewer.as_ref(), vec![reads::Target::Term(id)]).await
+    {
+        return refused;
+    }
     let root = st.root.clone();
     route::acked(
         route::blocking("vocabulary delete", move || {

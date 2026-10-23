@@ -49,6 +49,7 @@ fn routes() -> BTreeSet<String> {
 }
 
 /// A's ids, for the requests aimed at A's things.
+#[derive(Clone, Copy)]
 struct A {
     line: i64,
     line2: i64,
@@ -58,6 +59,8 @@ struct A {
     meeting: i64,
     /// A's naming of a voice.
     edit: i64,
+    /// A's glossary term.
+    term: i64,
 }
 
 /// A's clip whose transcript loops over speech: a re-transcription candidate.
@@ -136,9 +139,17 @@ async fn world() -> (Fleet, A) {
         line4: line("a fourth time"),
         meeting: line("in the meeting"),
         edit: 0,
+        term: 0,
     };
     act_as_a(&f, &a).await;
     report_from_a(&f);
+    let a = after_acting(&f, a);
+    (f, a)
+}
+
+/// A's ids once A has acted: the naming, the term, and the corrected line,
+/// which is a new line.
+fn after_acting(f: &Fleet, a: A) -> A {
     let edit: i64 = f
         .meaning
         .query_row(
@@ -156,14 +167,20 @@ async fn world() -> (Fleet, A) {
             |r| r.get(0),
         )
         .expect("A's corrected line");
-    (
-        f,
-        A {
-            edit,
-            line: corrected,
-            ..a
-        },
-    )
+    let term: i64 = f
+        .meaning
+        .query_row(
+            "SELECT id FROM vocabulary WHERE term = 'marmalade jam'",
+            [],
+            |r| r.get(0),
+        )
+        .expect("A's term");
+    A {
+        edit,
+        term,
+        line: corrected,
+        ..a
+    }
 }
 
 /// A names a voice while correcting a line, marks one as no speech, excludes
@@ -178,6 +195,7 @@ async fn act_as_a(f: &Fleet, a: &A) {
         ("/api/exclude", json!({"from": a.line4, "to": a.line4})),
         // Waiting, so A has a re-transcription to take back.
         ("/api/retranscribe", json!({"filenames": [A_CLIP]})),
+        ("/api/vocabulary", json!({"term": "marmalade jam"})),
     ];
     for (uri, body) in acts {
         let (status, text) = call(f, "a", "POST", uri, Some(body)).await;
@@ -369,8 +387,10 @@ fn case(route: &str, a: &A) -> Option<Case> {
         }
         "DELETE /api/devices/outbox/{device}" => Write("/api/devices/outbox/phone-a".into(), None),
         "POST /api/sessions" => Global("an upload makes the uploader's own session"),
-        "GET /api/vocabulary" | "POST /api/vocabulary" | "DELETE /api/vocabulary/{id}" => {
-            Global("one shared glossary, decided 2026-10-23")
+        "GET /api/vocabulary" => Read("/api/vocabulary".into()),
+        "DELETE /api/vocabulary/{id}" => Write(format!("/api/vocabulary/{}", a.term), None),
+        "POST /api/vocabulary" => {
+            Global("adds to the asker's own glossary; GET shows only one's own")
         }
         "POST /api/devices/heartbeat" | "POST /api/devices/outbox" => {
             Global("a recorder's own report, sent without a session")

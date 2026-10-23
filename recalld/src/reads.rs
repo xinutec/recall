@@ -35,6 +35,7 @@ crate::statements! {
         "SELECT EXISTS (SELECT 1 FROM sources WHERE id = ?1)
              OR NOT EXISTS (SELECT 1 FROM main.sources WHERE id = ?1)";
     OWN_SOURCES: Meaning = "SELECT id FROM sources";
+    SEES_TERM: Meaning = "SELECT EXISTS (SELECT 1 FROM vocabulary WHERE id = ?1)";
     SEARCH: Meaning =
         "SELECT t.* FROM rendered_lines t \
          JOIN rendered_fts ON rendered_fts.rowid = t.id \
@@ -307,7 +308,8 @@ pub fn open(root: &Path) -> rusqlite::Result<Connection> {
 
 /// The tables one person may see, as temporary views of the same names: an
 /// unqualified name finds `temp` before `main`, so every query on this
-/// connection sees only the viewer's sources, lines, corrections and names.
+/// connection sees only the viewer's sources, lines, corrections, names and
+/// glossary.
 /// Live lines carry no source; they are the Mac's own mic's (a `coreaudio`
 /// source), so its owner sees them.
 const VIEWER_SCHEMA: &str = "
@@ -333,6 +335,8 @@ const VIEWER_SCHEMA: &str = "
         SELECT * FROM main.rendered_clips WHERE clip_id IN (SELECT clip_id FROM temp.rendered_lines);
     CREATE TEMP VIEW speakers AS
         SELECT * FROM main.speakers WHERE owner = (SELECT owner FROM temp.viewer);
+    CREATE TEMP VIEW vocabulary AS
+        SELECT * FROM main.vocabulary WHERE owner = (SELECT owner FROM temp.viewer);
     CREATE TEMP VIEW speaker_embeddings AS
         SELECT * FROM main.speaker_embeddings WHERE speaker_id IN (SELECT id FROM temp.speakers);
 ";
@@ -345,6 +349,8 @@ pub enum Target {
     Edit(i64),
     /// A source.
     Source(String),
+    /// A glossary term.
+    Term(i64),
     /// A recorder's status rows, by its id (its source's): the owner's, or,
     /// with no source of that id at all, a stray row anyone may clear.
     Device(String),
@@ -363,6 +369,7 @@ pub fn sees(meaning: &Connection, root: &Path, targets: &[Target]) -> rusqlite::
             Target::Edit(id) => SEES_EDIT.query_row(meaning, [id], |r| r.get(0))?,
             Target::Source(id) => SEES_SOURCE.query_row(meaning, [id], |r| r.get(0))?,
             Target::Device(id) => SEES_DEVICE.query_row(meaning, [id], |r| r.get(0))?,
+            Target::Term(id) => SEES_TERM.query_row(meaning, [id], |r| r.get(0))?,
             Target::Clip(filename) => {
                 let ingest = crate::store::open(root)?;
                 match crate::clips::by_filename(&ingest, filename)

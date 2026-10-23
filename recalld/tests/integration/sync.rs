@@ -446,7 +446,7 @@ async fn every_sync_read_route_is_mounted_and_gated() {
     let (_dir, addr) = serve(Some("sekrit")).await;
 
     for path in [
-        "/sync/vocabulary/prompt",
+        "/sync/vocabulary/prompt?source=usb",
         "/sync/heard?since=2026-09-23T10:00:00%2B00:00&until=2026-09-23T10:30:00%2B00:00",
         "/sync/devices/heartbeats",
         "/sync/devices/outbox",
@@ -518,7 +518,7 @@ async fn the_read_routes_are_absent_when_no_token_is_configured() {
     let (_dir, addr) = serve(None).await;
 
     for path in [
-        "/sync/vocabulary/prompt",
+        "/sync/vocabulary/prompt?source=usb",
         "/sync/live/health",
         "/sync/heard",
         "/sync/devices/heartbeats",
@@ -660,4 +660,48 @@ async fn a_sync_route_refuses_before_it_reads_the_request() {
         let (status, _) = get(&addr, path, None).await;
         assert_eq!(status, 401, "{path} without its query or a token");
     }
+}
+
+/// The prompt is for one source's recordings: its owner's names and glossary
+/// only. Without a source it is refused, so no prompt mixes two people's.
+#[tokio::test]
+async fn a_prompt_carries_only_the_sources_owners_names_and_terms() {
+    let (dir, addr) = serve(Some("sekrit")).await;
+    rusqlite::Connection::open(dir.path().join("recall.sqlite"))
+        .expect("db")
+        .execute_batch(
+            "INSERT INTO sources (id, name, kind, owner) VALUES
+                 ('usb', 'USB', 'coreaudio', 'p'), ('phone', 'Phone', 'tcp_pcm', 'm');
+             INSERT INTO speakers (owner, name) VALUES ('p', 'Oskar'), ('m', 'Mira');
+             INSERT INTO vocabulary (owner, term, created_utc) VALUES
+                 ('p', 'Zerobase', '2026-09-09T00:00:00+00:00'),
+                 ('m', 'Gelato', '2026-09-09T00:00:00+00:00');",
+        )
+        .expect("two people's");
+
+    let (_, house) = get(&addr, "/sync/vocabulary/prompt?source=usb", Some("sekrit")).await;
+    assert!(
+        house.contains("Oskar") && house.contains("Zerobase"),
+        "{house}"
+    );
+    assert!(
+        !house.contains("Mira") && !house.contains("Gelato"),
+        "{house}"
+    );
+    let (_, theirs) = get(
+        &addr,
+        "/sync/vocabulary/prompt?source=phone",
+        Some("sekrit"),
+    )
+    .await;
+    assert!(
+        theirs.contains("Mira") && theirs.contains("Gelato"),
+        "{theirs}"
+    );
+    assert!(
+        !theirs.contains("Oskar") && !theirs.contains("Zerobase"),
+        "{theirs}"
+    );
+    let (refused, _) = get(&addr, "/sync/vocabulary/prompt", Some("sekrit")).await;
+    assert_eq!(refused, 400);
 }

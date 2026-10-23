@@ -132,12 +132,36 @@ where
     crate::route::json(what, move || read(&crate::reads::open(&root)?)).await
 }
 
-/// `GET /sync/vocabulary/prompt`: the glossary as an ASR prompt, for the
-/// runner to hand to the model shim.
-pub async fn vocabulary_prompt_route(State(st): State<Arc<Gate>>) -> Response {
-    gated_read(&st, "sync vocabulary prompt", |conn| {
+/// Which recording a prompt is for.
+#[derive(serde::Deserialize)]
+pub struct PromptQuery {
+    source: Option<String>,
+}
+
+/// `GET /sync/vocabulary/prompt?source=<id>`: the ASR prompt for one source's
+/// recordings, from its owner's names and glossary only; none for a source
+/// nobody owns. Refused without a source: a prompt mixing people's would bias
+/// one person's audio with another's names.
+pub async fn vocabulary_prompt_route(
+    State(st): State<Arc<Gate>>,
+    axum::extract::Query(q): axum::extract::Query<PromptQuery>,
+) -> Response {
+    let Some(source) = q.source else {
+        return (
+            StatusCode::BAD_REQUEST,
+            "say which source the prompt is for",
+        )
+            .into_response();
+    };
+    let root = st.root.clone();
+    crate::route::json("sync vocabulary prompt", move || {
+        let owner = crate::owners::owner_of_source(&crate::reads::open(&root)?, &source)?;
+        let Some(user_id) = owner else {
+            return Ok(Prompt { prompt: None });
+        };
+        let seen = crate::reads::open_as(&root, Some(&crate::webauth::Viewer { user_id }))?;
         Ok(Prompt {
-            prompt: crate::labels::initial_prompt(conn)?,
+            prompt: crate::labels::initial_prompt(&seen)?,
         })
     })
     .await

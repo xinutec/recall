@@ -58,9 +58,9 @@ fn servers() -> (tempfile::TempDir, String, tempfile::TempDir, String) {
     let messages_url = serve(messages.path(), MESSAGES_TOKEN);
     rusqlite::Connection::open(recall.path().join("recall.sqlite"))
         .expect("meaning")
-        .execute(
-            "INSERT INTO vocabulary (term, created_utc) VALUES ('Hexwick', '2026-10-10T00:00:00+00:00')",
-            [],
+        .execute_batch(
+            "INSERT INTO sources (id, name, kind, owner) VALUES ('usb', 'USB', 'coreaudio', 'p');
+             INSERT INTO vocabulary (owner, term, created_utc) VALUES ('p', 'Hexwick', '2026-10-10T00:00:00+00:00');",
         )
         .expect("term");
     (recall, recall_url, messages, messages_url)

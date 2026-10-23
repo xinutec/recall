@@ -799,6 +799,29 @@ pub const MIGRATIONS: &[&str] = &[
     WHEN NOT ((NEW.created_utc IS NULL OR NEW.created_utc GLOB '[0-9][0-9][0-9][0-9]-[0-1][0-9]-[0-3][0-9]T[0-2][0-9]:[0-5][0-9]:[0-6][0-9]+00:00' OR NEW.created_utc GLOB '[0-9][0-9][0-9][0-9]-[0-1][0-9]-[0-3][0-9]T[0-2][0-9]:[0-5][0-9]:[0-6][0-9].[0-9][0-9][0-9][0-9][0-9][0-9]+00:00'))
     BEGIN SELECT RAISE(ABORT, 'speaker_embeddings: an instant not in the stored spelling'); END;
 "#,
+    // v64
+    r#"
+    -- A glossary term belongs to one person, as a name does: it biases the
+    -- transcription of that person's recordings only. Unique per owner by an
+    -- index, so unowned terms still collide (see v63).
+    CREATE TABLE vocabulary_v64 (
+        id          INTEGER PRIMARY KEY,
+        owner       TEXT,
+        term        TEXT NOT NULL,
+        created_utc TEXT NOT NULL
+    );
+    INSERT INTO vocabulary_v64 (id, owner, term, created_utc)
+        SELECT id, NULL, term, created_utc FROM vocabulary;
+    DROP TABLE vocabulary;
+    ALTER TABLE vocabulary_v64 RENAME TO vocabulary;
+    CREATE UNIQUE INDEX vocabulary_owner_term ON vocabulary (ifnull(owner, ''), term);
+    CREATE TRIGGER vocabulary_instants_insert BEFORE INSERT ON vocabulary
+    WHEN NOT ((NEW.created_utc IS NULL OR NEW.created_utc GLOB '[0-9][0-9][0-9][0-9]-[0-1][0-9]-[0-3][0-9]T[0-2][0-9]:[0-5][0-9]:[0-6][0-9]+00:00' OR NEW.created_utc GLOB '[0-9][0-9][0-9][0-9]-[0-1][0-9]-[0-3][0-9]T[0-2][0-9]:[0-5][0-9]:[0-6][0-9].[0-9][0-9][0-9][0-9][0-9][0-9]+00:00'))
+    BEGIN SELECT RAISE(ABORT, 'vocabulary: an instant not in the stored spelling'); END;
+    CREATE TRIGGER vocabulary_instants_update BEFORE UPDATE OF created_utc ON vocabulary
+    WHEN NOT ((NEW.created_utc IS NULL OR NEW.created_utc GLOB '[0-9][0-9][0-9][0-9]-[0-1][0-9]-[0-3][0-9]T[0-2][0-9]:[0-5][0-9]:[0-6][0-9]+00:00' OR NEW.created_utc GLOB '[0-9][0-9][0-9][0-9]-[0-1][0-9]-[0-3][0-9]T[0-2][0-9]:[0-5][0-9]:[0-6][0-9].[0-9][0-9][0-9][0-9][0-9][0-9]+00:00'))
+    BEGIN SELECT RAISE(ABORT, 'vocabulary: an instant not in the stored spelling'); END;
+"#,
 ];
 
 /// Bring `conn` up to the latest version, running only the steps it has not had.

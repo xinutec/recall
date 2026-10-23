@@ -125,13 +125,15 @@ impl Client {
         Ok(body.stored)
     }
 
-    /// The vocabulary as Whisper's `initial_prompt`, fetched per job so new
-    /// names reach queued jobs. `Ok(None)`: empty, no biasing.
+    /// Whisper's `initial_prompt` for `source`'s recordings: its owner's names
+    /// and glossary, fetched per job so new ones reach queued jobs. `Ok(None)`:
+    /// empty, no biasing.
     ///
     /// # Errors
     /// If recalld is unreachable or answers something unreadable.
-    pub fn prompt(&self) -> Result<Option<String>, Error> {
-        let url = format!("{}/sync/vocabulary/prompt", self.base);
+    pub fn prompt(&self, source: &str) -> Result<Option<String>, Error> {
+        // A source id is one path-safe word (`transcript::SourceId`).
+        let url = format!("{}/sync/vocabulary/prompt?source={source}", self.base);
         let response = self
             .auth(self.agent.get(&url))
             .call()
