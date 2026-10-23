@@ -4,7 +4,9 @@
 //!
 //! 1. A path under a server prefix that reached the fallback is a 404, never
 //!    `index.html`. The shell with a 200 turns "no such route" into HTML a
-//!    client then fails to parse as JSON, far from the cause.
+//!    client then fails to parse as JSON, far from the cause. So is a missing
+//!    file (a dot in the last segment): a font answered with the shell renders
+//!    broken icons and reports nothing.
 //! 2. `index.html` is `no-cache`; hashed bundles are immutable. The shell names
 //!    the current bundles, so a cached one hides a deploy until a hard refresh.
 //! 3. A request may not escape the frontend directory: `../` is resolved and
@@ -89,6 +91,14 @@ pub async fn serve(State(fe): State<Arc<Frontend>>, uri: axum::http::Uri) -> Res
     if let Some(asset) = resolve(&fe.root, path) {
         // Rule 2a: content-hashed bundles are immutable.
         return file(&asset, "public, max-age=31536000, immutable");
+    }
+    // Rule 1, for files.
+    if path
+        .rsplit('/')
+        .next()
+        .is_some_and(|last| last.contains('.'))
+    {
+        return (StatusCode::NOT_FOUND, "not found").into_response();
     }
     match resolve(&fe.root, "index.html") {
         // Rule 2b: the shell names the current bundles and must never be cached.

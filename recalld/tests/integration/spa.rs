@@ -71,6 +71,23 @@ async fn a_client_route_gets_the_shell_but_an_api_miss_gets_a_404() {
 }
 
 #[tokio::test]
+async fn a_missing_file_is_a_404_not_the_shell() {
+    // Rule 1 for files: a font answered with the shell renders broken icons
+    // and reports nothing.
+    let dir = tempfile::tempdir().expect("tempdir");
+    let app = app(built(dir.path()));
+
+    for miss in [
+        "/media/icons-GONEGONE.woff2",
+        "/main-gone99.js",
+        "/favicon.ico",
+    ] {
+        let (status, _, _) = get_path(&app, miss).await;
+        assert_eq!(status, 404, "{miss}: a missing file must look like a miss");
+    }
+}
+
+#[tokio::test]
 async fn the_shell_is_never_cached_and_the_hashed_bundle_is_cached_hard() {
     // Rule 2: index.html is not cached.
     let dir = tempfile::tempdir().expect("tempdir");
