@@ -625,12 +625,14 @@ const fn default_gap() -> f64 {
 
 pub async fn conversations_route(
     axum::extract::State(st): axum::extract::State<Arc<reads::State>>,
+    asked: crate::webauth::Asked,
     Query(q): Query<ConversationsQuery>,
 ) -> Response {
+    let viewer = crate::webauth::viewer(asked);
     let root = st.root.clone();
     let limit = q.limit.clamp(0, 1000);
     route::json("conversations", move || {
-        let conn = reads::open(&root)?;
+        let conn = reads::open_as(&root, viewer.as_ref())?;
         let mut segments = reads::recent(
             &conn,
             limit,

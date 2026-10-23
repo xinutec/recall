@@ -28,6 +28,17 @@ fn turn(conn: &Connection, id: i64, start: &str, text: &str, extra: &[(&str, &st
     }
 }
 
+/// Every line on one source, `user`'s: what a signed-in reader may see.
+fn owned_by(conn: &Connection, user: &str) {
+    conn.execute(
+        "INSERT INTO sources (id, name, kind, owner) VALUES ('usb', 'USB', 'coreaudio', ?1)",
+        [user],
+    )
+    .expect("source");
+    conn.execute("UPDATE rendered_lines SET source_id = 'usb'", [])
+        .expect("lines");
+}
+
 fn db() -> Connection {
     let conn = Connection::open_in_memory().expect("db");
     schema(&conn);
@@ -385,6 +396,7 @@ async fn mounted_transcripts_are_refused_without_a_session_and_served_with_one()
     let conn = Connection::open(dir.path().join("recall.sqlite")).expect("db");
     schema(&conn);
     turn(&conn, 1, "2026-09-01T10:00:00+00:00", "hello", &[]);
+    owned_by(&conn, "user");
     drop(conn);
 
     let a = app(dir.path(), Some(gate_state()));
@@ -483,6 +495,7 @@ async fn a_cursor_in_another_spelling_still_excludes_its_own_instant() {
         "the cursor's own",
         &[],
     );
+    owned_by(&conn, "p");
     drop(conn);
     let token = webauth::make_session_cookie(
         SECRET,

@@ -101,7 +101,7 @@ fn archive_lines(root: &Path, texts: &[&str]) -> Vec<i64> {
     let ingest = recalld::store::open(root).expect("ingest");
     meaning
         .execute(
-            "INSERT INTO sources (id, name, kind) VALUES ('usb', 'USB mic', 'coreaudio')",
+            "INSERT INTO sources (id, name, kind, owner) VALUES ('usb', 'USB mic', 'coreaudio', 'user')",
             [],
         )
         .expect("source");

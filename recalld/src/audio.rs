@@ -247,9 +247,20 @@ pub fn render_blocking(
 
 pub async fn audio_route(
     State(st): State<Arc<crate::reads::State>>,
+    asked: crate::webauth::Asked,
     axum::extract::Path(id): axum::extract::Path<i64>,
     Query(q): Query<AudioQuery>,
 ) -> Response {
+    let viewer = crate::webauth::viewer(asked);
+    if let Err(refused) = crate::reads::check(
+        &st.root,
+        viewer.as_ref(),
+        vec![crate::reads::Target::Line(id)],
+    )
+    .await
+    {
+        return refused;
+    }
     let root = st.root.clone();
     let rendered = tokio::task::spawn_blocking(move || {
         render_blocking(&root, q.enhance, |conn| {
@@ -267,8 +278,22 @@ pub async fn audio_route(
 
 pub async fn audio_span_route(
     State(st): State<Arc<crate::reads::State>>,
+    asked: crate::webauth::Asked,
     Query(q): Query<SpanQuery>,
 ) -> Response {
+    let viewer = crate::webauth::viewer(asked);
+    if let Err(refused) = crate::reads::check(
+        &st.root,
+        viewer.as_ref(),
+        vec![
+            crate::reads::Target::Line(q.from_id),
+            crate::reads::Target::Line(q.to_id),
+        ],
+    )
+    .await
+    {
+        return refused;
+    }
     let root = st.root.clone();
     let rendered = tokio::task::spawn_blocking(move || {
         render_blocking(&root, q.enhance, |conn| {

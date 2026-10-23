@@ -34,6 +34,7 @@ mod reports;
 mod results;
 mod retranscribe;
 mod script;
+mod separation;
 mod sessions;
 mod sources;
 mod spa;

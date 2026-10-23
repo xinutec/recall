@@ -55,6 +55,16 @@ pub struct Viewer {
     pub user_id: String,
 }
 
+/// Who asked, as a route extracts it: `None` when no session carried the
+/// request.
+pub type Asked = Option<axum::Extension<Viewer>>;
+
+/// The viewer out of a route's [`Asked`].
+#[must_use]
+pub fn viewer(asked: Asked) -> Option<Viewer> {
+    asked.map(|axum::Extension(v)| v)
+}
+
 /// Lets `verify` enforce expiry, so no caller can forget it.
 trait Expires {
     fn exp(&self) -> i64;
@@ -518,12 +528,20 @@ pub async fn gate(
 ) -> Response {
     let method = request.method().as_str().to_owned();
     let path = request.uri().path().to_owned();
-    if !requires_session(&method, &path) {
-        return next.run(request).await;
-    }
     let headers = request.headers().clone();
     let now = (st.now)();
     let cookie = cookie_value(&headers, COOKIE_NAME);
+    let session = read_session_cookie(&st.cfg.session_secret, cookie.as_deref(), now)
+        .filter(|s| st.cfg.permits(&s.user_id));
+    if !requires_session(&method, &path) {
+        // Open to a device, but a signed-in person still sees only theirs.
+        if let Some(session) = session {
+            request.extensions_mut().insert(Viewer {
+                user_id: session.user_id,
+            });
+        }
+        return next.run(request).await;
+    }
     let Some(session) = read_session_cookie(&st.cfg.session_secret, cookie.as_deref(), now) else {
         let auth = headers
             .get(header::AUTHORIZATION)

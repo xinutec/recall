@@ -333,16 +333,34 @@ pub struct VoiceNameIn {
     name: Option<String>,
 }
 
-pub async fn sessions_route(State(st): State<Arc<reads::State>>) -> Response {
+pub async fn sessions_route(
+    State(st): State<Arc<reads::State>>,
+    asked: crate::webauth::Asked,
+) -> Response {
+    let viewer = crate::webauth::viewer(asked);
     let root = st.root.clone();
-    route::json("sessions", move || sessions(&reads::open(&root)?)).await
+    route::json("sessions", move || {
+        sessions(&reads::open_as(&root, viewer.as_ref())?)
+    })
+    .await
 }
 
 pub async fn rename_route(
     State(st): State<Arc<reads::State>>,
+    asked: crate::webauth::Asked,
     Path(source): Path<String>,
     axum::Json(body): axum::Json<RenameIn>,
 ) -> Response {
+    let viewer = crate::webauth::viewer(asked);
+    if let Err(refused) = crate::reads::check(
+        &st.root,
+        viewer.as_ref(),
+        vec![crate::reads::Target::Source(source.clone())],
+    )
+    .await
+    {
+        return refused;
+    }
     let title = body.title.trim().to_owned();
     if title.is_empty() {
         return (StatusCode::BAD_REQUEST, "title required").into_response();
@@ -359,8 +377,19 @@ pub async fn rename_route(
 
 pub async fn rediarize_route(
     State(st): State<Arc<reads::State>>,
+    asked: crate::webauth::Asked,
     Path(source): Path<String>,
 ) -> Response {
+    let viewer = crate::webauth::viewer(asked);
+    if let Err(refused) = crate::reads::check(
+        &st.root,
+        viewer.as_ref(),
+        vec![crate::reads::Target::Source(source.clone())],
+    )
+    .await
+    {
+        return refused;
+    }
     let root = st.root.clone();
     match tokio::task::spawn_blocking(move || {
         let meaning = work::open_write(&root)?;
@@ -386,9 +415,20 @@ pub struct LanguageIn {
 /// `POST /api/sessions/{source}/language`: pin the language and transcribe again.
 pub async fn language_route(
     State(st): State<Arc<reads::State>>,
+    asked: crate::webauth::Asked,
     Path(source): Path<String>,
     axum::Json(body): axum::Json<LanguageIn>,
 ) -> Response {
+    let viewer = crate::webauth::viewer(asked);
+    if let Err(refused) = crate::reads::check(
+        &st.root,
+        viewer.as_ref(),
+        vec![crate::reads::Target::Source(source.clone())],
+    )
+    .await
+    {
+        return refused;
+    }
     let language = match parse_language(body.language.as_deref()) {
         Ok(language) => language,
         Err(why) => return (StatusCode::BAD_REQUEST, why).into_response(),
@@ -409,9 +449,20 @@ pub async fn language_route(
 
 pub async fn name_voice_route(
     State(st): State<Arc<reads::State>>,
+    asked: crate::webauth::Asked,
     Path(source): Path<String>,
     axum::Json(body): axum::Json<VoiceNameIn>,
 ) -> Response {
+    let viewer = crate::webauth::viewer(asked);
+    if let Err(refused) = crate::reads::check(
+        &st.root,
+        viewer.as_ref(),
+        vec![crate::reads::Target::Source(source.clone())],
+    )
+    .await
+    {
+        return refused;
+    }
     let root = st.root.clone();
     // An empty name clears the label.
     let name = body
@@ -443,11 +494,22 @@ pub async fn name_voice_route(
 
 pub async fn transcript_route(
     State(st): State<Arc<reads::State>>,
+    asked: crate::webauth::Asked,
     Path(source): Path<String>,
 ) -> Response {
+    let viewer = crate::webauth::viewer(asked);
+    if let Err(refused) = crate::reads::check(
+        &st.root,
+        viewer.as_ref(),
+        vec![crate::reads::Target::Source(source.clone())],
+    )
+    .await
+    {
+        return refused;
+    }
     let root = st.root.clone();
     route::json("session transcript", move || {
-        let conn = reads::open(&root)?;
+        let conn = reads::open_as(&root, viewer.as_ref())?;
         let turns = session_turns(&conn, &source)?;
         Ok(clean_transcript(&source, &turns))
     })
@@ -532,8 +594,19 @@ pub fn remove_files(root: &std::path::Path, source: &str, paths: &[String]) {
 
 pub async fn delete_route(
     State(st): State<Arc<reads::State>>,
+    asked: crate::webauth::Asked,
     Path(source): Path<String>,
 ) -> Response {
+    let viewer = crate::webauth::viewer(asked);
+    if let Err(refused) = crate::reads::check(
+        &st.root,
+        viewer.as_ref(),
+        vec![crate::reads::Target::Source(source.clone())],
+    )
+    .await
+    {
+        return refused;
+    }
     // Checked where its paths are built, not only by the lookup inside
     // `delete_session`: a `..` must never reach `remove_dir_all`.
     if !audiocore::names::valid_source(&source) {

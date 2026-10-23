@@ -42,3 +42,29 @@ pub fn claim_unowned(meaning: &Connection, owner: &str, apply: bool) -> rusqlite
     }
     Ok(claimed)
 }
+
+/// Whether the server may serve the people `allowed` admits (empty admits
+/// anyone): with more than one, whatever nobody owns must be claimed first.
+///
+/// # Errors
+/// What is unclaimed, or why it could not be read.
+pub fn ready_for<S: std::hash::BuildHasher>(
+    meaning: &Connection,
+    allowed: &std::collections::HashSet<String, S>,
+) -> Result<(), String> {
+    if allowed.len() == 1 {
+        return Ok(());
+    }
+    let count = |stmt: &crate::sql::Sql| {
+        stmt.query_row(meaning, [], |r| r.get::<_, i64>(0))
+            .map_err(|err| err.to_string())
+    };
+    let (sources, speakers) = (count(&UNOWNED_SOURCES)?, count(&UNOWNED_SPEAKERS)?);
+    if sources + speakers == 0 {
+        return Ok(());
+    }
+    Err(format!(
+        "{sources} sources and {speakers} names belong to nobody, and more than one person can \
+         sign in: claim them first (`recalld claim-unowned --owner <user> --apply`)"
+    ))
+}

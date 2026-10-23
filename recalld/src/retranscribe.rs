@@ -148,8 +148,10 @@ pub struct RequestIn {
 
 pub async fn request_route(
     State(st): State<Arc<reads::State>>,
+    asked: crate::webauth::Asked,
     Json(body): Json<RequestIn>,
 ) -> Response {
+    let viewer = crate::webauth::viewer(asked);
     if body.filenames.len() > MAX_PER_REQUEST {
         return (
             StatusCode::BAD_REQUEST,
@@ -159,7 +161,11 @@ pub async fn request_route(
     }
     let root = st.root.clone();
     route::json("retranscribe", move || {
-        request(&crate::store::open(&root)?, &body.filenames)
+        // Someone else's clip is answered as one that does not exist: skipped.
+        let (mine, theirs) = own_clips(&root, viewer.as_ref(), body.filenames)?;
+        let mut out = request(&crate::store::open(&root)?, &mine)?;
+        out.skipped.extend(theirs);
+        Ok(out)
     })
     .await
 }
@@ -175,15 +181,54 @@ const fn one_second() -> f64 {
     1.0
 }
 
+/// The asker's own clips only.
 pub async fn candidates_route(
     State(st): State<Arc<reads::State>>,
+    asked: crate::webauth::Asked,
     axum::extract::Query(q): axum::extract::Query<CandidatesQuery>,
 ) -> Response {
+    let viewer = crate::webauth::viewer(asked);
     let root = st.root.clone();
     route::json("retranscribe candidates", move || {
-        candidates(&crate::store::open(&root)?, q.min_speech_s)
+        let ingest = crate::store::open(&root)?;
+        let mut found = candidates(&ingest, q.min_speech_s)?;
+        let seen = reads::open_as(&root, viewer.as_ref())?;
+        if let Some(mine) = reads::own_sources(&seen, viewer.as_ref())? {
+            let mut kept = Vec::new();
+            for candidate in found {
+                let clip = crate::clips::by_filename(&ingest, &candidate.filename)
+                    .map_err(|err| rusqlite::Error::ToSqlConversionFailure(Box::new(err)))?;
+                if clip.is_some_and(|c| mine.contains(c.source.as_str())) {
+                    kept.push(candidate);
+                }
+            }
+            found = kept;
+        }
+        Ok(found)
     })
     .await
+}
+
+/// `names` split into the viewer's own clips and the rest; a request no session
+/// carried owns them all.
+fn own_clips(
+    root: &std::path::Path,
+    viewer: Option<&crate::webauth::Viewer>,
+    names: Vec<String>,
+) -> rusqlite::Result<(Vec<String>, Vec<String>)> {
+    if viewer.is_none() {
+        return Ok((names, Vec::new()));
+    }
+    let seen = reads::open_as(root, viewer)?;
+    let (mut mine, mut theirs) = (Vec::new(), Vec::new());
+    for name in names {
+        if reads::sees(&seen, root, &[reads::Target::Clip(name.clone())])? {
+            mine.push(name);
+        } else {
+            theirs.push(name);
+        }
+    }
+    Ok((mine, theirs))
 }
 
 #[derive(Deserialize)]
@@ -193,12 +238,22 @@ pub struct UndoIn {
 
 /// A request still waiting is cancelled. A finished one is gone for good: a
 /// clip keeps only its current result, so there is no older one to restore.
-pub async fn undo_route(State(st): State<Arc<reads::State>>, Json(body): Json<UndoIn>) -> Response {
+pub async fn undo_route(
+    State(st): State<Arc<reads::State>>,
+    asked: crate::webauth::Asked,
+    Json(body): Json<UndoIn>,
+) -> Response {
+    let viewer = crate::webauth::viewer(asked);
     let root = st.root.clone();
     let cancelled = tokio::task::spawn_blocking(move || {
+        // Someone else's clip has nothing waiting, as far as the asker knows.
+        let (mine, _) = own_clips(&root, viewer.as_ref(), vec![body.filename])?;
+        let Some(filename) = mine.first() else {
+            return Ok(false);
+        };
         cancel(
             &crate::store::open(&root)?,
-            &body.filename,
+            filename,
             &audiocore::instant::Stamp::now(),
         )
     });

@@ -392,28 +392,76 @@ pub fn reports_out(conn: &Connection) -> rusqlite::Result<ReportsOut> {
     })
 }
 
-pub async fn heartbeat_get_route(State(st): State<Arc<reads::State>>) -> Response {
+/// The asker's own devices only: a device's id is its source's.
+pub async fn heartbeat_get_route(
+    State(st): State<Arc<reads::State>>,
+    asked: crate::webauth::Asked,
+) -> Response {
+    let viewer = crate::webauth::viewer(asked);
     let root = st.root.clone();
-    route::json("heartbeats", move || beats_out(&reads::open(&root)?)).await
+    route::json("heartbeats", move || {
+        let conn = reads::open_as(&root, viewer.as_ref())?;
+        let mut out = beats_out(&conn)?;
+        if let Some(mine) = reads::own_sources(&conn, viewer.as_ref())? {
+            out.items.retain(|b| mine.contains(&b.device));
+        }
+        Ok(out)
+    })
+    .await
 }
 
-pub async fn outbox_get_route(State(st): State<Arc<reads::State>>) -> Response {
+/// As [`heartbeat_get_route`].
+pub async fn outbox_get_route(
+    State(st): State<Arc<reads::State>>,
+    asked: crate::webauth::Asked,
+) -> Response {
+    let viewer = crate::webauth::viewer(asked);
     let root = st.root.clone();
-    route::json("outboxes", move || reports_out(&reads::open(&root)?)).await
+    route::json("outboxes", move || {
+        let conn = reads::open_as(&root, viewer.as_ref())?;
+        let mut out = reports_out(&conn)?;
+        if let Some(mine) = reads::own_sources(&conn, viewer.as_ref())? {
+            out.items.retain(|r| mine.contains(&r.device));
+        }
+        Ok(out)
+    })
+    .await
 }
 
 /// Gated, unlike the POST: forgetting is a person's act.
 pub async fn heartbeat_forget_route(
     State(st): State<Arc<reads::State>>,
+    asked: crate::webauth::Asked,
     axum::extract::Path(device): axum::extract::Path<String>,
 ) -> Response {
+    let viewer = crate::webauth::viewer(asked);
+    if let Err(refused) = crate::reads::check(
+        &st.root,
+        viewer.as_ref(),
+        vec![crate::reads::Target::Device(device.clone())],
+    )
+    .await
+    {
+        return refused;
+    }
     forget_route(st, BEATS, device, "forget heartbeat").await
 }
 
 pub async fn outbox_forget_route(
     State(st): State<Arc<reads::State>>,
+    asked: crate::webauth::Asked,
     axum::extract::Path(device): axum::extract::Path<String>,
 ) -> Response {
+    let viewer = crate::webauth::viewer(asked);
+    if let Err(refused) = crate::reads::check(
+        &st.root,
+        viewer.as_ref(),
+        vec![crate::reads::Target::Device(device.clone())],
+    )
+    .await
+    {
+        return refused;
+    }
     forget_route(st, REPORTS, device, "forget outbox").await
 }
 

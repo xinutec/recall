@@ -28,6 +28,13 @@ macro_rules! ties {
 }
 
 crate::statements! {
+    SEES_LINE: Meaning = "SELECT EXISTS (SELECT 1 FROM rendered_lines WHERE id = ?1)";
+    SEES_EDIT: Meaning = "SELECT EXISTS (SELECT 1 FROM edits WHERE id = ?1)";
+    SEES_SOURCE: Meaning = "SELECT EXISTS (SELECT 1 FROM sources WHERE id = ?1)";
+    SEES_DEVICE: Meaning =
+        "SELECT EXISTS (SELECT 1 FROM sources WHERE id = ?1)
+             OR NOT EXISTS (SELECT 1 FROM main.sources WHERE id = ?1)";
+    OWN_SOURCES: Meaning = "SELECT id FROM sources";
     SEARCH: Meaning =
         "SELECT t.* FROM rendered_lines t \
          JOIN rendered_fts ON rendered_fts.rowid = t.id \
@@ -298,6 +305,152 @@ pub fn open(root: &Path) -> rusqlite::Result<Connection> {
     Ok(conn)
 }
 
+/// The tables one person may see, as temporary views of the same names: an
+/// unqualified name finds `temp` before `main`, so every query on this
+/// connection sees only the viewer's sources, lines, corrections and names.
+/// Live lines carry no source; they are the Mac's own mic's (a `coreaudio`
+/// source), so its owner sees them.
+const VIEWER_SCHEMA: &str = "
+    CREATE TEMP VIEW sources AS
+        SELECT * FROM main.sources WHERE owner = (SELECT owner FROM temp.viewer);
+    CREATE TEMP VIEW rendered_lines AS
+        SELECT * FROM main.rendered_lines
+        WHERE source_id IN (SELECT id FROM temp.sources)
+           OR (source_id IS NULL AND live_id IS NOT NULL
+               AND EXISTS (SELECT 1 FROM temp.sources WHERE kind = 'coreaudio'));
+    CREATE TEMP VIEW live_lines AS
+        SELECT * FROM main.live_lines
+        WHERE EXISTS (SELECT 1 FROM temp.sources WHERE kind = 'coreaudio');
+    CREATE TEMP VIEW audio_segments AS
+        SELECT * FROM main.audio_segments WHERE source_id IN (SELECT id FROM temp.sources);
+    CREATE TEMP VIEW deleted_segments AS
+        SELECT * FROM main.deleted_segments WHERE source_id IN (SELECT id FROM temp.sources);
+    CREATE TEMP VIEW edits AS
+        SELECT * FROM main.edits
+        WHERE source_id IN (SELECT id FROM temp.sources)
+           OR clip_id IN (SELECT clip_id FROM temp.rendered_lines);
+    CREATE TEMP VIEW rendered_clips AS
+        SELECT * FROM main.rendered_clips WHERE clip_id IN (SELECT clip_id FROM temp.rendered_lines);
+    CREATE TEMP VIEW speakers AS
+        SELECT * FROM main.speakers WHERE owner = (SELECT owner FROM temp.viewer);
+    CREATE TEMP VIEW speaker_embeddings AS
+        SELECT * FROM main.speaker_embeddings WHERE speaker_id IN (SELECT id FROM temp.speakers);
+";
+
+/// One thing a request names, to check the asker may see it.
+#[derive(Debug, Clone)]
+pub enum Target {
+    Line(i64),
+    /// A naming or correction act.
+    Edit(i64),
+    /// A source.
+    Source(String),
+    /// A recorder's status rows, by its id (its source's): the owner's, or,
+    /// with no source of that id at all, a stray row anyone may clear.
+    Device(String),
+    /// A clip, by its file name in the ingest plane.
+    Clip(String),
+}
+
+/// Whether every target is the viewer's, on a connection from [`open_as`].
+///
+/// # Errors
+/// If either database refuses.
+pub fn sees(meaning: &Connection, root: &Path, targets: &[Target]) -> rusqlite::Result<bool> {
+    for target in targets {
+        let seen: bool = match target {
+            Target::Line(id) => SEES_LINE.query_row(meaning, [id], |r| r.get(0))?,
+            Target::Edit(id) => SEES_EDIT.query_row(meaning, [id], |r| r.get(0))?,
+            Target::Source(id) => SEES_SOURCE.query_row(meaning, [id], |r| r.get(0))?,
+            Target::Device(id) => SEES_DEVICE.query_row(meaning, [id], |r| r.get(0))?,
+            Target::Clip(filename) => {
+                let ingest = crate::store::open(root)?;
+                match crate::clips::by_filename(&ingest, filename)
+                    .map_err(|err| rusqlite::Error::ToSqlConversionFailure(Box::new(err)))?
+                {
+                    Some(clip) => {
+                        SEES_SOURCE.query_row(meaning, [clip.source.as_str()], |r| r.get(0))?
+                    }
+                    None => false,
+                }
+            }
+        };
+        if !seen {
+            return Ok(false);
+        }
+    }
+    Ok(true)
+}
+
+/// The source ids `viewer` owns, read through [`open_as`]'s views; `None`
+/// when no session carried the request, which sees every source. For what
+/// lives outside those views: device status, the ingest plane.
+///
+/// # Errors
+/// If the database refuses.
+pub fn own_sources(
+    conn: &Connection,
+    viewer: Option<&crate::webauth::Viewer>,
+) -> rusqlite::Result<Option<std::collections::HashSet<String>>> {
+    if viewer.is_none() {
+        return Ok(None);
+    }
+    let mut stmt = OWN_SOURCES.prepare(conn)?;
+    let ids = stmt.query_map([], |r| r.get(0))?;
+    Ok(Some(ids.collect::<rusqlite::Result<_>>()?))
+}
+
+/// Refused as not found unless every target is the viewer's; a request no
+/// session carried is not checked. Run before a route acts.
+///
+/// # Errors
+/// The response to send instead: 404, or 500 if a database refused.
+#[expect(clippy::result_large_err, reason = "the Err is the HTTP response")]
+pub async fn check(
+    root: &Path,
+    viewer: Option<&crate::webauth::Viewer>,
+    targets: Vec<Target>,
+) -> Result<(), Response> {
+    let Some(viewer) = viewer.cloned() else {
+        return Ok(());
+    };
+    let root = root.to_owned();
+    let seen = route::blocking("ownership check", move || {
+        sees(&open_as(&root, Some(&viewer))?, &root, &targets)
+    })
+    .await?;
+    if seen {
+        Ok(())
+    } else {
+        Err((StatusCode::NOT_FOUND, "not found").into_response())
+    }
+}
+
+/// [`open`], seeing only what `viewer` owns; everything for a request no
+/// session carried (a device, or a recalld run without sign-in).
+///
+/// # Errors
+/// If the database refuses.
+#[expect(
+    clippy::disallowed_methods,
+    reason = "schema, like meaning_schema: the viewer's views, made per connection"
+)]
+pub fn open_as(
+    root: &Path,
+    viewer: Option<&crate::webauth::Viewer>,
+) -> rusqlite::Result<Connection> {
+    let conn = open(root)?;
+    if let Some(viewer) = viewer {
+        conn.execute_batch("CREATE TEMP TABLE viewer (owner TEXT NOT NULL)")?;
+        conn.execute(
+            "INSERT INTO temp.viewer (owner) VALUES (?1)",
+            [&viewer.user_id],
+        )?;
+        conn.execute_batch(VIEWER_SCHEMA)?;
+    }
+    Ok(conn)
+}
+
 /// Full-text search over current turns, oldest-first.
 pub fn search(conn: &Connection, query: &str, limit: i64) -> rusqlite::Result<ItemsOut> {
     let mut stmt = SEARCH.prepare(conn)?;
@@ -482,11 +635,17 @@ fn clamp(limit: i64) -> i64 {
 
 pub async fn timeline_route(
     axum::extract::State(st): axum::extract::State<Arc<State>>,
+    asked: crate::webauth::Asked,
     Query(q): Query<TimelineQuery>,
 ) -> Response {
+    let viewer = crate::webauth::viewer(asked);
     let root = st.root.clone();
     route::json("timeline", move || {
-        timeline(&open(&root)?, clamp(q.limit), q.before.as_ref())
+        timeline(
+            &open_as(&root, viewer.as_ref())?,
+            clamp(q.limit),
+            q.before.as_ref(),
+        )
     })
     .await
 }
@@ -510,8 +669,10 @@ const REVIEW_MAX_CONFIDENCE: f64 = 0.9;
 
 pub async fn transcripts_route(
     axum::extract::State(st): axum::extract::State<Arc<State>>,
+    asked: crate::webauth::Asked,
     Query(q): Query<TranscriptsQuery>,
 ) -> Response {
+    let viewer = crate::webauth::viewer(asked);
     // A bad id is a 400: dropping it would read as "that turn is gone".
     let mut ids = Vec::new();
     for piece in q.ids.split(',').map(str::trim).filter(|p| !p.is_empty()) {
@@ -521,28 +682,39 @@ pub async fn transcripts_route(
         }
     }
     let root = st.root.clone();
-    route::json("transcripts", move || transcripts(&open(&root)?, &ids)).await
+    route::json("transcripts", move || {
+        transcripts(&open_as(&root, viewer.as_ref())?, &ids)
+    })
+    .await
 }
 
 pub async fn review_route(
     axum::extract::State(st): axum::extract::State<Arc<State>>,
+    asked: crate::webauth::Asked,
     Query(q): Query<ReviewQuery>,
 ) -> Response {
+    let viewer = crate::webauth::viewer(asked);
     let root = st.root.clone();
     let limit = clamp(q.limit);
     route::json("review", move || {
-        review(&open(&root)?, REVIEW_MAX_CONFIDENCE, limit)
+        review(
+            &open_as(&root, viewer.as_ref())?,
+            REVIEW_MAX_CONFIDENCE,
+            limit,
+        )
     })
     .await
 }
 
 pub async fn search_route(
     axum::extract::State(st): axum::extract::State<Arc<State>>,
+    asked: crate::webauth::Asked,
     Query(q): Query<SearchQuery>,
 ) -> Response {
+    let viewer = crate::webauth::viewer(asked);
     let root = st.root.clone();
     route::json("search", move || {
-        search(&open(&root)?, &q.q, clamp(q.limit))
+        search(&open_as(&root, viewer.as_ref())?, &q.q, clamp(q.limit))
     })
     .await
 }

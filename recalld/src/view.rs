@@ -147,9 +147,9 @@ pub fn refresh(
     all: bool,
 ) -> Result<Refreshed, ViewError> {
     let shown = shown(meaning, ingest, root)?;
-    let prints = crate::identify::enrolled(meaning)?;
+    let roster = crate::identify::Roster::read(meaning)?;
     let recovered = edit_log::recovered(meaning)?;
-    let versions = Versions::read(meaning, ingest, &prints)?;
+    let versions = Versions::read(meaning, ingest, &roster)?;
     let stored: HashMap<i64, String> = STORED_INPUTS
         .prepare(meaning)?
         .query_map([], |r| Ok((r.get(0)?, r.get(1)?)))?
@@ -168,7 +168,13 @@ pub fn refresh(
         // Read and render before taking the write lock: a cold result is slow.
         let mut ready = Vec::new();
         for (s, inputs) in batch {
-            match prepare(meaning, ingest, s, &prints, &recovered) {
+            match prepare(
+                meaning,
+                ingest,
+                s,
+                roster.for_source(s.clip.source.as_str()),
+                &recovered,
+            ) {
                 Ok(rows) => ready.push((*s, inputs, rows)),
                 Err(Failed::Result(err)) => {
                     done.unreadable.push((s.clip.id.stored(), err.to_string()));
@@ -216,14 +222,20 @@ pub fn render_clips(
     root: &Path,
     clips: &[transcript::ClipId],
 ) -> Result<(), ViewError> {
-    let prints = crate::identify::enrolled(meaning)?;
+    let roster = crate::identify::Roster::read(meaning)?;
     let recovered = edit_log::recovered(meaning)?;
-    let versions = Versions::read(meaning, ingest, &prints)?;
+    let versions = Versions::read(meaning, ingest, &roster)?;
     for s in shown(meaning, ingest, root)?
         .iter()
         .filter(|s| clips.contains(&s.clip.id))
     {
-        let rows = match prepare(meaning, ingest, s, &prints, &recovered) {
+        let rows = match prepare(
+            meaning,
+            ingest,
+            s,
+            roster.for_source(s.clip.source.as_str()),
+            &recovered,
+        ) {
             Ok(rows) => rows,
             Err(Failed::Result(err)) => return Err(ViewError::Result(err)),
             Err(Failed::View(err)) => return Err(err),
@@ -264,14 +276,16 @@ struct Versions {
     speech: HashMap<String, String>,
     clip_edits: HashMap<i64, i64>,
     source_edits: HashMap<String, i64>,
-    prints: u64,
+    /// A fingerprint of each source's owner's prints: a new print re-renders
+    /// that person's clips only.
+    prints: HashMap<String, u64>,
 }
 
 impl Versions {
     fn read(
         meaning: &Connection,
         ingest: &Connection,
-        prints: &[Voiceprint],
+        roster: &crate::identify::Roster,
     ) -> rusqlite::Result<Self> {
         let mut transcribed = HashMap::new();
         let mut diarized = HashMap::new();
@@ -302,20 +316,27 @@ impl Versions {
             .prepare(meaning)?
             .query_map([], |r| Ok((r.get(0)?, r.get(1)?)))?
             .collect::<rusqlite::Result<_>>()?;
-        let mut hasher = std::collections::hash_map::DefaultHasher::new();
-        for print in prints {
-            print.person.hash(&mut hasher);
-            for v in &print.vector {
-                v.to_bits().hash(&mut hasher);
+        let fingerprint = |prints: &[Voiceprint]| {
+            let mut hasher = std::collections::hash_map::DefaultHasher::new();
+            for print in prints {
+                print.person.hash(&mut hasher);
+                for v in &print.vector {
+                    v.to_bits().hash(&mut hasher);
+                }
             }
-        }
+            hasher.finish()
+        };
+        let prints = roster
+            .sources()
+            .map(|source| (source.to_owned(), fingerprint(roster.for_source(source))))
+            .collect();
         Ok(Self {
             transcribed,
             diarized,
             speech,
             clip_edits,
             source_edits,
-            prints: hasher.finish(),
+            prints,
         })
     }
 
@@ -336,7 +357,8 @@ impl Versions {
                 .get(clip.source.as_str())
                 .copied()
                 .unwrap_or(0),
-            self.prints,
+            // Every clip's source has a row; 0 only stands in for none.
+            self.prints.get(clip.source.as_str()).copied().unwrap_or(0),
         )
     }
 }

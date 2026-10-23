@@ -119,6 +119,19 @@ owner of the recording it was given on. `claim-unowned --owner <user>` counts
 what nobody owns (what was recorded before owners existed), and `--apply`
 gives it to that user.
 
+A signed-in person sees and changes only their own: every browsing route reads
+through views of the tables filtered to the person (`reads::open_as`), and a
+route aimed at one line, correction, session, clip or device answers 404 for
+anyone else's, as for one that does not exist. A voice is guessed only among
+its recording's owner's people. Live lines carry no source and are shown to
+the owner of the Mac's own mic (a `coreaudio` source). A device's status rows
+are its source's owner's; a row whose id has no source at all is anyone's to
+clear. Still one for everybody: the capture pause and the glossary. A request
+no session carried (a recorder) sees everything it is allowed to reach. With
+more than one person able to sign in, recalld refuses to start while anything
+belongs to nobody. `recalld/tests/integration/separation.rs` calls every
+route in `recalld/src/app.rs` as one person against another's things.
+
 Phones: [android](../android/README.md), [ios](../ios/README.md); protocol and
 liveness: [devices.md](devices.md).
 

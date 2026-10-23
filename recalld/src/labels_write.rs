@@ -716,9 +716,20 @@ pub struct ReassignIn {
 
 pub async fn correction_reassign_route(
     State(st): State<Arc<reads::State>>,
+    asked: crate::webauth::Asked,
     Path(id): Path<EditId>,
     Json(body): Json<ReassignIn>,
 ) -> Response {
+    let viewer = crate::webauth::viewer(asked);
+    if let Err(refused) = crate::reads::check(
+        &st.root,
+        viewer.as_ref(),
+        vec![crate::reads::Target::Edit(id.stored())],
+    )
+    .await
+    {
+        return refused;
+    }
     let speaker = body.speaker.trim().to_owned();
     if speaker.is_empty() {
         return (StatusCode::BAD_REQUEST, "speaker required").into_response();
@@ -733,8 +744,19 @@ pub async fn correction_reassign_route(
 
 pub async fn correction_hide_route(
     State(st): State<Arc<reads::State>>,
+    asked: crate::webauth::Asked,
     Path(id): Path<EditId>,
 ) -> Response {
+    let viewer = crate::webauth::viewer(asked);
+    if let Err(refused) = crate::reads::check(
+        &st.root,
+        viewer.as_ref(),
+        vec![crate::reads::Target::Edit(id.stored())],
+    )
+    .await
+    {
+        return refused;
+    }
     route::acked(
         write(&st, "correction hide", move |m, i, root| {
             unenrol(m, i, root, id)
@@ -757,8 +779,19 @@ pub struct CorrectIn {
 
 pub async fn correct_route(
     State(st): State<Arc<reads::State>>,
+    asked: crate::webauth::Asked,
     Json(body): Json<CorrectIn>,
 ) -> Response {
+    let viewer = crate::webauth::viewer(asked);
+    if let Err(refused) = crate::reads::check(
+        &st.root,
+        viewer.as_ref(),
+        vec![crate::reads::Target::Line(body.id.stored())],
+    )
+    .await
+    {
+        return refused;
+    }
     match write(&st, "correct", move |m, i, root| {
         correct(
             m,
@@ -792,8 +825,19 @@ pub struct LineIn {
 
 pub async fn no_speech_route(
     State(st): State<Arc<reads::State>>,
+    asked: crate::webauth::Asked,
     Json(body): Json<LineIn>,
 ) -> Response {
+    let viewer = crate::webauth::viewer(asked);
+    if let Err(refused) = crate::reads::check(
+        &st.root,
+        viewer.as_ref(),
+        vec![crate::reads::Target::Line(body.id.stored())],
+    )
+    .await
+    {
+        return refused;
+    }
     route::acked(
         write(&st, "no speech", move |m, i, root| {
             no_speech(m, i, root, body.id)
@@ -804,8 +848,19 @@ pub async fn no_speech_route(
 
 pub async fn undo_no_speech_route(
     State(st): State<Arc<reads::State>>,
+    asked: crate::webauth::Asked,
     Json(body): Json<LineIn>,
 ) -> Response {
+    let viewer = crate::webauth::viewer(asked);
+    if let Err(refused) = crate::reads::check(
+        &st.root,
+        viewer.as_ref(),
+        vec![crate::reads::Target::Line(body.id.stored())],
+    )
+    .await
+    {
+        return refused;
+    }
     route::acked(
         write(&st, "undo no speech", move |m, i, root| {
             undo_no_speech(m, i, root, body.id)
@@ -826,8 +881,22 @@ pub struct ExcludeIn {
 
 pub async fn exclude_route(
     State(st): State<Arc<reads::State>>,
+    asked: crate::webauth::Asked,
     Json(body): Json<ExcludeIn>,
 ) -> Response {
+    let viewer = crate::webauth::viewer(asked);
+    if let Err(refused) = crate::reads::check(
+        &st.root,
+        viewer.as_ref(),
+        vec![
+            crate::reads::Target::Line(body.from.stored()),
+            crate::reads::Target::Line(body.to.stored()),
+        ],
+    )
+    .await
+    {
+        return refused;
+    }
     match write(&st, "exclude", move |m, i, root| {
         exclude(m, i, root, body.from, body.to)
     })
@@ -840,8 +909,19 @@ pub async fn exclude_route(
 
 pub async fn undo_exclude_route(
     State(st): State<Arc<reads::State>>,
+    asked: crate::webauth::Asked,
     Json(body): Json<LineIn>,
 ) -> Response {
+    let viewer = crate::webauth::viewer(asked);
+    if let Err(refused) = crate::reads::check(
+        &st.root,
+        viewer.as_ref(),
+        vec![crate::reads::Target::Line(body.id.stored())],
+    )
+    .await
+    {
+        return refused;
+    }
     route::acked(
         write(&st, "undo exclude", move |m, i, root| {
             undo_exclude(m, i, root, body.id)
@@ -852,8 +932,19 @@ pub async fn undo_exclude_route(
 
 pub async fn undo_correction_route(
     State(st): State<Arc<reads::State>>,
+    asked: crate::webauth::Asked,
     Json(body): Json<LineIn>,
 ) -> Response {
+    let viewer = crate::webauth::viewer(asked);
+    if let Err(refused) = crate::reads::check(
+        &st.root,
+        viewer.as_ref(),
+        vec![crate::reads::Target::Line(body.id.stored())],
+    )
+    .await
+    {
+        return refused;
+    }
     route::acked(
         write(&st, "undo correction", move |m, i, root| {
             undo_correction(m, i, root, body.id)
@@ -886,9 +977,24 @@ pub struct AssignOut {
 
 pub async fn assign_route(
     State(st): State<Arc<reads::State>>,
+    asked: crate::webauth::Asked,
     Path(source): Path<String>,
     Json(body): Json<AssignIn>,
 ) -> Response {
+    let viewer = crate::webauth::viewer(asked);
+    if let Err(refused) = crate::reads::check(
+        &st.root,
+        viewer.as_ref(),
+        vec![
+            crate::reads::Target::Source(source.clone()),
+            crate::reads::Target::Line(body.start_turn.stored()),
+            crate::reads::Target::Line(body.end_turn.stored()),
+        ],
+    )
+    .await
+    {
+        return refused;
+    }
     let name = body.name.trim().to_owned();
     if name.is_empty() {
         return (StatusCode::BAD_REQUEST, "name required").into_response();

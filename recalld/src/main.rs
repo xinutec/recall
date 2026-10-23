@@ -129,6 +129,22 @@ enum Task {
 
 /// Open both planes as the server does, run `report` over them, and print what
 /// it returns as JSON.
+/// The browsing plane's gate, mounted only with SSO configured: unconfigured
+/// means absent, not open. Refused while more than one person can sign in and
+/// something belongs to nobody (`recalld::owners::ready_for`).
+fn sso_gate(root: &std::path::Path) -> Result<Option<recalld::webauth::GateState>, String> {
+    let Some(cfg) = recalld::webauth::Config::from_process_env() else {
+        return Ok(None);
+    };
+    let meaning = recalld::work::open_write(root).map_err(|err| err.to_string())?;
+    recalld::owners::ready_for(&meaning, &cfg.allowed_users)?;
+    tracing::info!("browsing plane mounted behind the Nextcloud SSO gate");
+    Ok(Some(recalld::webauth::GateState {
+        cfg: std::sync::Arc::new(cfg),
+        now: std::sync::Arc::new(|| chrono::Utc::now().timestamp()),
+    }))
+}
+
 fn report<T: serde::Serialize, E: std::fmt::Display>(
     root: &std::path::Path,
     report: impl FnOnce(&mut rusqlite::Connection, &mut rusqlite::Connection) -> Result<T, E>,
@@ -331,16 +347,13 @@ fn main() -> ExitCode {
         eprintln!("recalld: {complaint}");
         return ExitCode::FAILURE;
     }
-    // The browsing plane is mounted only with SSO configured: unconfigured
-    // means absent, not open.
-    let webauth =
-        recalld::webauth::Config::from_process_env().map(|cfg| recalld::webauth::GateState {
-            cfg: std::sync::Arc::new(cfg),
-            now: std::sync::Arc::new(|| chrono::Utc::now().timestamp()),
-        });
-    if webauth.is_some() {
-        tracing::info!("browsing plane mounted behind the Nextcloud SSO gate");
-    }
+    let webauth = match sso_gate(&root) {
+        Ok(gate) => gate,
+        Err(complaint) => {
+            eprintln!("recalld: {complaint}");
+            return ExitCode::FAILURE;
+        }
+    };
     let config = Arc::new(Config {
         root,
         tokens,

@@ -266,22 +266,28 @@ pub fn initial_prompt(conn: &Connection) -> rusqlite::Result<Option<String>> {
     })
 }
 
-pub async fn speakers_route(State(st): State<Arc<reads::State>>) -> Response {
+pub async fn speakers_route(
+    State(st): State<Arc<reads::State>>,
+    asked: crate::webauth::Asked,
+) -> Response {
+    let viewer = crate::webauth::viewer(asked);
     let root = st.root.clone();
     route::json("speakers", move || {
-        known_speaker_names(&reads::open(&root)?)
+        known_speaker_names(&reads::open_as(&root, viewer.as_ref())?)
     })
     .await
 }
 
 pub async fn corrections_route(
     State(st): State<Arc<reads::State>>,
+    asked: crate::webauth::Asked,
     Query(q): Query<CorrectionsQuery>,
 ) -> Response {
+    let viewer = crate::webauth::viewer(asked);
     let root = st.root.clone();
     let limit = q.limit.clamp(0, 1000);
     route::json("corrections", move || {
-        let conn = reads::open(&root)?;
+        let conn = reads::open_as(&root, viewer.as_ref())?;
         Ok(CorrectionsOut {
             items: list_corrections(&conn, q.speaker.as_deref(), limit)?,
             by_speaker: corrections_by_speaker(&conn)?,
@@ -292,9 +298,20 @@ pub async fn corrections_route(
 
 pub async fn correction_audio_route(
     State(st): State<Arc<reads::State>>,
+    asked: crate::webauth::Asked,
     axum::extract::Path(id): axum::extract::Path<i64>,
     Query(q): Query<AudioQuery>,
 ) -> Response {
+    let viewer = crate::webauth::viewer(asked);
+    if let Err(refused) = crate::reads::check(
+        &st.root,
+        viewer.as_ref(),
+        vec![crate::reads::Target::Edit(id)],
+    )
+    .await
+    {
+        return refused;
+    }
     let root = st.root.clone();
     let rendered = tokio::task::spawn_blocking(move || {
         // No enhancement: labelling judges the recording as it is.
