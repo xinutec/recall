@@ -11,6 +11,14 @@ use tower::ServiceExt;
 fn built(dir: &std::path::Path) -> Arc<Frontend> {
     std::fs::write(dir.join("index.html"), "<!doctype html><app-root>").expect("index");
     std::fs::write(dir.join("main-abc123.js"), "console.log(1)").expect("bundle");
+    for name in [
+        "main-JLBKO2QH.js",
+        "icon.svg",
+        "manifest.webmanifest",
+        "ngsw-worker.js",
+    ] {
+        std::fs::write(dir.join(name), "x").expect("file");
+    }
     Arc::new(Frontend {
         root: dir.to_path_buf(),
     })
@@ -96,12 +104,30 @@ async fn the_shell_is_never_cached_and_the_hashed_bundle_is_cached_hard() {
     let (_, cache, _) = get_path(&app, "/").await;
     assert_eq!(cache, "no-cache", "the shell must never be cached");
 
-    let (status, cache, _) = get_path(&app, "/main-abc123.js").await;
+    let (status, cache, _) = get_path(&app, "/main-JLBKO2QH.js").await;
     assert_eq!(status, 200);
     assert!(
         cache.contains("immutable"),
         "hashed bundles are immutable: {cache}"
     );
+}
+
+#[tokio::test]
+async fn only_a_content_hashed_file_is_cached_for_good() {
+    // Rule 2a, exactly: an icon, the manifest and the service worker's files keep
+    // their names across builds, so a year of `immutable` pins the old one on
+    // every phone.
+    let dir = tempfile::tempdir().expect("tempdir");
+    let app = app(built(dir.path()));
+
+    let (status, cache, _) = get_path(&app, "/main-JLBKO2QH.js").await;
+    assert_eq!(status, 200);
+    assert!(cache.contains("immutable"), "a hashed chunk: {cache}");
+    for path in ["/icon.svg", "/manifest.webmanifest", "/ngsw-worker.js"] {
+        let (status, cache, _) = get_path(&app, path).await;
+        assert_eq!(status, 200, "{path}");
+        assert_eq!(cache, "no-cache", "{path}");
+    }
 }
 
 #[tokio::test]

@@ -9,6 +9,9 @@
 //!    broken icons and reports nothing.
 //! 2. `index.html` is `no-cache`; hashed bundles are immutable. The shell names
 //!    the current bundles, so a cached one hides a deploy until a hard refresh.
+//!    Only a name carrying its content hash is immutable: an icon, the manifest
+//!    and the service worker's files keep their names across builds, so they
+//!    revalidate too.
 //! 3. A request may not escape the frontend directory: `../` is resolved and
 //!    checked against the root.
 
@@ -41,6 +44,21 @@ pub fn resolve(root: &Path, request_path: &str) -> Option<PathBuf> {
         return None;
     }
     candidate.is_file().then_some(candidate)
+}
+
+/// A name carrying its content hash (`main-7GNM4EPX.js`, a font's `-ABCD1234`):
+/// a new build is a new name, so it may be cached for ever.
+fn is_content_hashed(path: &str) -> bool {
+    let Some(stem) = Path::new(path).file_stem().and_then(|s| s.to_str()) else {
+        return false;
+    };
+    let Some((_, hash)) = stem.rsplit_once('-') else {
+        return false;
+    };
+    hash.len() == 8
+        && hash
+            .bytes()
+            .all(|b| b.is_ascii_uppercase() || b.is_ascii_digit())
 }
 
 fn content_type(path: &Path) -> &'static str {
@@ -89,8 +107,13 @@ pub async fn serve(State(fe): State<Arc<Frontend>>, uri: axum::http::Uri) -> Res
         return (StatusCode::NOT_FOUND, "not found").into_response();
     }
     if let Some(asset) = resolve(&fe.root, path) {
-        // Rule 2a: content-hashed bundles are immutable.
-        return file(&asset, "public, max-age=31536000, immutable");
+        // Rule 2a: content-hashed bundles are immutable; the rest revalidate.
+        let cache = if is_content_hashed(path) {
+            "public, max-age=31536000, immutable"
+        } else {
+            "no-cache"
+        };
+        return file(&asset, cache);
     }
     // Rule 1, for files.
     if path
