@@ -8,6 +8,7 @@
 #   recalld    the fleet's system-of-record daemon on Isis
 #   runner     the Mac's job orchestration against recalld's queue
 #   transcript the domain as pure data: clips, instants, spans (#1911)
+#   experimental/array     the house's mics as one array: alignment, coherence, a steered sum
 #   experimental/playback  known speech played into the house, scored per mic (#1388)
 [workspace]
 resolver = "3"
@@ -16,6 +17,7 @@ members = [
     "audiod",
     "cli",
     "doctor",
+    "experimental/array",
     "experimental/playback",
     "recalld",
     "runner",

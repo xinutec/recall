@@ -1,0 +1,33 @@
+[package]
+name = "array"
+version = "0.1.0"
+edition = "2024"
+publish = false
+description = "The house's mics as one distributed array: sample-accurate alignment, coherence, and a steered sum, measured on lossless captures; run by hand, never deployed."
+
+[dependencies]
+audiocore = { path = "../../audiocore" }
+chrono = { version = "0.4", default-features = false, features = ["clock"] }
+clap = { version = "4", features = ["derive"] }
+rustfft = "6"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+[lints.rust]
+unsafe_code = "forbid"
+
+[lints.clippy]
+pedantic = { level = "warn", priority = -1 }
+dbg_macro = "deny"
+todo = "deny"
+unimplemented = "deny"
+missing_errors_doc = "allow"
+missing_panics_doc = "allow"
+must_use_candidate = "allow"
+# Sample arithmetic moves between integer and float at deliberate sites.
+cast_possible_truncation = "allow"
+cast_precision_loss = "allow"
+cast_sign_loss = "allow"
+cast_possible_wrap = "allow"
+# x, y and n are the signal-processing notation, read more easily than words here.
+many_single_char_names = "allow"
