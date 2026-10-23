@@ -63,7 +63,12 @@ class StreamService : Service() {
         MicState.setRunning(true)
         // Streaming again, however it was started: the reboot prompt is moot.
         BootReceiver.clearResumePrompt(this)
-        worker = thread(name = "mic-stream") { streamLoop(host, controlHost, deviceId) }
+        worker =
+            if (FilesOnly.applies(host)) {
+                thread(name = "mic-files") { fileLoop(controlHost, deviceId) }
+            } else {
+                thread(name = "mic-stream") { streamLoop(host, controlHost, deviceId) }
+            }
         beater = thread(name = "mic-heartbeat") { beatLoop(controlHost, host, deviceId) }
         return START_STICKY
     }
@@ -80,6 +85,109 @@ class StreamService : Service() {
         MicState.setConnected(false)
         releaseWakeLock()
         super.onDestroy()
+    }
+
+    /**
+     * No recorder host: record one-minute files wherever the phone is, for
+     * [SegmentUpload] to deliver ([FilesOnly]). The pause comes from recall, asked with
+     * this phone's own token by a thread of its own, so the mic loop never waits on the
+     * network; out of reach, the last known pause stands.
+     */
+    private fun fileLoop(controlHost: String, deviceId: String) {
+        val token = Prefs.ingestToken(this)
+        val paused = AtomicBoolean(false)
+        val checker =
+            thread(name = "mic-pause") {
+                var known: String? = null
+                while (running) {
+                    val cap =
+                        try {
+                            runBlocking {
+                                CaptureApi.state(
+                                    controlHost,
+                                    token,
+                                    waitS = PAUSE_WAIT_S,
+                                    known = known,
+                                )
+                            }
+                        } catch (_: InterruptedException) {
+                            break
+                        }
+                    if (cap != null) {
+                        MicState.setCapture(cap)
+                        ResumeWarning.sync(this, cap, Instant.now())
+                        known = cap.stateToken
+                    }
+                    paused.set(FilesOnly.paused(paused.get(), cap))
+                    if (cap == null) {
+                        try {
+                            Thread.sleep(OFFLINE_RETRY_MS)
+                        } catch (_: InterruptedException) {
+                            break
+                        }
+                    }
+                }
+            }
+        val minBuf = AudioRecord.getMinBufferSize(SAMPLE_RATE, CHANNEL, ENCODING)
+        val bufSize = maxOf(minBuf, SAMPLE_RATE * BYTES_PER_SAMPLE)
+        try {
+            while (running) {
+                if (paused.get()) {
+                    setNotification("Recording paused")
+                    Thread.sleep(PAUSED_POLL_MS)
+                    continue
+                }
+                var record: AudioRecord? = null
+                var segments: SegmentWriter? = null
+                try {
+                    acquireWakeLock()
+                    setNotification("Recording")
+                    // The heartbeat's "streaming": this phone is recording.
+                    MicState.setConnected(true)
+                    record = openRecord(bufSize)
+                    record.startRecording()
+                    MicHandover.acquired()
+                    MicState.setMicOk(true)
+                    segments =
+                        getExternalFilesDir(android.os.Environment.DIRECTORY_MUSIC)?.let { dir ->
+                            SegmentWriter(
+                                dir,
+                                deviceId,
+                                onFailure = { Log.w(TAG, it) },
+                                onSegmentClosed = { SegmentUpload.enqueue(this) },
+                            ).also { it.start() }
+                        }
+                    val chunk = ByteArray(READ_CHUNK_BYTES)
+                    while (running && !paused.get()) {
+                        val n = record.read(chunk, 0, chunk.size)
+                        if (n > 0) {
+                            segments?.offer(chunk, n)
+                            MicState.setLevel(peakLevel(chunk, n))
+                        } else if (n < 0) {
+                            throw IllegalStateException("AudioRecord.read returned $n")
+                        }
+                    }
+                } catch (e: Exception) {
+                    if (!running) break
+                    MicState.setMicOk(micOkAfter(MicState.micOk.value, e))
+                    setNotification("Microphone unavailable — check permission / other apps")
+                    Log.w(TAG, "recording to files stopped: ${e.message}")
+                    Thread.sleep(RECONNECT_DELAY_MS)
+                } finally {
+                    MicState.setConnected(false)
+                    releaseWakeLock()
+                    runCatching { record?.stop() }
+                    runCatching { record?.release() }
+                    MicHandover.released()
+                    runCatching { segments?.close() }
+                    if (segments != null) SegmentUpload.enqueue(this)
+                }
+            }
+        } catch (_: InterruptedException) {
+            // onDestroy
+        } finally {
+            checker.interrupt()
+        }
     }
 
     /** Connect and capture until stopped, reconnecting after a delay. `host` takes the
@@ -393,6 +501,12 @@ class StreamService : Service() {
 
         private const val CONNECT_TIMEOUT_MS = 5000
         private const val RECONNECT_DELAY_MS = 2000L
+
+        // Files only: how long recall may hold the pause long poll, how soon to ask
+        // again when it cannot be reached, and how often a paused loop looks.
+        private const val PAUSE_WAIT_S = 25
+        private const val OFFLINE_RETRY_MS = 10_000L
+        private const val PAUSED_POLL_MS = 1_000L
         private const val JOIN_TIMEOUT_MS = 2000L
 
         // The ingest port all devices share (`audiod ingest`).

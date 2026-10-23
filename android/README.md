@@ -19,6 +19,14 @@ these requests: it says whose phone asks, so the device list is its owner's and
 a meeting is filed under its owner (`Prefs.uploadToken`). `BootReceiver` restarts the stream after a reboot;
 `ResumeWarning` notifies 2 h before a bounded pause ends.
 
+## Files only
+
+With no recorder host set, the phone streams nowhere: it records one-minute
+segments wherever it is and `SegmentUpload` delivers them (on unmetered networks),
+which is how a person's own phone, away from the house's mics, records anywhere
+(`FilesOnly`). It follows its owner's pause, asked of the control host with its own
+segment token; out of reach, the last known pause stands.
+
 ## Meeting mode
 
 "Record a meeting" (`MeetingService`) stops the stream and writes one Ogg/Opus
