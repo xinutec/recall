@@ -153,7 +153,7 @@ open (a phone's own copy is `.phone.flac`, because `audiod ingest` also cuts its
 stream and the two often open in the same second); `PUT /ingest/v1/segments/{source}/{filename}` with the source's bearer
 token; compare the receipt's sha-256 with a local re-hash before counting it
 delivered; evict only under cache pressure, only verified segments, oldest
-first, never the open one; honour the household pause. The name is the only
+first, never the open one; honour the recording window. The name is the only
 timing a segment carries, so one crate parses it (`audiocore::names`), and a
 skewed clock is recorded beside the receive time rather than refused.
 
@@ -297,16 +297,16 @@ cost is the window, not the audio.
 | plane | credential | can |
 |---|---|---|
 | browsing | Nextcloud SSO session | read and write the app's API |
-| recording control | none (network-gated) | pause state, liveness, heartbeats |
+| recording control | none (network-gated) | the recording window, liveness, heartbeats |
 | device upload | `RECALL_DEVICE_TOKEN` | `POST /api/sessions` only |
 | ingest | per-device token | `PUT` its own source's segments; nothing else |
 | sync | `RECALL_SYNC_TOKEN` | the Mac's reads: the queue, blobs, the vocabulary prompt, the live tier's numbers, and the capture handshake |
 
 Unconfigured means open for dev and tests, except the browsing and sync planes,
 which are not mounted at all without their credential: they carry the
-household's transcripts and its pause control. The Mac is a one-way WireGuard
+household's transcripts and its capture control. The Mac is a one-way WireGuard
 peer: it may initiate into the fleet and nothing may initiate toward it, so
-every cross-machine exchange is Mac-initiated, and a pause pressed in the web
+every cross-machine exchange is Mac-initiated, and a window opened in the web
 UI reaches the microphone by the Mac's mirror long-polling for it.
 
 ## Deletion authority

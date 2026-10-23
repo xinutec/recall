@@ -78,3 +78,35 @@ button.danger {
 mat-icon {
   flex-shrink: 0;
 }
+
+// The recording menu renders in the CDK overlay, outside the shell's styles.
+.capture-menu {
+  .menu-heading {
+    padding: 0.5rem 1rem 0.25rem;
+    font: var(--mat-sys-label-medium);
+    color: var(--mat-sys-on-surface-variant);
+  }
+
+  .record-until {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    padding: 0.5rem 1rem;
+
+    label {
+      display: flex;
+      align-items: center;
+      gap: 0.5rem;
+      font: var(--mat-sys-body-large);
+    }
+
+    input {
+      font: inherit;
+      color: inherit;
+      background: transparent;
+      border: 1px solid var(--mat-sys-outline);
+      border-radius: 4px;
+      padding: 0.25rem;
+    }
+  }
+}

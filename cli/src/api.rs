@@ -61,13 +61,16 @@ pub struct Sources {
 }
 
 /// What `/api/capture` says about the recorders. Read-only: this crate never
-/// pauses capture.
-#[expect(clippy::struct_excessive_bools, reason = "the route sends these four")]
+/// opens or closes a recording window.
+#[expect(clippy::struct_excessive_bools, reason = "the route sends these five")]
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Capture {
     pub running: bool,
-    pub paused_until: Option<String>,
+    /// The open window's end; none while off.
+    pub until: Option<String>,
+    /// Whether that window is paused.
+    pub held: bool,
     /// What the recorders were asked to do.
     pub desired_running: bool,
     /// Whether `running` agrees with `desired_running`.

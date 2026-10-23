@@ -347,10 +347,9 @@ async fn on_the_fleet_liveness_comes_from_the_macs_report() {
     assert_eq!(live.get("usb"), Some(&true));
     assert_eq!(live.get("pixel9"), Some(&true));
 
-    // A reported pause reads idle at once, despite a fresh marker inside the
+    // Reported off reads idle at once, despite a fresh marker inside the
     // 75 s window.
-    let until = audiocore::instant::python_isoformat_utc(at + Duration::hours(1));
-    recalld::capture::record_reported(&conn, at, false, Some(&until), &liveness(&[("usb", at)]))
+    recalld::capture::record_reported(&conn, at, false, Some("off"), &liveness(&[("usb", at)]))
         .unwrap();
     let paused = active_by_id(&root, &conn, at);
     assert_eq!(paused.get("usb"), Some(&false));
@@ -509,9 +508,8 @@ async fn a_pause_silences_delivered_evidence_for_every_kind() {
     );
     assert_eq!(running.get("usb"), Some(&true));
 
-    // Paused: the same evidence proves nothing.
-    let until = audiocore::instant::python_isoformat_utc(at + Duration::hours(1));
-    recalld::capture::record_reported(&conn, at, false, Some(&until), &liveness(&[])).unwrap();
+    // Off: the same evidence proves nothing.
+    recalld::capture::record_reported(&conn, at, false, Some("off"), &liveness(&[])).unwrap();
     let paused = active_by_id(&root, &conn, at);
     assert_eq!(paused.get("usb"), Some(&false), "the mic is idle at once");
     assert_eq!(paused.get("geb"), Some(&false), "and so is the phone");

@@ -3,12 +3,12 @@
 //!
 //! * `ingest`: the network-mic ingest server.
 //! * `capture`: the local-mic capture pipeline.
-//! * `capture-mirror`: the Mac's pause mirror, which reports what it applied.
-//! * `pause-mirror`: the pause mirror for a recorder that reports nothing.
+//! * `capture-mirror`: the Mac's window mirror, which reports what it applied.
+//! * `pause-mirror`: the window mirror for a recorder that reports nothing.
 //! * `upload`: one store-and-forward delivery pass (stage B).
 //! * `beat-relay`: the LAN heartbeat fallback.
 //! * `logrotate`: bound the agents' log files.
-//! * `pause`, `resume`: the break-glass control.
+//! * `record`, `stop`, `pause`, `unpause`: the break-glass control.
 
 use chrono::Utc;
 use clap::{Parser, Subcommand, ValueEnum};
@@ -56,7 +56,7 @@ enum Mode {
         #[arg(long)]
         url: Option<String>,
     },
-    /// The Mac's pause mirror, which reports what it applied.
+    /// The Mac's window mirror, which reports what it applied.
     CaptureMirror {
         #[command(flatten)]
         root: Root,
@@ -68,7 +68,7 @@ enum Mode {
         #[arg(long)]
         once: bool,
     },
-    /// The pause mirror for a recorder that reports nothing.
+    /// The window mirror for a recorder that reports nothing.
     PauseMirror {
         #[command(flatten)]
         root: Root,
@@ -99,16 +99,26 @@ enum Mode {
     },
     /// Bound the agents' log files.
     Logrotate,
-    /// Break-glass, when the fleet cannot be reached: stop recording.
+    /// Break-glass, when the fleet cannot be reached: record for a while.
+    Record {
+        #[command(flatten)]
+        root: Root,
+        /// How long, capped at a day.
+        #[arg(long)]
+        minutes: i64,
+    },
+    /// Break-glass: stop recording.
+    Stop {
+        #[command(flatten)]
+        root: Root,
+    },
+    /// Break-glass: pause the open window, keeping its end.
     Pause {
         #[command(flatten)]
         root: Root,
-        /// How long [default: the full cap].
-        #[arg(long)]
-        minutes: Option<i64>,
     },
-    /// Break-glass: record again.
-    Resume {
+    /// Break-glass: record again until the window's end.
+    Unpause {
         #[command(flatten)]
         root: Root,
     },
@@ -242,28 +252,37 @@ fn main() -> ExitCode {
         } => run_upload(root.path, url, token_file, max),
         // Break-glass, here rather than in `recall-cli`, which needs the
         // network.
-        Mode::Pause { root, minutes } => {
-            match audiod::pause::pause(&root.path, Utc::now(), minutes) {
-                Ok(until) => {
-                    println!("paused until {}", until.to_rfc3339());
-                    ExitCode::SUCCESS
-                }
-                Err(err) => {
-                    eprintln!("audiod pause: {err} — the pause did NOT take");
-                    ExitCode::FAILURE
-                }
-            }
+        Mode::Record { root, minutes } => {
+            gated(audiod::gate::record(&root.path, Utc::now(), minutes))
         }
-        Mode::Resume { root } => match audiod::pause::resume(&root.path) {
-            Ok(()) => {
-                println!("resumed");
-                ExitCode::SUCCESS
-            }
-            Err(err) => {
-                eprintln!("audiod resume: {err}");
-                ExitCode::FAILURE
-            }
-        },
+        Mode::Stop { root } => gated(
+            audiod::gate::write(&root.path, audiocore::capture::Window::Off)
+                .map(|()| audiocore::capture::Window::Off),
+        ),
+        Mode::Pause { root } => gated(audiod::gate::change(
+            &root.path,
+            Utc::now(),
+            audiocore::capture::Window::paused,
+        )),
+        Mode::Unpause { root } => gated(audiod::gate::change(
+            &root.path,
+            Utc::now(),
+            audiocore::capture::Window::unpaused,
+        )),
+    }
+}
+
+/// A break-glass command's outcome: the window now, or why it did not take.
+fn gated(result: std::io::Result<audiocore::capture::Window>) -> ExitCode {
+    match result {
+        Ok(window) => {
+            println!("{}", window.spell());
+            ExitCode::SUCCESS
+        }
+        Err(err) => {
+            eprintln!("audiod: {err} — the change did NOT take");
+            ExitCode::FAILURE
+        }
     }
 }
 

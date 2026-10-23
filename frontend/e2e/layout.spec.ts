@@ -125,6 +125,52 @@ test('finalizing banner keeps its icon whole', async ({ page }, testInfo) => {
   await expectCleanLayout(page, testInfo);
 });
 
+// The recording banner in each state, and the menu that opens a window: the
+// banner's sentence and buttons share a phone row.
+const window = (overrides: Partial<CaptureState>): CaptureState => ({
+  running: false,
+  until: null,
+  held: false,
+  desiredRunning: false,
+  desiredUntil: null,
+  desiredHeld: false,
+  settled: true,
+  micReachable: true,
+  stateToken: 'x',
+  ...overrides,
+});
+const END = new Date(Date.now() + 3 * 3_600_000).toISOString();
+const banners = {
+  recording: window({ running: true, until: END, desiredRunning: true, desiredUntil: END }),
+  held: window({ until: END, held: true, desiredUntil: END, desiredHeld: true }),
+  fault: window({ running: true, desiredRunning: true }),
+} satisfies Record<string, CaptureState>;
+
+for (const [mode, state] of Object.entries(banners)) {
+  test(`the ${mode} banner holds phone geometry`, async ({ page }, testInfo) => {
+    await page.route('**/api/capture**', (route: Route) => route.fulfill({ json: state }));
+    await page.goto('/sessions/test');
+    await page.locator('.capture-banner .rec-dot').waitFor();
+    await page.locator('.run .play').first().waitFor();
+
+    await expectCleanLayout(page, testInfo);
+    await expectNoOccludedControls(page, testInfo, '.capture-banner button');
+  });
+}
+
+test('the recording menu holds phone geometry', async ({ page }, testInfo) => {
+  await page.route('**/api/capture**', (route: Route) =>
+    route.fulfill({ json: banners.recording }),
+  );
+  await page.goto('/sessions/test');
+  await page.locator('.capture-toggle').click();
+  await page.locator('.capture-menu .record-until input').waitFor();
+
+  // The menu floats over the page: only its own content must not collide.
+  await expectCleanLayout(page, testInfo, { root: '.capture-menu' });
+  await expectNoOccludedControls(page, testInfo, '.capture-menu button, .capture-menu input');
+});
+
 // ---------------------------------------------------------------------------
 // The same checks on every other routed screen (#1342).
 
@@ -170,12 +216,14 @@ const screenMocks: Record<string, TranscriptList | LabelList | SessionList | Voc
   '/api/sessions': sessionsList,
   '/api/vocabulary': { items: [{ id: 1, term: 'vorasidenib' }] } satisfies VocabularyList,
   '/api/capture': {
-    running: true,
-    desiredRunning: true,
+    running: false,
+    until: null,
+    held: false,
+    desiredRunning: false,
+    desiredUntil: null,
+    desiredHeld: false,
     settled: true,
     micReachable: true,
-    pausedUntil: null,
-    desiredPausedUntil: null,
     stateToken: 'x',
   } satisfies CaptureState,
 };

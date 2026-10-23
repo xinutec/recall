@@ -33,12 +33,23 @@ export class RecallApi {
     return this.http.get<CaptureState>(`/api/capture${query}`);
   }
 
+  /** Open a recording window until `until`, or move its end. */
+  recordCapture(until: Date): Observable<CaptureState> {
+    const query = new URLSearchParams({ until: until.toISOString() });
+    return this.http.post<CaptureState>(`/api/capture/record?${query.toString()}`, {});
+  }
+
+  stopCapture(): Observable<CaptureState> {
+    return this.http.post<CaptureState>('/api/capture/stop', {});
+  }
+
+  /** Stop recording, keeping the window's end. */
   pauseCapture(): Observable<CaptureState> {
     return this.http.post<CaptureState>('/api/capture/pause', {});
   }
 
-  resumeCapture(): Observable<CaptureState> {
-    return this.http.post<CaptureState>('/api/capture/resume', {});
+  unpauseCapture(): Observable<CaptureState> {
+    return this.http.post<CaptureState>('/api/capture/unpause', {});
   }
 
   /** Turns grouped into conversations at silences. Page back with `before`

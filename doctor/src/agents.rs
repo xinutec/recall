@@ -1,14 +1,10 @@
-//! launchd's agents, and the pause file. The pause file is on the archive
+//! launchd's agents, and the capture gate. The gate file is on the archive
 //! volume, so only the child process reads it.
 
-use chrono::{DateTime, Utc};
 use std::collections::BTreeSet;
 use std::path::Path;
 
 const AGENT_PREFIX: &str = "org.xinutec.recall-";
-
-/// The pause file every capture agent self-gates on.
-pub const PAUSE_FILE: &str = "capture_paused_until";
 
 /// Recall agent labels loaded in launchd; empty where there is no `launchctl`.
 fn loaded_agents() -> BTreeSet<String> {
@@ -41,7 +37,7 @@ fn installed_agents(home: &Path) -> Vec<String> {
 }
 
 /// Every installed agent and whether it is loaded. Agents stay loaded while
-/// paused, so installed but not loaded is a fault.
+/// off, so installed but not loaded is a fault.
 pub fn agent_health(home: &Path) -> Vec<(String, bool)> {
     let loaded = loaded_agents();
     installed_agents(home)
@@ -53,9 +49,8 @@ pub fn agent_health(home: &Path) -> Vec<(String, bool)> {
         .collect()
 }
 
-/// When capture resumes, or `None` if not paused. A hand-written timestamp
-/// without an offset is read as UTC: refusing it would read as not paused.
-pub fn paused_until(root: &Path) -> Option<DateTime<Utc>> {
-    let text = std::fs::read_to_string(root.join(PAUSE_FILE)).ok()?;
-    audiocore::instant::parse_utc(text.trim())
+/// The capture gate's window; `None` when the file is missing or does not
+/// read, a fault, which records.
+pub fn gate(root: &Path) -> Option<audiocore::capture::Window> {
+    audiocore::capture::read_gate(root)
 }

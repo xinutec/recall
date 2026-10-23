@@ -42,7 +42,9 @@ struct FromArchive {
     checks: Vec<Check>,
     /// Whether and how fast the archive answered; reported either way.
     answered: Check,
-    paused_until: Option<DateTime<Utc>>,
+    /// The gate's window; `None` when it did not read or was not learnt,
+    /// and either way the checks run.
+    gate: Option<audiocore::capture::Window>,
     loss: Option<archive::Loss>,
 }
 
@@ -51,7 +53,7 @@ impl FromArchive {
         Self {
             checks: Vec::new(),
             answered,
-            paused_until: None,
+            gate: None,
             loss: None,
         }
     }
@@ -109,10 +111,10 @@ fn read_archive_checks(out: &Path) -> FromArchive {
         Ok(report) => FromArchive {
             checks: report.checks,
             answered: archive::archive_check(Some(report.seconds), ""),
-            paused_until: report
-                .paused_until
+            gate: report
+                .window
                 .as_deref()
-                .and_then(audiocore::instant::parse_utc),
+                .and_then(audiocore::capture::Window::parse),
             loss: Some(report.loss),
         },
         Err(_) => FromArchive::unanswered(archive::archive_check(
@@ -130,7 +132,7 @@ fn read_archive_checks(out: &Path) -> FromArchive {
 fn live_checks(
     config: &Config,
     now: DateTime<Utc>,
-    paused_until: Option<DateTime<Utc>>,
+    gate: Option<audiocore::capture::Window>,
 ) -> (Vec<Check>, Vec<audiocore::record_health::ForgottenMinute>) {
     let token = std::env::var("RECALL_SYNC_TOKEN").ok();
     let Some(fleet) = live::Fleet::new(config.fleet.as_deref(), token.as_deref()) else {
@@ -140,7 +142,7 @@ fn live_checks(
         return (checks, Vec::new());
     };
     let fetched = live::fetch(&fleet, now, capture::live_lag_window());
-    let mut checks = live::live_checks(&fetched, now, paused_until);
+    let mut checks = live::live_checks(&fetched, now, gate);
     checks.push(deaf::deaf_check_from(&deaf::fetch(
         &fleet,
         now,
@@ -190,8 +192,8 @@ fn main() {
         // still sees stderr.
         let volume = archive::volume_check(&config.out);
         eprintln!("doctor: {} — {}", volume.label, volume.observed);
-        let paused_until = agents::paused_until(&config.out);
-        let (checks, loss) = match archive::archive_checks(&config.out, now, volume, paused_until) {
+        let gate = agents::gate(&config.out);
+        let (checks, loss) = match archive::archive_checks(&config.out, now, volume, gate) {
             Ok(found) => found,
             Err(err) => {
                 // The parent reports the last stderr line.
@@ -202,7 +204,7 @@ fn main() {
         let collected = archive::Collected {
             seconds: started.elapsed().as_secs_f64(),
             checks,
-            paused_until: paused_until.map(audiocore::instant::python_isoformat_utc),
+            window: gate.map(audiocore::capture::Window::spell),
             loss,
         };
         println!(
@@ -216,7 +218,7 @@ fn main() {
     let mut checks = vec![archive.answered];
     checks.extend(archive.checks);
     checks.extend(capture::agent_checks(&agents::agent_health(&home())));
-    let (server, forgotten) = live_checks(&config, now, archive.paused_until);
+    let (server, forgotten) = live_checks(&config, now, archive.gate);
     // Graded here, where the server's word on what was deleted is.
     if let Some(found) = archive.loss {
         let gaps = loss::unexplained(found.gaps, &forgotten, archive::loss_min());

@@ -1,18 +1,17 @@
-//! Mirror the household pause onto a recorder.
+//! Mirror the capture window onto a recorder's gate file.
 //!
 //! - `poll` (the Linux recorder) reads `/api/capture` and maintains the
-//!   `capture_paused_until` file every capture loop gates on.
+//!   [`GATE_FILE`] every capture loop checks.
 //! - `exchange` (the Mac) reports what it applied, with each source's `.alive`
 //!   freshness, and long-polls for the intent, in one round trip.
 //!
 //! Edge-triggered: intent is applied only when it changes (a local marker), or
-//! an unchanged "running" would clobber a pause pressed on the Mac's own UI.
-//! An unreachable fleet leaves the last state standing: inventing a pause on
-//! error would silence a recorder over a wifi blip. A stale pause expires by
-//! its bounded timestamp.
+//! an unchanged intent would clobber a break-glass change made on the Mac.
+//! An unreachable fleet leaves the last window standing, and a window closes
+//! at its own end.
 
-use crate::pause::{PAUSE_FILE, paused_until};
-use audiocore::capture::{Applied, CaptureState, Intent};
+use crate::gate::{GATE_FILE, window};
+use audiocore::capture::{Applied, CaptureState, Intent, Window};
 use chrono::{DateTime, SecondsFormat, Utc};
 use std::collections::BTreeMap;
 use std::path::Path;
@@ -20,13 +19,7 @@ use std::time::Duration;
 
 const POLL: Duration = Duration::from_secs(5);
 
-#[derive(Debug, PartialEq, Eq)]
-pub enum Desired {
-    Running,
-    PausedUntil(String),
-}
-
-fn fetch(agent: &ureq::Agent, url: &str) -> Result<Desired, String> {
+fn fetch(agent: &ureq::Agent, url: &str) -> Result<Option<Window>, String> {
     let text = agent
         .get(&format!("{url}/api/capture"))
         .call()
@@ -34,35 +27,28 @@ fn fetch(agent: &ureq::Agent, url: &str) -> Result<Desired, String> {
         .into_string()
         .map_err(|e| e.to_string())?;
     let state: CaptureState = serde_json::from_str(&text).map_err(|e| e.to_string())?;
-    // The fleet reports desired state alongside applied; a recorder obeys
-    // desired.
-    if state.desired_running {
-        return Ok(Desired::Running);
-    }
-    let until = state.desired_paused_until.ok_or("paused with no bound")?;
-    Ok(Desired::PausedUntil(until))
+    // A recorder obeys the desired half.
+    Ok(state.desired_window())
 }
 
-fn apply(root: &Path, desired: &Desired) {
-    let path = root.join(PAUSE_FILE);
-    match desired {
-        Desired::Running => {
-            if path.exists() {
-                match std::fs::remove_file(&path) {
-                    Ok(()) => tracing::info!("pause-mirror: resumed"),
-                    Err(err) => tracing::warn!(%err, "pause-mirror: cannot clear pause"),
-                }
+/// Write the window, or for a fault (`None`) remove the file, which records.
+fn apply(root: &Path, desired: Option<Window>) {
+    let Some(desired) = desired else {
+        tracing::warn!("pause-mirror: the fleet's window does not read — recording");
+        match std::fs::remove_file(root.join(GATE_FILE)) {
+            Err(err) if err.kind() != std::io::ErrorKind::NotFound => {
+                tracing::warn!(%err, "pause-mirror: cannot clear the gate");
             }
+            _ => {}
         }
-        Desired::PausedUntil(until) => {
-            let current = std::fs::read_to_string(&path).ok();
-            if current.as_deref().map(str::trim) != Some(until.as_str()) {
-                match std::fs::write(&path, until) {
-                    Ok(()) => tracing::info!(%until, "pause-mirror: paused"),
-                    Err(err) => tracing::warn!(%err, "pause-mirror: cannot write pause"),
-                }
-            }
-        }
+        return;
+    };
+    if window(root) == Some(desired) {
+        return;
+    }
+    match crate::gate::write(root, desired) {
+        Ok(()) => tracing::info!(window = %desired.spell(), "pause-mirror: applied"),
+        Err(err) => tracing::warn!(%err, "pause-mirror: cannot write the gate"),
     }
 }
 
@@ -74,7 +60,7 @@ pub fn run(root: &Path, url: &str) -> ! {
         .build();
     loop {
         match fetch(&agent, url) {
-            Ok(desired) => apply(root, &desired),
+            Ok(desired) => apply(root, desired),
             Err(err) => {
                 tracing::debug!(%err, "pause-mirror: unreachable; keeping last state");
             }
@@ -92,30 +78,24 @@ pub const MARKER_FILE: &str = "capture_intent_mirrored";
 pub enum Decision {
     /// The fleet's intent is what we last applied. Leave the local file alone.
     Unchanged,
-    /// Apply this, then record it as applied.
-    Apply { desired: Desired, record: String },
+    /// Apply this (`None`: a fault), then record it as applied.
+    Apply {
+        window: Option<Window>,
+        record: String,
+    },
 }
 
-/// An unparseable or elapsed intent resolves to Running (an expired pause is
-/// not a pause), and is recorded, so it is not retried every tick.
+/// An unparseable intent is a fault, which records, and is recorded, so it is
+/// not retried every tick.
 #[must_use]
-pub fn decide(applied: &str, intent: Option<&str>, now: DateTime<Utc>) -> Decision {
-    let record = intent.unwrap_or("").to_owned();
-    if record == applied {
+pub fn decide(applied: &str, intent: &str) -> Decision {
+    if intent == applied {
         return Decision::Unchanged;
     }
-    let desired = match intent.filter(|i| !i.is_empty()) {
-        None => Desired::Running,
-        Some(raw) => match DateTime::parse_from_rfc3339(raw) {
-            Ok(until) if until.with_timezone(&Utc) > now => Desired::PausedUntil(raw.to_owned()),
-            Ok(_) => Desired::Running,
-            Err(_) => {
-                tracing::warn!(intent = %raw, "unparseable fleet intent — treating as running");
-                Desired::Running
-            }
-        },
-    };
-    Decision::Apply { desired, record }
+    Decision::Apply {
+        window: Window::parse(intent),
+        record: intent.to_owned(),
+    }
 }
 
 /// Each source's last proved recording time: its `.alive` marker's mtime. The
@@ -158,11 +138,11 @@ pub fn exchange(
     applied: &str,
     wait: f64,
     now: DateTime<Utc>,
-) -> Result<Option<String>, String> {
-    let local = paused_until(root);
+) -> Result<String, String> {
+    let local = window(root);
     let body = Applied {
-        running: local.is_none_or(|until| until <= now),
-        paused_until: local.map(|u| u.to_rfc3339_opts(SecondsFormat::Micros, false)),
+        running: local.is_none_or(|w| w.records(now)),
+        window: local.map(Window::spell),
         source_liveness: source_liveness(root),
         wait,
         known_intent: (!applied.is_empty()).then(|| applied.to_owned()),
@@ -177,7 +157,7 @@ pub fn exchange(
         .into_string()
         .map_err(|e| e.to_string())?;
     let intent: Intent = serde_json::from_str(&text).map_err(|e| e.to_string())?;
-    Ok(intent.paused_until)
+    Ok(intent.window)
 }
 
 fn read_marker(root: &Path) -> String {
@@ -206,22 +186,15 @@ pub fn run_exchange(root: &Path, url: &str, token: &str, interval: Duration) -> 
             interval.as_secs_f64(),
             Utc::now(),
         ) {
-            Ok(intent) => match decide(&applied, intent.as_deref(), Utc::now()) {
+            Ok(intent) => match decide(&applied, &intent) {
                 Decision::Unchanged => false,
-                Decision::Apply { desired, record } => {
-                    apply(root, &desired);
+                Decision::Apply { window, record } => {
+                    apply(root, window);
                     // Recorded even when unparseable; see `decide`.
                     if let Err(err) = std::fs::write(root.join(MARKER_FILE), &record) {
                         tracing::warn!(%err, "pause-mirror: cannot record applied intent");
                     }
-                    tracing::info!(
-                        intent = if record.is_empty() {
-                            "running"
-                        } else {
-                            record.as_str()
-                        },
-                        "pause-mirror: fleet intent changed — applied"
-                    );
+                    tracing::info!(intent = %record, "pause-mirror: fleet intent changed — applied");
                     true
                 }
             },
@@ -254,18 +227,18 @@ pub fn exchange_once(root: &Path, url: &str, token: &str) -> std::process::ExitC
             std::process::ExitCode::FAILURE
         }
         Ok(intent) => {
-            let shown = intent.as_deref().unwrap_or("(running)");
-            match decide(&applied, intent.as_deref(), Utc::now()) {
+            let shown = &intent;
+            match decide(&applied, &intent) {
                 Decision::Unchanged => {
                     println!("fleet intent {shown} — unchanged since last applied; nothing done");
                 }
-                Decision::Apply { desired, record } => {
-                    apply(root, &desired);
+                Decision::Apply { window, record } => {
+                    apply(root, window);
                     if let Err(err) = std::fs::write(root.join(MARKER_FILE), &record) {
                         eprintln!("capture-mirror: cannot record applied intent: {err}");
                         return std::process::ExitCode::FAILURE;
                     }
-                    println!("fleet intent {shown} — applied {desired:?}");
+                    println!("fleet intent {shown} — applied {window:?}");
                 }
             }
             std::process::ExitCode::SUCCESS

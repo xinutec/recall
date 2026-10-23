@@ -251,8 +251,9 @@ pub struct Collected {
     /// How long the child took, excluding its startup.
     pub seconds: f64,
     pub checks: Vec<Check>,
-    /// The pause file's instant, for the parent's checks.
-    pub paused_until: Option<String>,
+    /// The gate's window spelled, for the parent's checks; absent when it
+    /// does not read.
+    pub window: Option<String>,
     /// Graded by the parent, which asks the server what was deleted on purpose.
     pub loss: Loss,
 }
@@ -274,7 +275,7 @@ pub fn archive_checks(
     root: &Path,
     now: DateTime<Utc>,
     volume: Check,
-    paused_until: Option<DateTime<Utc>>,
+    gate: Option<audiocore::capture::Window>,
 ) -> std::io::Result<(Vec<Check>, Loss)> {
     let log = capture_log::read(root)?;
     // Registered recorders, not whatever directories exist.
@@ -284,11 +285,11 @@ pub fn archive_checks(
     let recorders: Vec<Recorder> = capture::recorders_on_disk(root, &sources);
     let beat = read_beat(root);
 
-    let mut checks = vec![volume];
+    let mut checks = vec![volume, capture::gate_check(gate, now)];
     checks.extend(capture::capture_checks(
         &recorders,
         now,
-        paused_until,
+        gate,
         capture::silent_after(),
     ));
     checks.push(capture::worker_check(

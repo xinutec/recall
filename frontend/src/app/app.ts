@@ -2,7 +2,7 @@ import { ChangeDetectionStrategy, Component, computed, inject, signal } from '@a
 import { toSignal } from '@angular/core/rxjs-interop';
 import { RouterLink, RouterLinkActive, RouterOutlet } from '@angular/router';
 import { BreakpointObserver, Breakpoints } from '@angular/cdk/layout';
-import { map, timeout } from 'rxjs';
+import { Observable, map, timeout } from 'rxjs';
 import { MatButtonModule } from '@angular/material/button';
 import { MatCardModule } from '@angular/material/card';
 import { MatIconModule } from '@angular/material/icon';
@@ -13,7 +13,7 @@ import { Scaffold } from '@xinutec/ui-scaffold';
 
 import { AuthState } from './auth';
 import { BUILD_INFO } from './build-info';
-import { dayKey, durationUntil, timeOfDay } from './format';
+import { dayKey, durationUntil, nextTimeOfDay, timeOfDay } from './format';
 import { CaptureState } from './models';
 import { RecallApi } from './recall-api';
 import { Telemetry } from './telemetry';
@@ -31,6 +31,16 @@ interface NavItem {
 const CAPTURE_WAIT_S = 25;
 const CAPTURE_REPOLL_MS = 250;
 const CAPTURE_RETRY_MS = 5_000;
+
+type CaptureMode = 'off' | 'recording' | 'held' | 'fault';
+
+/** The windows one press opens, in minutes. */
+const SPANS: readonly { readonly label: string; readonly minutes: number }[] = [
+  { label: '30 minutes', minutes: 30 },
+  { label: '1 hour', minutes: 60 },
+  { label: '2 hours', minutes: 120 },
+  { label: '4 hours', minutes: 240 },
+];
 
 @Component({
   selector: 'app-root',
@@ -77,40 +87,61 @@ export class App {
     { path: '/labels', label: 'Labels', icon: 'label', exact: false },
   ];
 
-  // Capture state, polled so the banner follows an automatic resume. `desired*`
-  // changes at the button press, `running` when the mic confirms; in between
-  // the banner says "Pausing…" or "Resuming…".
+  // Capture state, polled so the banner follows a window ending on its own.
+  // `desired*` changes at the button press, `running` when the mic confirms; in
+  // between the banner says "Starting…", "Stopping…" or "Pausing…".
   private readonly capture = signal<CaptureState>({
-    running: true,
-    pausedUntil: null,
-    desiredRunning: true,
-    desiredPausedUntil: null,
+    running: false,
+    until: null,
+    held: false,
+    desiredRunning: false,
+    desiredUntil: null,
+    desiredHeld: false,
     settled: true,
     micReachable: true,
     stateToken: '',
   });
-  // Ticks so the "resumes in Xh Ym" countdown stays current between polls.
+  // Ticks so the "45m left" countdown stays current between polls.
   private readonly now = signal(Date.now());
-  protected readonly paused = computed(() => this.capture().desiredPausedUntil !== null);
+  /** What was asked for: off, a window recording or paused, or recording with
+   * no window, which is a recorder's fault. */
+  protected readonly mode = computed<CaptureMode>(() => {
+    const c = this.capture();
+    if (c.desiredUntil === null) {
+      return c.desiredRunning ? 'fault' : 'off';
+    }
+    return c.desiredHeld ? 'held' : 'recording';
+  });
   protected readonly transitioning = computed(() => {
     const c = this.capture();
     return c.micReachable && !c.settled;
   });
-  protected readonly transitionLabel = computed(() =>
-    this.capture().desiredRunning ? 'Resuming' : 'Pausing',
+  protected readonly transitionLabel = computed(
+    () =>
+      ({ off: 'Stopping', recording: 'Starting', held: 'Pausing', fault: 'Starting' })[
+        this.mode()
+      ],
   );
   // The mic stopped reporting, so its state is unknown.
   protected readonly unreachable = computed(() => !this.capture().micReachable);
-  protected readonly resumeBy = computed(() => {
-    const until = this.capture().desiredPausedUntil;
-    // With the date, so an overnight pause is unambiguous.
-    return until ? `${dayKey(until)} ${timeOfDay(until)}` : '';
+  /** The window's end, with the date unless it is today. */
+  protected readonly endsAt = computed(() => {
+    const until = this.capture().desiredUntil;
+    if (!until) {
+      return '';
+    }
+    const today = dayKey(new Date(this.now()).toISOString()) === dayKey(until);
+    return today ? timeOfDay(until) : `${dayKey(until)} ${timeOfDay(until)}`;
   });
   // "5h 23m".
-  protected readonly resumeIn = computed(() => {
-    const until = this.capture().desiredPausedUntil;
+  protected readonly endsIn = computed(() => {
+    const until = this.capture().desiredUntil;
     return until ? durationUntil(until, this.now()) : '';
   });
+  /** One press opens a window this long. */
+  protected readonly spans = SPANS;
+  /** The "until" field's text, `hh:mm`. */
+  protected readonly untilText = signal('');
 
   constructor() {
     this.telemetry.init();
@@ -148,18 +179,39 @@ export class App {
     }
   }
 
-  protected pauseCapture(): void {
-    this.api.pauseCapture().subscribe({
-      next: (s) => this.capture.set(s),
-      // Still recording: a pause that silently failed is the one this must say.
-      error: () => this.snack.open('Could not pause recording', 'Dismiss', { duration: 5000 }),
-    });
+  /** Record for `minutes` from now. */
+  protected recordFor(minutes: number): void {
+    this.press(this.api.recordCapture(new Date(Date.now() + minutes * 60_000)), 'start');
   }
 
-  protected resumeCapture(): void {
-    this.api.resumeCapture().subscribe({
+  /** Record until the time in the field. */
+  protected recordUntil(): void {
+    const until = nextTimeOfDay(this.untilText(), new Date());
+    if (until === null) {
+      this.snack.open('Type a time like 18:30', 'Dismiss', { duration: 5000 });
+      return;
+    }
+    this.press(this.api.recordCapture(until), 'start');
+  }
+
+  protected stopCapture(): void {
+    this.press(this.api.stopCapture(), 'stop');
+  }
+
+  protected pauseCapture(): void {
+    this.press(this.api.pauseCapture(), 'pause');
+  }
+
+  protected unpauseCapture(): void {
+    this.press(this.api.unpauseCapture(), 'unpause');
+  }
+
+  // A press that silently failed is the one this must say: the state is not
+  // what was asked for.
+  private press(request: Observable<CaptureState>, verb: string): void {
+    request.subscribe({
       next: (s) => this.capture.set(s),
-      error: () => this.snack.open('Could not resume recording', 'Dismiss', { duration: 5000 }),
+      error: () => this.snack.open(`Could not ${verb} recording`, 'Dismiss', { duration: 5000 }),
     });
   }
 

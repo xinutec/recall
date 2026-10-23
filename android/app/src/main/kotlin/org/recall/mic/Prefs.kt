@@ -20,6 +20,7 @@ object Prefs {
     // From the version where the id was typed in; kept so the source stays the same.
     private const val KEY_LEGACY_SOURCE_ID = "source_id"
     private const val KEY_ENABLED = "enabled"
+    private const val KEY_CAPTURE_WINDOW = "capture_window"
     private const val MAX_ID_LEN = 40
 
     // Isis, a name served on the VPN only. Read through [ApiBase], which also takes a
@@ -101,5 +102,13 @@ object Prefs {
             .putString(KEY_HOST, host)
             .putBoolean(KEY_ENABLED, enabled)
             .apply()
+    }
+
+    /** The last recording window recall gave this phone, spelled ([FilesOnly]); null
+     * before the first answer. */
+    fun captureWindow(ctx: Context): String? = prefs(ctx).getString(KEY_CAPTURE_WINDOW, null)
+
+    fun saveCaptureWindow(ctx: Context, window: String?) {
+        prefs(ctx).edit().putString(KEY_CAPTURE_WINDOW, window).apply()
     }
 }

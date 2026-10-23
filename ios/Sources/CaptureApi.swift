@@ -9,9 +9,9 @@ struct SourceStatus: Identifiable, Equatable {
     let lastActive: Date?
 }
 
-/// The web API on Isis: the household pause, read and set, and the recorders'
-/// liveness. It answers during a pause, when the recorder's port is closed. A failed
-/// call leaves the panels hidden.
+/// The web API on Isis: the recording window, read and set, and the recorders'
+/// liveness. It answers while capture is off, when the recorder's port is closed. A
+/// failed call leaves the panels hidden.
 enum CaptureApi {
     private static let timeout: TimeInterval = 4
 
@@ -19,7 +19,7 @@ enum CaptureApi {
         URL(string: "\(ApiBase.of(host))/api\(path)")
     }
 
-    // MARK: capture pause
+    // MARK: the recording window
 
     /// With `wait` and `known` (the last stateToken), a long poll: the server answers
     /// when the state changes.
@@ -29,12 +29,24 @@ enum CaptureApi {
             await body(host, "/capture\(query)", "GET", timeout: timeout + Double(wait)))
     }
 
+    /// Open a recording window until `until`, or move its end.
+    static func record(host: String, until: Date) async -> CaptureState {
+        let f = ISO8601DateFormatter()
+        return await parseCapture(
+            await body(host, "/capture/record?until=\(f.string(from: until))", "POST"))
+    }
+
+    static func stop(host: String) async -> CaptureState {
+        await parseCapture(await body(host, "/capture/stop", "POST"))
+    }
+
+    /// Stop recording, keeping the window's end.
     static func pause(host: String) async -> CaptureState {
         await parseCapture(await body(host, "/capture/pause", "POST"))
     }
 
-    static func resume(host: String) async -> CaptureState {
-        await parseCapture(await body(host, "/capture/resume", "POST"))
+    static func unpause(host: String) async -> CaptureState {
+        await parseCapture(await body(host, "/capture/unpause", "POST"))
     }
 
     // MARK: fleet
@@ -63,17 +75,21 @@ enum CaptureApi {
             let data,
             let o = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
             let running = o["running"] as? Bool,
+            let held = o["held"] as? Bool,
             let desiredRunning = o["desiredRunning"] as? Bool,
+            let desiredHeld = o["desiredHeld"] as? Bool,
             let settled = o["settled"] as? Bool,
             let micReachable = o["micReachable"] as? Bool,
             let stateToken = o["stateToken"] as? String
-        else { return CaptureState(running: true, reachable: false, pausedUntil: nil) }
+        else { return CaptureState(running: false, reachable: false) }
         return CaptureState(
             running: running,
             reachable: true,
-            pausedUntil: (o["pausedUntil"] as? String).flatMap(parseISO),
+            until: (o["until"] as? String).flatMap(parseISO),
+            held: held,
             desiredRunning: desiredRunning,
-            desiredPausedUntil: (o["desiredPausedUntil"] as? String).flatMap(parseISO),
+            desiredUntil: (o["desiredUntil"] as? String).flatMap(parseISO),
+            desiredHeld: desiredHeld,
             settled: settled,
             micReachable: micReachable,
             stateToken: stateToken)

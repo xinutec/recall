@@ -30,8 +30,10 @@ const STATE_TTL_SECS: i64 = 10 * 60;
 const DEVICE_EXEMPT: &[(&str, &str)] = &[
     ("GET", "/api/capture"),
     ("GET", "/api/sources"),
+    ("POST", "/api/capture/record"),
+    ("POST", "/api/capture/stop"),
     ("POST", "/api/capture/pause"),
-    ("POST", "/api/capture/resume"),
+    ("POST", "/api/capture/unpause"),
     ("POST", "/api/log"),
     ("POST", "/api/devices/outbox"),
     ("POST", "/api/devices/heartbeat"),

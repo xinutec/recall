@@ -822,6 +822,15 @@ pub const MIGRATIONS: &[&str] = &[
     WHEN NOT ((NEW.created_utc IS NULL OR NEW.created_utc GLOB '[0-9][0-9][0-9][0-9]-[0-1][0-9]-[0-3][0-9]T[0-2][0-9]:[0-5][0-9]:[0-6][0-9]+00:00' OR NEW.created_utc GLOB '[0-9][0-9][0-9][0-9]-[0-1][0-9]-[0-3][0-9]T[0-2][0-9]:[0-5][0-9]:[0-6][0-9].[0-9][0-9][0-9][0-9][0-9][0-9]+00:00'))
     BEGIN SELECT RAISE(ABORT, 'vocabulary: an instant not in the stored spelling'); END;
 "#,
+    // v65
+    r#"
+    -- Capture is off unless a person opens a recording window. A pause's
+    -- resume-by, or blank for running, does not spell a window: every intent
+    -- starts off, and the Mac's old pause report goes.
+    UPDATE settings SET value = 'off'
+        WHERE key = 'capture_intent' OR key LIKE 'capture_intent/%';
+    DELETE FROM settings WHERE key = 'capture_reported_paused_until';
+"#,
 ];
 
 /// Bring `conn` up to the latest version, running only the steps it has not had.

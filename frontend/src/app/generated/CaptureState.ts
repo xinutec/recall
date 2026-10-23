@@ -5,5 +5,9 @@
  * contract: `stateToken` is a hash over this object, so a renamed or reordered
  * field changes every client's long-poll. The bools are the wire shape, so an
  * enum would change the contract rather than tidy it.
+ *
+ * `running` is whether it records now; `until` the open window's end, `held`
+ * whether that window is paused. No `until` while running: a fault, which
+ * records.
  */
-export type CaptureState = { running: boolean, pausedUntil: string | null, desiredRunning: boolean, desiredPausedUntil: string | null, settled: boolean, micReachable: boolean, stateToken: string, };
+export type CaptureState = { running: boolean, until: string | null, held: boolean, desiredRunning: boolean, desiredUntil: string | null, desiredHeld: boolean, settled: boolean, micReachable: boolean, stateToken: string, };

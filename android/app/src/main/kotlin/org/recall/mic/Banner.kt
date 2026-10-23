@@ -2,7 +2,6 @@ package org.recall.mic
 
 import java.time.Duration
 import java.time.Instant
-import java.time.OffsetDateTime
 import java.time.ZoneId
 import java.time.format.DateTimeFormatter
 import kotlin.math.max
@@ -42,18 +41,38 @@ fun sizeLabel(bytes: Long): String =
     }
 
 /**
- * The paused-banner text, identical to the web app's (`app.html`, `format.ts`):
- * "Recording paused — auto-resumes in 5h 23m (by 2026-07-04 08:30)".
+ * The recording banner's text, as the web app's (`app.html`): "Recording until 11:00 ·
+ * 45m left", "Paused · the window ends 11:00", with the date when the end is not today.
  */
 object Banner {
+    private val TIME = DateTimeFormatter.ofPattern("HH:mm")
     private val DATE_TIME = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm")
 
-    fun pausedText(pausedUntilIso: String?, now: Instant, zone: ZoneId): String {
-        val until =
-            pausedUntilIso?.let { runCatching { OffsetDateTime.parse(it) }.getOrNull() }
-                ?: return "Recording paused"
-        val by = until.atZoneSameInstant(zone).format(DATE_TIME)
-        return "Recording paused — auto-resumes in ${remaining(until.toInstant(), now)} (by $by)"
+    /** For the window asked for; null is a fault, which records. */
+    fun windowText(window: Window?, now: Instant, zone: ZoneId): String =
+        when (val at = window?.at(now)) {
+            null -> {
+                "Recording with no window set — a recorder fault"
+            }
+
+            Window.Off -> {
+                "Not recording"
+            }
+
+            is Window.Record -> {
+                "Recording until ${endsAt(at.end, now, zone)} · ${remaining(at.end, now)} left"
+            }
+
+            is Window.Hold -> {
+                "Paused · the window ends ${endsAt(at.end, now, zone)}"
+            }
+        }
+
+    /** The end's time, with the date unless it is today. */
+    private fun endsAt(until: Instant, now: Instant, zone: ZoneId): String {
+        val end = until.atZone(zone)
+        val today = end.toLocalDate() == now.atZone(zone).toLocalDate()
+        return end.format(if (today) TIME else DATE_TIME)
     }
 
     /** Time left as "5h 23m", "2h 0m", "23m" or "now", as format.ts `durationUntil`. */

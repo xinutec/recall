@@ -24,6 +24,7 @@ import java.net.Socket
 import java.time.Instant
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
+import java.util.concurrent.atomic.AtomicReference
 import kotlin.concurrent.thread
 
 /**
@@ -49,7 +50,7 @@ class StreamService : Service() {
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         if (running) return START_STICKY
         val host = Prefs.host(this)
-        // Isis, asked whether a failed connect is a pause (see Prefs).
+        // Isis, asked whether a failed connect is capture being off (see Prefs).
         val controlHost = Prefs.controlHost(this)
         val deviceId = Prefs.deviceId(this)
 
@@ -89,15 +90,15 @@ class StreamService : Service() {
 
     /**
      * No recorder host: record one-minute files wherever the phone is, for
-     * [SegmentUpload] to deliver ([FilesOnly]). The pause comes from recall, asked with
-     * this phone's own token by a thread of its own, so the mic loop never waits on the
-     * network; out of reach, the last known pause stands.
+     * [SegmentUpload] to deliver ([FilesOnly]). The window comes from recall, asked
+     * with this phone's own token by a thread of its own, so the mic loop never waits
+     * on the network; out of reach, or after a restart, the last known window stands.
      */
     private fun fileLoop(controlHost: String, deviceId: String) {
         val token = Prefs.ingestToken(this)
-        val paused = AtomicBoolean(false)
+        val window = AtomicReference(Prefs.captureWindow(this))
         val checker =
-            thread(name = "mic-pause") {
+            thread(name = "mic-window") {
                 var known: String? = null
                 while (running) {
                     val cap =
@@ -106,7 +107,7 @@ class StreamService : Service() {
                                 CaptureApi.state(
                                     controlHost,
                                     token,
-                                    waitS = PAUSE_WAIT_S,
+                                    waitS = WINDOW_WAIT_S,
                                     known = known,
                                 )
                             }
@@ -115,10 +116,11 @@ class StreamService : Service() {
                         }
                     if (cap != null) {
                         MicState.setCapture(cap)
-                        ResumeWarning.sync(this, cap, Instant.now())
+                        EndWarning.sync(this, cap, Instant.now())
                         known = cap.stateToken
                     }
-                    paused.set(FilesOnly.paused(paused.get(), cap))
+                    val kept = FilesOnly.kept(window.get(), cap)
+                    if (kept != window.getAndSet(kept)) Prefs.saveCaptureWindow(this, kept)
                     if (cap == null) {
                         try {
                             Thread.sleep(OFFLINE_RETRY_MS)
@@ -132,9 +134,9 @@ class StreamService : Service() {
         val bufSize = maxOf(minBuf, SAMPLE_RATE * BYTES_PER_SAMPLE)
         try {
             while (running) {
-                if (paused.get()) {
-                    setNotification("Recording paused")
-                    Thread.sleep(PAUSED_POLL_MS)
+                if (!FilesOnly.records(window.get(), Instant.now())) {
+                    setNotification(quietText(window.get()))
+                    Thread.sleep(QUIET_POLL_MS)
                     continue
                 }
                 var record: AudioRecord? = null
@@ -158,7 +160,7 @@ class StreamService : Service() {
                             ).also { it.start() }
                         }
                     val chunk = ByteArray(READ_CHUNK_BYTES)
-                    while (running && !paused.get()) {
+                    while (running && FilesOnly.records(window.get(), Instant.now())) {
                         val n = record.read(chunk, 0, chunk.size)
                         if (n > 0) {
                             segments?.offer(chunk, n)
@@ -220,7 +222,7 @@ class StreamService : Service() {
                 setNotification("Streaming to $host")
                 MicState.setConnected(true)
                 // Recording is on: no resume warning is needed.
-                ResumeWarning.cancel(this)
+                EndWarning.cancel(this)
                 // Connected means home, which is what queued meetings wait for.
                 MeetingUpload.enqueue(this)
                 // The household pause state comes from /api/capture, never from
@@ -324,12 +326,18 @@ class StreamService : Service() {
                             break
                         }
                     MicState.setCapture(cap)
-                    // Polled every few seconds while paused: where the resume warning
-                    // is kept in step with the pause.
-                    ResumeWarning.sync(this, cap, Instant.now())
-                    val paused = cap?.let { !it.running } == true
+                    // Polled every few seconds while off: where the end warning is
+                    // kept in step with the window.
+                    EndWarning.sync(this, cap, Instant.now())
+                    val quiet = cap?.let { !it.running } == true
                     setNotification(
-                        if (paused) "Recording paused" else "Waiting for recall host",
+                        if (quiet) {
+                            quietText(
+                                cap?.desiredWindow()?.spell(),
+                            )
+                        } else {
+                            "Waiting for recall host"
+                        },
                     )
                     Log.w(TAG, "not streaming (host unreachable / dropped): ${e.message}")
                 }
@@ -386,6 +394,10 @@ class StreamService : Service() {
             }
         }
     }
+
+    /** The notification while the window keeps the mic quiet. */
+    private fun quietText(window: String?): String =
+        if (window?.let(Window::parse) is Window.Hold) "Recording paused" else "Not recording"
 
     private fun setNotification(text: String) {
         if (text == lastNotificationText) return
@@ -502,11 +514,11 @@ class StreamService : Service() {
         private const val CONNECT_TIMEOUT_MS = 5000
         private const val RECONNECT_DELAY_MS = 2000L
 
-        // Files only: how long recall may hold the pause long poll, how soon to ask
-        // again when it cannot be reached, and how often a paused loop looks.
-        private const val PAUSE_WAIT_S = 25
+        // Files only: how long recall may hold the window long poll, how soon to ask
+        // again when it cannot be reached, and how often a quiet loop looks.
+        private const val WINDOW_WAIT_S = 25
         private const val OFFLINE_RETRY_MS = 10_000L
-        private const val PAUSED_POLL_MS = 1_000L
+        private const val QUIET_POLL_MS = 1_000L
         private const val JOIN_TIMEOUT_MS = 2000L
 
         // The ingest port all devices share (`audiod ingest`).

@@ -1,6 +1,8 @@
 package org.recall.mic
 
 import android.Manifest
+import android.app.TimePickerDialog
+import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.os.Build
@@ -61,8 +63,10 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import java.time.Duration
 import java.time.Instant
+import java.time.LocalTime
 import java.time.OffsetDateTime
 import java.time.ZoneId
+import java.time.ZonedDateTime
 
 /**
  * The main screen: status and mic level, the household pause banner, the devices, and
@@ -174,12 +178,12 @@ fun MicScreen(
                     known = MicState.capture.value?.stateToken,
                 )
             cap?.let { MicState.setCapture(it) }
-            ResumeWarning.sync(context, cap, Instant.now())
+            EndWarning.sync(context, cap, Instant.now())
             delay(if (cap != null) 250 else 5_000)
         }
     }
 
-    // Ticks so the "auto-resumes in Xh Ym" countdown moves between polls.
+    // Ticks so the "45m left" countdown moves between polls.
     var now by remember { mutableStateOf(Instant.now()) }
     LaunchedEffect(Unit) {
         while (true) {
@@ -203,7 +207,7 @@ fun MicScreen(
     // This phone's source id, to mark its own row.
     val selfId = remember { Prefs.deviceId(context) }
 
-    // Pause or resume on Isis, publishing the answer to MicState.
+    // A press on Isis, publishing the answer to MicState.
     fun control(call: suspend (String, String) -> CaptureState?) {
         scope.launch {
             call(controlHost, Prefs.ingestToken(context))?.let { MicState.setCapture(it) }
@@ -305,26 +309,18 @@ private fun MicContent(
             StatusCard(
                 running,
                 connected,
-                // The desired state: while "Pausing…" the phone may stream a few
+                // The desired state: while "Stopping…" the phone may stream a few
                 // seconds more.
-                paused = capture?.let { !it.desiredRunning } == true,
+                quiet = capture?.let { !it.desiredRunning } == true,
                 level,
                 host,
             )
             CaptureBanner(
                 capture = capture,
                 now = now,
-                onPause = {
-                    Log.i(UI_LOG, "button: Pause recording")
-                    onCapture(CaptureApi::pause)
-                },
-                onSnooze = {
-                    Log.i(UI_LOG, "button: Still away (snooze 24h)")
-                    onCapture(CaptureApi::pause)
-                },
-                onResume = {
-                    Log.i(UI_LOG, "button: Resume now")
-                    onCapture(CaptureApi::resume)
+                onPress = { verb, call ->
+                    Log.i(UI_LOG, "button: $verb")
+                    onCapture(call)
                 },
             )
             DevicesPanel(devices, selfId)
@@ -355,7 +351,7 @@ private fun MicContent(
 private fun StatusCard(
     running: Boolean,
     connected: Boolean,
-    paused: Boolean,
+    quiet: Boolean,
     level: Float,
     host: String,
 ) {
@@ -365,11 +361,11 @@ private fun StatusCard(
                 Triple("Streaming", "to $host", MaterialTheme.colorScheme.primary)
             }
 
-            // A pause closes the host's listener; not an error.
-            running && paused -> {
+            // Off closes the host's listener; not an error.
+            running && quiet -> {
                 Triple(
-                    "Paused",
-                    "household recording is off",
+                    "Off",
+                    "no recording window open",
                     MaterialTheme.colorScheme.onSurfaceVariant,
                 )
             }
@@ -431,69 +427,118 @@ private fun StatusCard(
     }
 }
 
+/** A press: what it is called, for the log, and the call that makes it. */
+private typealias Press = (String, suspend (String, String) -> CaptureState?) -> Unit
+
+/** The windows one press opens, in minutes, as the web app's menu. */
+private val SPANS = listOf("30 min" to 30L, "1 h" to 60L, "2 h" to 120L)
+
 /**
- * The web app's pause banner, for the household's capture. Shown only when Isis
- * answers.
+ * The web app's recording banner and menu in one card: the window asked for, pause or
+ * unpause and stop inside it, and a new window for a while or until a time. Shown only
+ * when Isis answers.
  */
 @Composable
-private fun CaptureBanner(
-    capture: CaptureState?,
-    now: Instant,
-    onPause: () -> Unit,
-    onSnooze: () -> Unit,
-    onResume: () -> Unit,
-) {
+private fun CaptureBanner(capture: CaptureState?, now: Instant, onPress: Press) {
     if (capture == null) return
-    // The desired state, with "Pausing…"/"Resuming…" until the mic confirms.
-    val paused = !capture.desiredRunning
+    // The desired window, with "Starting…" etc. until the mic confirms.
+    val window = capture.desiredWindow()?.at(now)
     val transitioning = capture.micReachable && !capture.settled
-    val container =
-        if (paused) {
-            MaterialTheme.colorScheme.errorContainer
-        } else {
-            MaterialTheme.colorScheme.surfaceVariant
-        }
+    val recording = window == null || window is Window.Record
+    val context = LocalContext.current
     Card(
-        colors = CardDefaults.cardColors(containerColor = container),
+        colors =
+            CardDefaults.cardColors(
+                containerColor =
+                    if (recording) {
+                        MaterialTheme.colorScheme.errorContainer
+                    } else {
+                        MaterialTheme.colorScheme.surfaceVariant
+                    },
+            ),
         modifier = Modifier.fillMaxWidth(),
     ) {
         Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
             Text(
                 when {
                     !capture.micReachable -> "Recorder not reporting — state unconfirmed"
-                    transitioning && paused -> "Pausing…"
-                    transitioning -> "Resuming…"
-                    paused -> Banner.pausedText(capture.pausedUntil, now, ZoneId.systemDefault())
-                    else -> "Recording active"
+                    transitioning && window is Window.Hold -> "Pausing…"
+                    transitioning && recording -> "Starting…"
+                    transitioning -> "Stopping…"
+                    else -> Banner.windowText(window, now, ZoneId.systemDefault())
                 },
                 style = MaterialTheme.typography.titleMedium,
             )
             // Enabled mid-transition: a press just replaces the desired state.
-            if (paused) {
+            if (window != Window.Off) {
                 Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                    when (window) {
+                        is Window.Record -> {
+                            OutlinedButton(
+                                onClick = { onPress("Pause", CaptureApi::pause) },
+                                modifier = Modifier.weight(1f),
+                            ) { Text("Pause") }
+                        }
+
+                        is Window.Hold -> {
+                            Button(
+                                onClick = { onPress("Unpause", CaptureApi::unpause) },
+                                modifier = Modifier.weight(1f),
+                            ) { Text("Unpause") }
+                        }
+
+                        else -> {
+                            Unit
+                        }
+                    }
                     OutlinedButton(
-                        onClick = onSnooze,
+                        onClick = { onPress("Stop", CaptureApi::stop) },
                         modifier = Modifier.weight(1f),
-                    ) {
-                        Text("Still away (24h)")
-                    }
-                    Button(
-                        onClick = onResume,
-                        modifier = Modifier.weight(1f),
-                    ) {
-                        Text("Resume now")
-                    }
+                    ) { Text("Stop") }
                 }
-            } else {
+            }
+            Text(
+                if (window == Window.Off) "Record for" else "Record from now for",
+                style = MaterialTheme.typography.labelLarge,
+            )
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                for ((label, minutes) in SPANS) {
+                    OutlinedButton(
+                        onClick = {
+                            val until = Instant.now().plus(Duration.ofMinutes(minutes))
+                            onPress("Record $label") { host, token ->
+                                CaptureApi.record(host, token, until)
+                            }
+                        },
+                        modifier = Modifier.weight(1f),
+                    ) { Text(label) }
+                }
                 OutlinedButton(
-                    onClick = onPause,
-                    modifier = Modifier.fillMaxWidth(),
-                ) {
-                    Text("Pause recording")
-                }
+                    onClick = {
+                        pickUntil(context) { until ->
+                            onPress("Record until $until") { host, token ->
+                                CaptureApi.record(host, token, until)
+                            }
+                        }
+                    },
+                    modifier = Modifier.weight(1f),
+                ) { Text("Until…") }
             }
         }
     }
+}
+
+/** Ask for a time of day; the next one after now, as the web app's "Until". */
+private fun pickUntil(context: Context, onPicked: (Instant) -> Unit) {
+    TimePickerDialog(
+        context,
+        { _, hour, minute ->
+            onPicked(nextTimeOfDay(hour, minute, ZonedDateTime.now(ZoneId.systemDefault())))
+        },
+        LocalTime.now().plusHours(1).hour,
+        0,
+        true,
+    ).show()
 }
 
 /** The recorders: which are streaming, and when each was last active. */

@@ -116,7 +116,7 @@ in
   # No recall-api: the Mac serves no UI. Isis (recall.xinutec.org) is the system of
   # record and the only UI; the Mac records, runs the models and keeps the master
   # archive. Isis cannot dial the Mac, so every path between them starts here: the
-  # runners poll recalld's queue, and recall-capture-mirror polls the pause state.
+  # runners poll recalld's queue, and recall-capture-mirror polls the recording window.
 
   # Audio ingest for the phone mics, one port. Interactive for the same reason as
   # capture: it pumps the phones' live PCM into ffmpeg in real time, and a
@@ -129,7 +129,7 @@ in
   };
 
   # LAN fallback for the mic heartbeat (#888), separate from the capture agents: a
-  # pause closes the ingest listener, and during a pause the heartbeat is the only
+  # capture being off closes the ingest listener, and then the heartbeat is the only
   # signal left.
   #
   # No `--root`: it only forwards. A second store of beats would let two places
@@ -382,9 +382,9 @@ in
     };
   };
 
-  # Mirrors the pause set on Isis onto this Mac. Isis holds the wanted capture state
-  # but cannot dial the Mac, so the Mac polls every ~5 s and a pause takes hold
-  # within seconds. Inert until RECALL_SYNC_TOKEN is set.
+  # Mirrors the recording window set on Isis onto this Mac's gate file. Isis holds
+  # the wanted window but cannot dial the Mac, so the Mac polls every ~5 s and a
+  # press takes hold within seconds. Inert until RECALL_SYNC_TOKEN is set.
   #
   # It acts only when the wanted state changes, tracked in the `capture_intent_mirrored` marker, so a restarted agent
   # carries on from where the last one stopped.

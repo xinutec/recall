@@ -82,7 +82,7 @@ pub fn fetch(
 pub fn live_checks(
     fetched: &Result<LiveHealth, String>,
     now: DateTime<Utc>,
-    paused_until: Option<DateTime<Utc>>,
+    gate: Option<audiocore::capture::Window>,
 ) -> Vec<Check> {
     let health = match fetched {
         Ok(health) => health,
@@ -108,7 +108,7 @@ pub fn live_checks(
                 .as_deref()
                 .and_then(audiocore::instant::parse_utc),
             now,
-            paused_until,
+            gate,
             capture::live_quiet(),
             WindowAudio {
                 delivered_s: health.delivered_s,

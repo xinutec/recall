@@ -86,10 +86,10 @@
             </intent-filter>
         </receiver>
 
-        <!-- Posts the "recording resumes soon" heads-up when ResumeWarning's alarm
-             fires. Internal (the alarm PendingIntent is our own), so not exported. -->
+        <!-- Posts the "recording stops soon" heads-up when EndWarning's alarm fires.
+             Internal (the alarm PendingIntent is our own), so not exported. -->
         <receiver
-            android:name=".ResumeWarningReceiver"
+            android:name=".EndWarningReceiver"
             android:exported="false" />
 
     </application>

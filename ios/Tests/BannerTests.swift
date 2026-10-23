@@ -3,7 +3,7 @@ import XCTest
 @testable import RecallMic
 
 final class BannerTests: XCTestCase {
-    // The web app's banner, which the phones match exactly.
+    // The web app's banner (`app.html`), which the phones match exactly.
     private let london = TimeZone(identifier: "Europe/London")!
 
     private func date(_ iso: String) -> Date {
@@ -11,34 +11,42 @@ final class BannerTests: XCTestCase {
         return f.date(from: iso)!
     }
 
-    func testMatchesWebsitePhrasingWithHoursAndMinutes() {
-        let until = date("2026-07-04T07:30:00Z")  // 08:30 BST
+    private var end: Date { date("2026-07-04T07:30:00Z") }  // 08:30 BST
+
+    func testAnOpenWindowSaysItsEndAndTheTimeLeft() {
         let now = date("2026-07-04T02:07:00Z")  // 03:07 BST
         XCTAssertEqual(
-            "Recording paused — auto-resumes in 5h 23m (by 2026-07-04 08:30)",
-            Banner.pausedText(pausedUntil: until, now: now, timeZone: london))
+            "Recording until 08:30 · 5h 23m left",
+            Banner.windowText(.record(until: end), now: now, timeZone: london))
     }
 
-    func testMinutesOnlyWhenUnderAnHour() {
-        let until = date("2026-07-04T07:30:00Z")
-        let now = date("2026-07-04T07:07:00Z")
+    func testAnEndOnAnotherDayCarriesItsDate() {
+        let now = date("2026-07-03T22:00:00Z")  // 23:00 BST, the day before
         XCTAssertEqual(
-            "Recording paused — auto-resumes in 23m (by 2026-07-04 08:30)",
-            Banner.pausedText(pausedUntil: until, now: now, timeZone: london))
+            "Paused · the window ends 2026-07-04 08:30",
+            Banner.windowText(.hold(until: end), now: now, timeZone: london))
     }
 
-    func testReadsNowWhenDeadlinePassed() {
-        // A past resume time reads "now", as on the web.
-        let until = date("2026-07-04T07:30:00Z")
-        let now = date("2026-07-04T09:00:00Z")
+    func testOffAndAFaultSaySo() {
+        let now = date("2026-07-04T02:07:00Z")
+        XCTAssertEqual("Not recording", Banner.windowText(.off, now: now, timeZone: london))
+        // A window past its end is off.
         XCTAssertEqual(
-            "Recording paused — auto-resumes in now (by 2026-07-04 08:30)",
-            Banner.pausedText(pausedUntil: until, now: now, timeZone: london))
+            "Not recording", Banner.windowText(.record(until: end), now: end, timeZone: london))
+        XCTAssertEqual(
+            "Recording with no window set — a recorder fault",
+            Banner.windowText(nil, now: now, timeZone: london))
     }
 
-    func testBareWhenNoResumeTime() {
-        let now = date("2026-07-04T09:00:00Z")
-        XCTAssertEqual(
-            "Recording paused", Banner.pausedText(pausedUntil: nil, now: now, timeZone: london))
+    func testTheDesiredHalfNamesTheWindow() {
+        var state = CaptureState(running: false, reachable: true)
+        XCTAssertEqual(.off, state.desiredWindow)
+        state.desiredUntil = end
+        XCTAssertEqual(.record(until: end), state.desiredWindow)
+        state.desiredHeld = true
+        XCTAssertEqual(.hold(until: end), state.desiredWindow)
+        state.desiredUntil = nil
+        state.desiredRunning = true
+        XCTAssertNil(state.desiredWindow)
     }
 }

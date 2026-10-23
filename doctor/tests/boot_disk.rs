@@ -1,16 +1,13 @@
-//! launchd and the pause file. The pause file is on the archive volume, so the
-//! reporting process learns it from the child.
+//! launchd and the capture gate. The gate file is on the archive volume, so
+//! the reporting process learns it from the child.
 
-use doctor::agents::{PAUSE_FILE, agent_health, paused_until};
+use audiocore::capture::{GATE_FILE, Window};
+use doctor::agents::{agent_health, gate};
 
 #[test]
-fn the_child_reports_the_pause_so_the_parent_need_not_read_the_volume() {
+fn the_child_reports_the_gate_so_the_parent_need_not_read_the_volume() {
     let dir = tempfile::tempdir().unwrap();
-    std::fs::write(
-        dir.path().join(PAUSE_FILE),
-        "2026-09-08T19:11:22.164504+00:00\n",
-    )
-    .unwrap();
+    std::fs::write(dir.path().join(GATE_FILE), "hold 2026-09-08T19:11:22Z\n").unwrap();
     let out = std::process::Command::new(env!("CARGO_BIN_EXE_doctor"))
         .arg("--out")
         .arg(dir.path())
@@ -24,41 +21,24 @@ fn the_child_reports_the_pause_so_the_parent_need_not_read_the_volume() {
     );
     let collected: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
     assert_eq!(
-        collected["paused_until"], "2026-09-08T19:11:22.164504+00:00",
+        collected["window"], "hold 2026-09-08T19:11:22Z",
         "{collected}"
     );
 }
 
 #[test]
-fn no_pause_file_is_not_paused() {
+fn a_gate_file_reads_back_as_its_window() {
     let dir = tempfile::tempdir().unwrap();
-    assert!(paused_until(dir.path()).is_none());
+    std::fs::write(dir.path().join(GATE_FILE), "off\n").unwrap();
+    assert_eq!(gate(dir.path()), Some(Window::Off));
 }
 
 #[test]
-fn a_pause_file_reads_back_as_its_instant() {
+fn no_gate_file_or_an_unreadable_one_is_a_fault() {
     let dir = tempfile::tempdir().unwrap();
-    std::fs::write(
-        dir.path().join(PAUSE_FILE),
-        "2026-09-08T19:11:22.164504+00:00\n",
-    )
-    .unwrap();
-    assert_eq!(paused_until(dir.path()).unwrap().timestamp(), 1_788_894_682);
-}
-
-#[test]
-fn a_naive_pause_timestamp_is_read_as_utc_rather_than_refused() {
-    // Refusing it would read as not paused.
-    let dir = tempfile::tempdir().unwrap();
-    std::fs::write(dir.path().join(PAUSE_FILE), "2026-09-08T19:11:22").unwrap();
-    assert_eq!(paused_until(dir.path()).unwrap().timestamp(), 1_788_894_682);
-}
-
-#[test]
-fn an_unparseable_pause_file_is_not_paused() {
-    let dir = tempfile::tempdir().unwrap();
-    std::fs::write(dir.path().join(PAUSE_FILE), "soon").unwrap();
-    assert!(paused_until(dir.path()).is_none());
+    assert_eq!(gate(dir.path()), None);
+    std::fs::write(dir.path().join(GATE_FILE), "soon").unwrap();
+    assert_eq!(gate(dir.path()), None);
 }
 
 #[test]

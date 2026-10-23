@@ -11,8 +11,7 @@ struct RecallMicApp: App {
                 state: controller.state,
                 onStart: { controller.start() },
                 onStop: { controller.stop() },
-                onPause: { controller.pauseHousehold() },  // also used by "Still away (24h)"
-                onResume: { controller.resumeHousehold() },
+                onPress: { controller.press($0) },
                 onHostChanged: { controller.restartPolling() }
             )
             .onAppear { controller.onLaunch() }
@@ -26,7 +25,7 @@ struct RecallMicApp: App {
 }
 
 /// Owns the state and the stream client, polls Isis, and wires Start/Stop and the
-/// household pause. iOS cannot start an app at boot, so streaming resumes when the app
+/// recording window. iOS cannot start an app at boot, so streaming resumes when the app
 /// is next opened, if it was enabled.
 @MainActor
 final class RecallController: ObservableObject {
@@ -98,14 +97,19 @@ final class RecallController: ObservableObject {
         return sent ? .sent : .failed
     }
 
-    // MARK: household pause (control plane)
+    // MARK: the recording window (control plane)
 
-    func pauseHousehold() {
-        Task { state.capture = await CaptureApi.pause(host: Prefs.controlHost) }
-    }
-
-    func resumeHousehold() {
-        Task { state.capture = await CaptureApi.resume(host: Prefs.controlHost) }
+    func press(_ press: Press) {
+        let host = Prefs.controlHost
+        Task {
+            state.capture =
+                switch press {
+                case .record(let until): await CaptureApi.record(host: host, until: until)
+                case .stop: await CaptureApi.stop(host: host)
+                case .pause: await CaptureApi.pause(host: host)
+                case .unpause: await CaptureApi.unpause(host: host)
+                }
+        }
     }
 
     // MARK: polling, only while the UI is visible: the capture state by long poll,

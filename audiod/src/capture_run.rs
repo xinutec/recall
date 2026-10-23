@@ -8,8 +8,8 @@
 //! silence or rotation stalls.
 
 use crate::events;
+use crate::gate;
 use crate::meter::{SILENCE_PEAK, StreamMeter};
-use crate::pause;
 use crate::segmenter::{CaptureConfig, build_segment_argv, segment_output_pattern};
 use audiocore::decode::decode_native_s16;
 use audiocore::devices::Heartbeat;
@@ -31,7 +31,7 @@ const PUMP_CHUNK_BYTES: usize = 65536;
 /// Grace for ffmpeg to finalise the current segment on a pause before
 /// force-killing, so a pause never leaves a truncated segment.
 const TERM_GRACE: Duration = Duration::from_secs(10);
-/// How often the pipe re-checks the pause while running / while parked.
+/// How often the pipe re-checks the gate while running / while parked.
 const STOP_POLL: Duration = Duration::from_secs(1);
 
 /// Which program opens the device: sox on the Mac (`CoreAudio`), ffmpeg on
@@ -155,7 +155,7 @@ fn starts_after(name: &str, cutoff: DateTime<Utc>) -> bool {
 /// Why a `record` run ended; the caller's respawn/park decision hangs on it.
 #[derive(Debug, PartialEq, Eq, Clone, Copy)]
 pub enum Ended {
-    /// The pause file stopped it; park and resume later.
+    /// The gate stopped it; park and resume later.
     Paused,
     /// Producer/segmenter ended on their own (device gone, wedge cycled, EOF).
     ProducerEnded,
@@ -333,7 +333,7 @@ pub fn record(
             }
             Ok(None) => {}
         }
-        if pause::is_paused(root, Utc::now()) {
+        if !gate::records(root, Utc::now()) {
             // Close the producer first, then let the segmenter finalise the
             // current segment on the resulting EOF, so no audio is lost.
             let _ = producer.kill();
@@ -448,7 +448,7 @@ pub fn serve_paused_aware(
         spawn_beat(source_id, url, mic_ok.clone());
     }
     loop {
-        while pause::is_paused(root, Utc::now()) {
+        while !gate::records(root, Utc::now()) {
             std::thread::sleep(STOP_POLL);
         }
         events::record(root, events::RESUME, source_id, None);

@@ -1,12 +1,13 @@
 //! The verdicts: the roll-up, recording, the transcription pulse, the live
 //! tier, the archive's reachability and the agents.
 
+use audiocore::capture::Window;
 use chrono::{DateTime, Utc};
 use doctor::archive::{self, archive_check};
 use doctor::capture::{
-    Beat, Recorder, WindowAudio, agent_checks, capture_checks, live_check, live_lag_check,
-    live_lag_slow, live_lag_window, live_quiet, silent_after, worker_check, worker_slow,
-    worker_stopped,
+    Beat, Recorder, WindowAudio, agent_checks, capture_checks, gate_check, live_check,
+    live_lag_check, live_lag_slow, live_lag_window, live_quiet, silent_after, worker_check,
+    worker_slow, worker_stopped,
 };
 use doctor::check::{Verdict, worst};
 use doctor::source::SourceKind;
@@ -96,31 +97,62 @@ fn no_recorders_at_all_is_a_fault_not_an_empty_pass() {
 }
 
 #[test]
-fn a_pause_collapses_capture_to_one_skip_that_names_the_resume() {
-    let now = at(0);
+fn off_collapses_capture_to_one_skip() {
     let recorders = [mic("usb", SourceKind::CoreAudio, None)];
-    let checks = capture_checks(&recorders, now, Some(at(120)), silent_after());
+    let checks = capture_checks(&recorders, at(0), Some(Window::Off), silent_after());
     assert_eq!(checks.len(), 1);
     assert_eq!(checks[0].verdict, Verdict::Skip);
-    assert!(checks[0].observed.starts_with("paused until 2026-09-"));
     assert!(
-        !checks[0].observed.contains(":22"),
-        "the resume is shown to the minute, not the second: {}",
+        checks[0].observed.starts_with("off"),
+        "{}",
         checks[0].observed
     );
 }
 
 #[test]
-fn an_elapsed_pause_is_no_pause_at_all() {
-    // The file outlives the pause; its instant decides.
-    let now = at(60);
-    let recorders = [mic("usb", SourceKind::CoreAudio, Some(at(59)))];
-    let checks = capture_checks(&recorders, now, Some(at(30)), silent_after());
-    assert!(
-        checks.len() > 1,
-        "a stale pause must not collapse the checks"
+fn a_paused_window_skips_and_names_its_end_to_the_minute() {
+    let recorders = [mic("usb", SourceKind::CoreAudio, None)];
+    let checks = capture_checks(
+        &recorders,
+        at(0),
+        Some(Window::Hold(at(120))),
+        silent_after(),
     );
-    assert_eq!(find(&checks, "usb").verdict, Verdict::Pass);
+    assert_eq!(checks.len(), 1);
+    assert_eq!(checks[0].verdict, Verdict::Skip);
+    assert!(
+        checks[0].observed.contains("ends 2026-09-"),
+        "{}",
+        checks[0].observed
+    );
+    assert!(
+        !checks[0].observed.contains(":22"),
+        "the end is shown to the minute, not the second: {}",
+        checks[0].observed
+    );
+}
+
+#[test]
+fn an_open_window_or_a_fault_grades_every_mic() {
+    let recorders = [mic("usb", SourceKind::CoreAudio, Some(at(59)))];
+    for gate in [Some(Window::Record(at(120))), None] {
+        let checks = capture_checks(&recorders, at(60), gate, silent_after());
+        assert!(checks.len() > 1, "{gate:?} must not collapse the checks");
+        assert_eq!(find(&checks, "usb").verdict, Verdict::Pass);
+    }
+}
+
+#[test]
+fn a_gate_that_does_not_read_fails_and_one_that_does_passes() {
+    assert_eq!(gate_check(None, at(0)).verdict, Verdict::Fail);
+    let open = gate_check(Some(Window::Record(at(120))), at(0));
+    assert_eq!(open.verdict, Verdict::Pass);
+    assert!(
+        open.observed.starts_with("recording until"),
+        "{}",
+        open.observed
+    );
+    assert_eq!(gate_check(Some(Window::Off), at(0)).verdict, Verdict::Pass);
 }
 
 #[test]
@@ -149,7 +181,7 @@ fn live_is_graded_on_what_it_produced_not_on_being_up() {
         Verdict::Fail
     );
     assert_eq!(
-        live_check(Some(at(0)), now, Some(at(120)), live_quiet(), TALKING).verdict,
+        live_check(Some(at(0)), now, Some(Window::Off), live_quiet(), TALKING).verdict,
         Verdict::Skip
     );
 }

@@ -3,10 +3,12 @@
 //! this reads segment files, which appear every 60 seconds.
 //!
 //! A silent always-on mic fails; a silent phone warns (it may be out, flat or
-//! closed); every source silent at once fails. A pause skips.
+//! closed); every source silent at once fails. A shut gate (off, or a paused
+//! window) skips; a gate that does not read fails, and records.
 
 use crate::check::{Check, Verdict, check};
 use crate::source::SourceKind;
+use audiocore::capture::Window;
 use chrono::{DateTime, Duration, Utc};
 use std::path::Path;
 
@@ -35,30 +37,49 @@ fn to_the_minute(when: DateTime<Utc>) -> String {
     when.format("%Y-%m-%dT%H:%M%:z").to_string()
 }
 
+/// Why the gate keeps the mics quiet at `now`, or `None` when they should
+/// record: an open window, or a fault.
+fn shut(gate: Option<Window>, now: DateTime<Utc>) -> Option<String> {
+    match gate?.at(now) {
+        Window::Record(_) => None,
+        Window::Off => Some("off: no recording window open".to_owned()),
+        Window::Hold(until) => Some(format!("paused; the window ends {}", to_the_minute(until))),
+    }
+}
+
+/// The gate itself: a file that does not read fails, since it records with
+/// nobody having asked.
+pub fn gate_check(gate: Option<Window>, now: DateTime<Utc>) -> Check {
+    let expected = "off, or a window a person opened";
+    let Some(window) = gate else {
+        return check(
+            "capture",
+            "gate",
+            Verdict::Fail,
+            "the gate file is missing or does not read — recording",
+            expected,
+        )
+        .build();
+    };
+    let observed = match window.at(now) {
+        Window::Record(until) => format!("recording until {}", to_the_minute(until)),
+        _ => shut(gate, now).unwrap_or_default(),
+    };
+    check("capture", "gate", Verdict::Pass, observed, expected).build()
+}
+
 /// One check per recorder, and a summary. Pure; [`recorders_on_disk`] reads
 /// the disk.
 pub fn capture_checks(
     recorders: &[Recorder],
     now: DateTime<Utc>,
-    paused_until: Option<DateTime<Utc>>,
+    gate: Option<Window>,
     silent_after: Duration,
 ) -> Vec<Check> {
     let expected = format!("audio within {:.0} min", minutes(silent_after));
 
-    if let Some(until) = paused_until
-        && until > now
-    {
-        // Shown, not passed: a forgotten pause loses days.
-        return vec![
-            check(
-                "capture",
-                "recording",
-                Verdict::Skip,
-                format!("paused until {}", to_the_minute(until)),
-                expected,
-            )
-            .build(),
-        ];
+    if let Some(why) = shut(gate, now) {
+        return vec![check("capture", "recording", Verdict::Skip, why, expected).build()];
     }
 
     let mut checks = Vec::new();
@@ -248,13 +269,13 @@ pub fn live_lag_check(median_seconds: Option<f64>, slow: Duration, unmeasured: &
     .build()
 }
 
-/// Is live transcription producing turns? A pause skips, and so does a window
+/// Is live transcription producing turns? A shut gate skips, and so does a stretch
 /// measured to have no speech: blaming the tier for a quiet house would teach
 /// people to ignore the check.
 pub fn live_check(
     newest_turn: Option<DateTime<Utc>>,
     now: DateTime<Utc>,
-    paused_until: Option<DateTime<Utc>>,
+    gate: Option<Window>,
     quiet: Duration,
     recent: WindowAudio,
 ) -> Check {
@@ -262,14 +283,12 @@ pub fn live_check(
         "a live turn within {:.0} min",
         quiet.num_seconds() as f64 / 60.0
     );
-    if let Some(until) = paused_until
-        && until > now
-    {
+    if let Some(why) = shut(gate, now) {
         return check(
             "capture",
             "live transcription",
             Verdict::Skip,
-            format!("paused until {}", to_the_minute(until)),
+            why,
             expected,
         )
         .build();

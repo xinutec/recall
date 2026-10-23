@@ -1,5 +1,5 @@
 //! Whether the server answers at all. Every other server check skips on no
-//! answer, and with capture paused nothing else goes red: recall was down for
+//! answer, and with capture off nothing else goes red: recall was down for
 //! 26 minutes with every run healthy. So when it last answered is kept on the
 //! boot disk, and a long silence fails.
 

@@ -1,13 +1,21 @@
 //! The capture-control state machine, and the fingerprint every client's
 //! long-poll depends on.
 
-use audiocore::capture::CaptureState;
-use chrono::{DateTime, Utc};
-use recalld::capture::{self, fleet_capture_state, intent_until, reported_state};
+use audiocore::capture::{CaptureState, Window};
+use chrono::{DateTime, Duration, Utc};
+use recalld::capture::{
+    self, Press, Whose, fleet_capture_state, intent_of, press, record_control_origin,
+    reported_state,
+};
 use rusqlite::Connection;
 
 fn at(offset_s: i64) -> DateTime<Utc> {
     DateTime::from_timestamp(1_788_894_682 + offset_s, 0).expect("a real instant")
+}
+
+/// `at(offset_s)` as a window's spelling of it.
+fn iso(offset_s: i64) -> String {
+    at(offset_s).to_rfc3339_opts(chrono::SecondsFormat::Secs, true)
 }
 
 /// The meaning plane, whose settings table holds all this state.
@@ -21,103 +29,125 @@ fn store(rows: &[(&str, &str)]) -> Connection {
     conn
 }
 
-// Mirrors CaptureState's own field order; the bools are the contract.
-#[expect(
-    clippy::fn_params_excessive_bools,
-    reason = "mirrors CaptureState's field order (above)"
-)]
-fn state(
-    running: bool,
-    paused: Option<&str>,
-    desired_running: bool,
-    desired: Option<&str>,
-    settled: bool,
-    mic: bool,
-) -> CaptureState {
-    capture::stamped(CaptureState {
-        running,
-        paused_until: paused.map(ToOwned::to_owned),
-        desired_running,
-        desired_paused_until: desired.map(ToOwned::to_owned),
-        settled,
-        mic_reachable: mic,
+fn base() -> CaptureState {
+    CaptureState {
+        running: false,
+        until: None,
+        held: false,
+        desired_running: false,
+        desired_until: None,
+        desired_held: false,
+        settled: true,
+        mic_reachable: true,
         state_token: String::new(),
-    })
+    }
 }
 
 #[test]
 fn the_token_changes_when_any_graded_field_does() {
-    let base = state(true, None, true, None, true, true);
+    let stamped = capture::stamped(base());
+    let until = Some(iso(60));
     for other in [
-        state(false, None, true, None, true, true),
-        state(
-            true,
-            Some("2026-09-08T19:11:22+00:00"),
-            true,
-            None,
-            true,
-            true,
-        ),
-        state(true, None, false, None, true, true),
-        state(
-            true,
-            None,
-            true,
-            Some("2026-09-08T19:11:22+00:00"),
-            true,
-            true,
-        ),
-        state(true, None, true, None, false, true),
-        state(true, None, true, None, true, false),
+        CaptureState {
+            running: true,
+            ..base()
+        },
+        CaptureState {
+            until: until.clone(),
+            ..base()
+        },
+        CaptureState {
+            held: true,
+            ..base()
+        },
+        CaptureState {
+            desired_running: true,
+            ..base()
+        },
+        CaptureState {
+            desired_until: until.clone(),
+            ..base()
+        },
+        CaptureState {
+            desired_held: true,
+            ..base()
+        },
+        CaptureState {
+            settled: false,
+            ..base()
+        },
+        CaptureState {
+            mic_reachable: false,
+            ..base()
+        },
     ] {
         assert_ne!(
-            base.state_token, other.state_token,
+            stamped.state_token,
+            capture::stamped(other.clone()).state_token,
             "a client would never see this change: {other:?}"
         );
     }
 }
 
+// --- reading the intent -----------------------------------------------------
+
 #[test]
-fn no_intent_is_running() {
+fn nobody_having_pressed_anything_is_off() {
     let conn = store(&[]);
-    assert_eq!(intent_until(&conn, at(0)).unwrap(), None);
-    // A blank value is how a resume is recorded, and must read the same way.
-    let conn = store(&[("capture_intent", "")]);
-    assert_eq!(intent_until(&conn, at(0)).unwrap(), None);
-}
-
-#[test]
-fn an_elapsed_intent_reads_as_running() {
-    // A pause past its deadline reads as running.
-    let conn = store(&[("capture_intent", "2026-09-08T19:11:22+00:00")]);
-    assert_eq!(intent_until(&conn, at(1)).unwrap(), None);
-    assert!(intent_until(&conn, at(-1)).unwrap().is_some());
-}
-
-#[test]
-fn an_unparseable_intent_reads_as_running_rather_than_a_pause_nobody_can_clear() {
-    let conn = store(&[("capture_intent", "soon")]);
-    assert_eq!(intent_until(&conn, at(0)).unwrap(), None);
-}
-
-#[test]
-fn the_intent_keeps_its_stored_spelling() {
-    // `settled` compares this string to the Mac's echo.
-    let conn = store(&[("capture_intent", "2026-09-08T19:11:22.164504+00:00")]);
     assert_eq!(
-        intent_until(&conn, at(-1)).unwrap().as_deref(),
-        Some("2026-09-08T19:11:22.164504+00:00")
+        intent_of(&conn, &Whose::House, at(0)).unwrap(),
+        Some(Window::Off)
     );
+    let state = fleet_capture_state(&conn, at(0)).unwrap();
+    assert!(!state.desired_running);
+}
+
+#[test]
+fn a_window_records_until_its_end_and_then_is_off() {
+    let conn = store(&[("capture_intent", &format!("record {}", iso(60)))]);
+    assert_eq!(
+        intent_of(&conn, &Whose::House, at(0)).unwrap(),
+        Some(Window::Record(at(60)))
+    );
+    assert_eq!(
+        intent_of(&conn, &Whose::House, at(60)).unwrap(),
+        Some(Window::Off)
+    );
+}
+
+/// A stored intent that does not read is a fault, and a fault records.
+#[test]
+fn an_unparseable_intent_is_a_fault_that_records() {
+    let conn = store(&[("capture_intent", "soon")]);
+    assert_eq!(intent_of(&conn, &Whose::House, at(0)).unwrap(), None);
+    let state = fleet_capture_state(&conn, at(0)).unwrap();
+    assert!(state.desired_running);
+    assert_eq!(
+        state.desired_until, None,
+        "recording with no end: the fault"
+    );
+}
+
+// --- the Mac's confirmation -------------------------------------------------
+
+fn reported(window: &str) -> Vec<(&'static str, String)> {
+    vec![
+        ("capture_reported_running", "1".to_owned()),
+        ("capture_reported_window", window.to_owned()),
+        ("capture_reported_at", iso(0)),
+    ]
+}
+
+fn store_owned(rows: &[(&str, String)]) -> Connection {
+    let rows: Vec<(&str, &str)> = rows.iter().map(|(k, v)| (*k, v.as_str())).collect();
+    store(&rows)
 }
 
 #[test]
 fn a_stale_report_means_the_mic_is_not_reachable() {
     // Past the 30 s freshness window, intent is shown as intent, never as
     // confirmation.
-    let conn = store(&[
-        ("capture_reported_running", "1"),
-        ("capture_reported_at", "2026-09-08T19:11:22+00:00"),
-    ]);
+    let conn = store_owned(&reported("off"));
     assert!(reported_state(&conn, at(29)).unwrap().is_some());
     assert!(reported_state(&conn, at(31)).unwrap().is_none());
 
@@ -127,78 +157,64 @@ fn a_stale_report_means_the_mic_is_not_reachable() {
 }
 
 #[test]
-fn a_confirmed_pause_is_settled() {
-    let when = "2026-09-08T19:11:32+00:00";
-    let conn = store(&[
-        ("capture_intent", when),
-        ("capture_reported_running", "0"),
-        ("capture_reported_paused_until", when),
-        ("capture_reported_at", "2026-09-08T19:11:22+00:00"),
-    ]);
-    let state = fleet_capture_state(&conn, at(1)).unwrap();
-    assert!(!state.running);
-    assert!(!state.desired_running);
+fn a_confirmed_window_is_settled() {
+    let window = format!("record {}", iso(60));
+    let mut rows = reported(&window);
+    rows.push(("capture_intent", window.clone()));
+    let state = fleet_capture_state(&store_owned(&rows), at(1)).unwrap();
+    assert!(state.running && state.desired_running);
+    assert_eq!(state.until.as_deref(), Some(iso(60).as_str()));
     assert!(state.settled);
     assert!(state.mic_reachable);
 }
 
 #[test]
-fn a_pause_the_mac_has_not_applied_yet_is_unsettled() {
-    // Renders as "Pausing…": desired has flipped, confirmed lags.
-    let conn = store(&[
-        ("capture_intent", "2026-09-08T19:11:32+00:00"),
-        ("capture_reported_running", "1"),
-        ("capture_reported_at", "2026-09-08T19:11:22+00:00"),
-    ]);
-    let state = fleet_capture_state(&conn, at(1)).unwrap();
-    assert!(
-        state.running,
-        "the mic's confirmed word is still 'recording'"
-    );
-    assert!(!state.desired_running);
+fn a_window_the_mac_has_not_applied_yet_is_unsettled() {
+    // Renders as "Starting…": desired has flipped, confirmed lags.
+    let mut rows = reported("off");
+    rows.push(("capture_intent", format!("record {}", iso(60))));
+    let state = fleet_capture_state(&store_owned(&rows), at(1)).unwrap();
+    assert!(!state.running, "the mic's confirmed word is still off");
+    assert!(state.desired_running);
     assert!(!state.settled);
 }
 
 #[test]
-fn extending_a_pause_reads_as_transitioning_until_applied() {
-    // A snooze changes the resume-by while both sides agree on "paused";
-    // comparing only `running` would claim the new deadline as applied.
-    let conn = store(&[
-        ("capture_intent", "2026-09-08T20:11:22+00:00"),
-        ("capture_reported_running", "0"),
-        ("capture_reported_paused_until", "2026-09-08T19:11:32+00:00"),
-        ("capture_reported_at", "2026-09-08T19:11:22+00:00"),
-    ]);
-    let state = fleet_capture_state(&conn, at(1)).unwrap();
-    assert!(!state.settled, "the Mac is still on the OLD resume-by");
-    assert_eq!(
-        state.paused_until.as_deref(),
-        Some("2026-09-08T19:11:32+00:00")
-    );
-    assert_eq!(
-        state.desired_paused_until.as_deref(),
-        Some("2026-09-08T20:11:22+00:00")
-    );
+fn moving_the_end_reads_as_transitioning_until_applied() {
+    // Both sides record; only the end differs, and that must not read settled.
+    let mut rows = reported(&format!("record {}", iso(60)));
+    rows.push(("capture_intent", format!("record {}", iso(120))));
+    let state = fleet_capture_state(&store_owned(&rows), at(1)).unwrap();
+    assert!(!state.settled, "the Mac is still on the OLD end");
+    assert_eq!(state.until.as_deref(), Some(iso(60).as_str()));
+    assert_eq!(state.desired_until.as_deref(), Some(iso(120).as_str()));
 }
 
 #[test]
-fn a_confirmed_resume_is_settled_without_comparing_deadlines() {
-    // Running has no resume-by to agree about; requiring one would leave a
-    // resume transitioning for ever.
-    let conn = store(&[
-        ("capture_intent", ""),
-        ("capture_reported_running", "1"),
-        ("capture_reported_paused_until", "2026-09-08T19:11:32+00:00"),
-        ("capture_reported_at", "2026-09-08T19:11:22+00:00"),
-    ]);
-    let state = fleet_capture_state(&conn, at(1)).unwrap();
+fn a_window_both_sides_saw_end_is_settled_off() {
+    // Nothing writes at the end: both read off from the same instant.
+    let window = format!("record {}", iso(60));
+    let mut rows = reported(&window);
+    rows.push(("capture_intent", window.clone()));
+    // Reported just before the end, read just after: still fresh.
+    rows[2].1 = iso(50);
+    let state = fleet_capture_state(&store_owned(&rows), at(61)).unwrap();
+    assert!(!state.desired_running && !state.running);
     assert!(state.settled);
-    assert!(state.running);
 }
 
-// --- the write half: intent, and the audit of who asked ---------------------
+/// The Mac's gate not reading is its fault: it records, and says so.
+#[test]
+fn a_mac_whose_gate_does_not_read_reports_recording_with_no_end() {
+    let mut rows = reported("");
+    rows.push(("capture_intent", "off".to_owned()));
+    let state = fleet_capture_state(&store_owned(&rows), at(1)).unwrap();
+    assert!(state.running);
+    assert_eq!(state.until, None);
+    assert!(!state.settled, "off was asked for and is not applied");
+}
 
-use recalld::capture::{compute_resume_by, intent_pause, intent_resume, record_control_origin};
+// --- the write half: presses, and the audit of who asked --------------------
 
 fn writable() -> Connection {
     let conn = Connection::open_in_memory().unwrap();
@@ -207,97 +223,93 @@ fn writable() -> Connection {
 }
 
 #[test]
-fn a_pause_is_always_bounded() {
-    // A pause is never indefinite.
-    let now = at(0);
-    assert_eq!(
-        compute_resume_by(now, None),
-        now + chrono::Duration::hours(24)
-    );
-    // A request longer than 24 h is clamped.
-    assert_eq!(
-        compute_resume_by(now, Some(60 * 48)),
-        now + chrono::Duration::hours(24)
-    );
-    assert_eq!(
-        compute_resume_by(now, Some(30)),
-        now + chrono::Duration::minutes(30)
-    );
-}
-
-#[test]
-fn a_negative_pause_clamps_to_now_rather_than_minting_an_elapsed_one() {
-    let now = at(0);
-    assert_eq!(compute_resume_by(now, Some(-5)), now);
-}
-
-#[test]
-fn pausing_then_resuming_round_trips_through_the_settings_row() {
+fn record_opens_a_window_capped_at_a_day() {
     let conn = writable();
-    let iso = intent_pause(&conn, at(0), Some(30)).unwrap();
-    // The stored spelling comes back; the Mac's echo is compared to it.
+    let opened = press(
+        &conn,
+        &Whose::House,
+        at(0),
+        Press::Record(at(0) + Duration::hours(30)),
+    )
+    .unwrap();
+    assert_eq!(opened, Window::Record(at(0) + Duration::hours(24)));
     assert_eq!(
-        intent_until(&conn, at(0)).unwrap().as_deref(),
-        Some(iso.as_str())
+        intent_of(&conn, &Whose::House, at(0)).unwrap(),
+        Some(opened)
     );
-
-    intent_resume(&conn).unwrap();
-    assert_eq!(intent_until(&conn, at(0)).unwrap(), None);
 }
 
 #[test]
-fn a_resume_leaves_a_row_rather_than_deleting_it() {
-    // "Resumed" is a stored value, not an absence.
+fn record_until_a_time_already_past_is_off() {
     let conn = writable();
-    intent_pause(&conn, at(0), Some(30)).unwrap();
-    intent_resume(&conn).unwrap();
-    let raw: String = conn
-        .query_row(
-            "SELECT value FROM settings WHERE key='capture_intent'",
-            [],
-            |r| r.get(0),
-        )
-        .unwrap();
-    assert_eq!(raw, "");
+    assert_eq!(
+        press(&conn, &Whose::House, at(0), Press::Record(at(-60))).unwrap(),
+        Window::Off
+    );
 }
 
 #[test]
-fn a_fresh_pause_reads_as_unsettled_until_the_mac_confirms() {
-    // The press moves only the intent: "Pausing…" until the Mac confirms.
+fn pause_and_unpause_keep_the_end_and_stop_ends_it() {
     let conn = writable();
-    intent_pause(&conn, at(0), Some(30)).unwrap();
-    let state = fleet_capture_state(&conn, at(0)).unwrap();
-    assert!(!state.desired_running);
-    assert!(!state.settled);
-    // Nothing has been heard from the Mac.
-    assert!(!state.mic_reachable);
+    press(&conn, &Whose::House, at(0), Press::Record(at(600))).unwrap();
+    assert_eq!(
+        press(&conn, &Whose::House, at(1), Press::Pause).unwrap(),
+        Window::Hold(at(600))
+    );
+    let held = fleet_capture_state(&conn, at(1)).unwrap();
+    assert!(!held.desired_running && held.desired_held);
+    assert_eq!(
+        press(&conn, &Whose::House, at(2), Press::Unpause).unwrap(),
+        Window::Record(at(600))
+    );
+    assert_eq!(
+        press(&conn, &Whose::House, at(3), Press::Stop).unwrap(),
+        Window::Off
+    );
+}
+
+#[test]
+fn pausing_when_off_or_after_a_fault_stays_off() {
+    let conn = writable();
+    assert_eq!(
+        press(&conn, &Whose::House, at(0), Press::Pause).unwrap(),
+        Window::Off
+    );
+    assert_eq!(
+        press(&conn, &Whose::House, at(0), Press::Unpause).unwrap(),
+        Window::Off
+    );
+    let faulty = store(&[("capture_intent", "soon")]);
+    assert_eq!(
+        press(&faulty, &Whose::House, at(0), Press::Pause).unwrap(),
+        Window::Off
+    );
+}
+
+#[test]
+fn one_persons_window_leaves_the_houses_alone() {
+    let conn = writable();
+    let her = Whose::Person("someone".into());
+    press(&conn, &her, at(0), Press::Record(at(600))).unwrap();
+    assert_eq!(
+        intent_of(&conn, &Whose::House, at(0)).unwrap(),
+        Some(Window::Off)
+    );
+    let state = capture::capture_state_of(&conn, &her, at(0)).unwrap();
+    assert!(state.desired_running && state.running && state.settled);
 }
 
 #[test]
 fn the_audit_names_the_verb_and_the_origin() {
     let conn = writable();
-    record_control_origin(&conn, at(0), "pause", "session:someone").unwrap();
+    record_control_origin(&conn, at(0), "record", "session:someone").unwrap();
     let (kind, detail): (String, String) = conn
         .query_row("SELECT kind, detail FROM capture_events", [], |r| {
             Ok((r.get(0)?, r.get(1)?))
         })
         .unwrap();
     assert_eq!(kind, "control_request");
-    assert_eq!(detail, "pause — session:someone");
-}
-
-#[test]
-fn a_whole_second_pause_is_spelled_without_a_fraction() {
-    // `isoformat()` spelling: `...22+00:00`, not `...22.000000+00:00`; the
-    // intent is compared as text.
-    let conn = writable();
-    let iso = intent_pause(&conn, at(0), Some(30)).unwrap();
-    assert!(!iso.contains(".000000"), "{iso}");
-    assert!(iso.ends_with("+00:00"), "{iso}");
-    // A sub-second instant keeps its six digits.
-    let sub = DateTime::from_timestamp(1_788_894_682, 164_504_000).unwrap();
-    let iso = intent_pause(&conn, sub, Some(0)).unwrap();
-    assert!(iso.contains(".164504"), "{iso}");
+    assert_eq!(detail, "record — session:someone");
 }
 
 // --- the long-poll's own contract -------------------------------------------
@@ -307,7 +319,7 @@ fn an_unchanged_state_fingerprints_the_same_twice() {
     // The token is a function of the state; varying per call, every hang
     // would return at once.
     let conn = writable();
-    intent_pause(&conn, at(0), Some(30)).unwrap();
+    press(&conn, &Whose::House, at(0), Press::Record(at(1800))).unwrap();
     let a = fleet_capture_state(&conn, at(1)).unwrap();
     let b = fleet_capture_state(&conn, at(2)).unwrap();
     assert_eq!(a.state_token, b.state_token);
@@ -316,22 +328,21 @@ fn an_unchanged_state_fingerprints_the_same_twice() {
 #[test]
 fn a_press_changes_the_fingerprint_so_a_hanging_poll_wakes() {
     let conn = writable();
-    intent_resume(&conn).unwrap();
-    let running = fleet_capture_state(&conn, at(0)).unwrap();
-    intent_pause(&conn, at(0), Some(30)).unwrap();
-    let paused = fleet_capture_state(&conn, at(0)).unwrap();
-    assert_ne!(running.state_token, paused.state_token);
+    let off = fleet_capture_state(&conn, at(0)).unwrap();
+    press(&conn, &Whose::House, at(0), Press::Record(at(1800))).unwrap();
+    let on = fleet_capture_state(&conn, at(0)).unwrap();
+    assert_ne!(off.state_token, on.state_token);
 }
 
 #[test]
-fn a_pause_elapsing_changes_the_fingerprint_with_nobody_pressing_anything() {
-    // Nothing writes when a pause expires, so the handler re-derives each slice.
+fn a_window_ending_changes_the_fingerprint_with_nobody_pressing_anything() {
+    // Nothing writes when a window ends, so the handler re-derives each slice.
     let conn = writable();
-    intent_pause(&conn, at(0), Some(30)).unwrap();
+    press(&conn, &Whose::House, at(0), Press::Record(at(1800))).unwrap();
     let during = fleet_capture_state(&conn, at(60)).unwrap();
-    let after = fleet_capture_state(&conn, at(60 * 31)).unwrap();
+    let after = fleet_capture_state(&conn, at(1801)).unwrap();
     assert_ne!(during.state_token, after.state_token);
-    assert!(after.desired_running, "an elapsed pause reads as running");
+    assert!(!after.desired_running, "an ended window is off");
 }
 
 // --- the audit descriptor ---------------------------------------------------
@@ -353,7 +364,7 @@ fn gate() -> recalld::webauth::Config {
 
 #[test]
 fn without_a_sign_in_only_the_peer_is_known() {
-    // The host still answers "was that pause mine?" on a household network.
+    // The host still answers "was that press mine?" on a household network.
     assert_eq!(
         request_origin(
             &gate(),
@@ -415,17 +426,17 @@ fn a_proxy_without_a_usable_header_is_still_named() {
 
 #[test]
 fn the_audit_write_cannot_refuse_the_control_action() {
-    // Pausing must not depend on the audit: with no events table at all, the
+    // A press must not depend on the audit: with no events table at all, the
     // intent is still recorded.
     let conn = Connection::open_in_memory().unwrap();
     conn.execute_batch("CREATE TABLE settings (key TEXT PRIMARY KEY, value TEXT NOT NULL)")
         .unwrap();
-    let iso = intent_pause(&conn, at(0), Some(30)).unwrap();
-    assert!(record_control_origin(&conn, at(0), "pause", "anon 10.0.0.5").is_err());
+    let opened = press(&conn, &Whose::House, at(0), Press::Record(at(1800))).unwrap();
+    assert!(record_control_origin(&conn, at(0), "record", "anon 10.0.0.5").is_err());
     assert_eq!(
-        intent_until(&conn, at(0)).unwrap().as_deref(),
-        Some(iso.as_str()),
-        "the pause survived its own audit failing"
+        intent_of(&conn, &Whose::House, at(0)).unwrap(),
+        Some(opened),
+        "the window survived its own audit failing"
     );
 }
 
@@ -480,9 +491,11 @@ async fn the_capture_routes_are_reachable_through_the_real_router() {
     let state: serde_json::Value = serde_json::from_str(&body).expect("json");
     for field in [
         "running",
-        "pausedUntil",
+        "until",
+        "held",
         "desiredRunning",
-        "desiredPausedUntil",
+        "desiredUntil",
+        "desiredHeld",
         "settled",
         "micReachable",
         "stateToken",
@@ -497,12 +510,14 @@ async fn the_capture_routes_are_reachable_through_the_real_router() {
 }
 
 #[tokio::test]
-async fn pausing_through_the_real_router_needs_no_login() {
-    // The phones' pause buttons carry no credential.
+async fn pressing_through_the_real_router_needs_no_login() {
+    // The phones' buttons carry no credential.
     for (method, path) in [
         ("GET", "/api/capture"),
+        ("POST", "/api/capture/record"),
+        ("POST", "/api/capture/stop"),
         ("POST", "/api/capture/pause"),
-        ("POST", "/api/capture/resume"),
+        ("POST", "/api/capture/unpause"),
     ] {
         assert!(
             !recalld::webauth::requires_session(method, path),
@@ -583,4 +598,18 @@ async fn a_transition_with_no_writer_still_surfaces_on_the_slice() {
         "returned early at {:?} — the slice is the floor",
         started.elapsed()
     );
+}
+
+/// The wire fixtures' tokens are what recalld stamps on their states.
+#[test]
+fn the_wire_fixtures_carry_the_token_recalld_stamps() {
+    for name in ["capture-state-recording.json", "capture-state-off.json"] {
+        let path = format!(
+            "{}/../tests/fixtures/wire/{name}",
+            env!("CARGO_MANIFEST_DIR")
+        );
+        let recorded: CaptureState =
+            serde_json::from_str(&std::fs::read_to_string(&path).expect("fixture")).expect("reads");
+        assert_eq!(capture::stamped(recorded.clone()), recorded, "{name}");
+    }
 }

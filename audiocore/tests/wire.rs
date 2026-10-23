@@ -77,9 +77,9 @@ fn heard_writes_what_recalld_sent() {
 
 #[test]
 fn the_capture_state_writes_what_recalld_sent() {
-    let paused = round_trips::<CaptureState>("capture-state-paused.json");
-    assert!(!paused.desired_running);
-    assert!(round_trips::<CaptureState>("capture-state-running.json").desired_running);
+    let recording = round_trips::<CaptureState>("capture-state-recording.json");
+    assert!(recording.desired_running && recording.desired_until.is_some());
+    assert!(!round_trips::<CaptureState>("capture-state-off.json").desired_running);
 }
 
 #[test]
@@ -87,25 +87,29 @@ fn the_mirror_report_and_its_answer_write_what_was_sent() {
     let applied = round_trips::<Applied>("capture-applied.json");
     assert_eq!(applied.source_liveness.len(), 2);
     assert_eq!(
-        round_trips::<Applied>("capture-applied-running.json").known_intent,
+        round_trips::<Applied>("capture-applied-fault.json").window,
         None
-    );
-    assert!(
-        round_trips::<Intent>("capture-intent.json")
-            .paused_until
-            .is_some()
     );
     assert_eq!(
-        round_trips::<Intent>("capture-intent-running.json").paused_until,
-        None
+        round_trips::<Intent>("capture-intent.json").window,
+        "record 2026-10-16T12:00:00Z"
+    );
+    assert_eq!(
+        round_trips::<Intent>("capture-intent-off.json").window,
+        "off"
     );
 }
 
 #[test]
-fn a_bare_report_reads_as_running_with_nothing_live() {
+fn an_older_fleets_answer_is_refused_not_read_as_no_window() {
+    assert!(serde_json::from_str::<Intent>(r#"{"pausedUntil":null}"#).is_err());
+}
+
+#[test]
+fn a_bare_report_reads_as_no_window_with_nothing_live() {
     let bare: Applied = serde_json::from_str(r#"{"running":true}"#).expect("reads");
     assert_eq!(bare.source_liveness, BTreeMap::new());
-    assert_eq!((bare.paused_until, bare.known_intent), (None, None));
+    assert_eq!((bare.window, bare.known_intent), (None, None));
 }
 
 #[test]

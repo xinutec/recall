@@ -10,8 +10,8 @@ and their tests mirror the Kotlin tests.
 - **Segments:** `SegmentWriter` writes one-minute `.phone.flac` files beside the
   stream (`Flac.swift`, a port of Android's encoder); `SegmentUpload` PUTs them to
   `https://recall.xinutec.org/ingest/v1/segments/…`, not on expensive networks.
-- **Control:** `CaptureApi` uses `/api/capture` (long poll), `/api/capture/pause`,
-  `/api/capture/resume` and `/api/sources` on the control host, each with the
+- **Control:** `CaptureApi` uses `/api/capture` (long poll), `/api/capture/record`,
+  `/stop`, `/pause`, `/unpause` and `/api/sources` on the control host, each with the
   phone's own segment token, which says whose phone asks; `Heartbeat` posts to
   `/api/devices/heartbeat`. Polling runs only while the UI is visible.
 - **Capture:** `AudioCapture`, `.measurement` mode (no gain or noise

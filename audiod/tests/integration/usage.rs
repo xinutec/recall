@@ -1,7 +1,7 @@
 //! `--help` must name every mode, the break-glass ones above all.
 
 /// `--help` is what a person reads when the fleet is unreachable: it lists
-/// `pause` and `resume`.
+/// `record`, `stop`, `pause` and `unpause`.
 #[test]
 fn every_mode_is_in_the_help() {
     let out = std::process::Command::new(env!("CARGO_BIN_EXE_audiod"))
@@ -18,8 +18,10 @@ fn every_mode_is_in_the_help() {
         "upload",
         "beat-relay",
         "logrotate",
+        "record",
+        "stop",
         "pause",
-        "resume",
+        "unpause",
     ] {
         assert!(
             help.lines()

@@ -20,7 +20,7 @@ in `~/Library/Logs/recall/<agent>.{out,err}.log`; `recall-logrotate` caps them.
 | `recall-capture` | USB mic → gap-free FLAC segments; always on |
 | `recall-ingest` | one TCP server (port 9999) for every phone mic |
 | `recall-upload` | closed segments → recalld, receipts re-hashed before anything counts as delivered |
-| `recall-capture-mirror` | reports what capture applied and long-polls Isis for the pause intent, mirrored onto the local pause file |
+| `recall-capture-mirror` | reports what capture applied and long-polls Isis for the recording window, mirrored onto the local gate file |
 | `recall-live` | the tap → speech detection → transcribe what was just said → `POST /sync/live` |
 | `recall-runner` | leases `transcribe-*` jobs, drives the `asr` shim, pushes the result; when recall's queue is empty, one from messages' |
 | `recall-voices` | leases `diarize-segment` and `enroll-speaker`, drives the `voices` shim |
@@ -38,7 +38,7 @@ token. Messages' queue is served only once `MESSAGES_TRANSCRIBER_TOKEN` is in
 ### The doctor runs itself twice
 
 `doctor` starts a child (`--collect`) that does every read of the archive
-volume, the pause file included, and prints its checks as JSON; the parent
+volume, the gate file included, and prints its checks as JSON; the parent
 touches only launchd, `~/.config` and Isis. A child silent for 60 s is abandoned
 and reported as `archive answers: no answer`, with its pid and state on stderr;
 in `U` state it cannot be killed and exits when the volume answers. The stalls
@@ -52,7 +52,7 @@ explained) and each background pass: when it last ended, and since when it has
 been failing.
 A pass failing or quiet past three of its intervals (at least 10 min), or one
 run past an hour, fails. Every other server check skips when Isis does not
-answer, and with capture paused nothing else goes red, so the doctor keeps
+answer, and with capture off nothing else goes red, so the doctor keeps
 when Isis last answered in `~/.local/state/recall-doctor/fleet-reached`: one
 miss warns, 15 min of them fail.
 
@@ -90,13 +90,19 @@ The USB mic is pinned by CoreAudio device name in `deploy/hm-agents.nix`. Never
 record from the default input: macOS re-points it at whatever connects. A
 renamed or missing device makes sox fail and the agent crash-loop, visibly.
 
-A pause stops all recording, USB mic and phones: the ingest server closes its
-listener and drops active streams, finalising the current segment. The web
-app's pause is mirrored to the Mac within seconds; `audiod pause --root <root>`
-and `audiod resume` are the break-glass when Isis cannot be reached.
+Capture is off unless a person opens a recording window: record until a time
+(at most a day ahead), which they can stop, or pause and unpause up to its end
+(`audiocore::capture::Window`). Off stops all recording, USB mic and phones: the
+ingest server closes its listener and drops active streams, finalising the
+current segment. The web app's window is mirrored to the Mac within seconds onto
+the gate file, `capture_window`, which every recording agent checks; `audiod
+record --root <root> --minutes <n>`, `stop`, `pause` and `unpause` are the
+break-glass when Isis cannot be reached. A gate file that is missing or does not
+read is a fault: it records, since a broken file must not lose a call, and the
+doctor's `gate` check fails until it is fixed.
 
-Deleting a span of capture (a test, say) is an operator act on Isis, pause
-first: `recalld --root /data forget-span --from <instant> --to <instant>` in
+Deleting a span of capture (a test, say) is an operator act on Isis, with
+capture off: `recalld --root /data forget-span --from <instant> --to <instant>` in
 the pod says what the span holds, and `--apply` deletes it. It leaves the
 recorders' own copies, which no recorder deletes because the server said so: a
 recorder still holding one is refused it (410) and stops sending it (`gone` in
@@ -104,7 +110,7 @@ recorder still holding one is refused it (410) and stops sending it (`gone` in
 Mac under `/Volumes/Backup/recall/<source>/`, on geb under
 `/var/lib/recall/geb/`.
 
-Renaming a source keeps its history under the new id, pause first:
+Renaming a source keeps its history under the new id, with capture off:
 `recalld --root /data rename-source --from <id> --to <id>` in the pod says what
 the source holds, and `--apply` moves its rows in both planes, its files and
 its directories, and its recorder's heartbeat and outbox rows. The recorder is
@@ -126,7 +132,7 @@ anyone else's, as for one that does not exist. A voice is guessed only among
 its recording's owner's people. Live lines carry no source and are shown to
 the owner of the Mac's own mic (a `coreaudio` source). A device's status rows
 are its source's owner's; a row whose id has no source at all is anyone's to
-clear. The capture pause is per person: the household's (asked by nobody in
+clear. The recording window is per person: the household's (asked by nobody in
 particular, or by whoever owns the Mac's own mic) is the one the Mac applies and
 confirms; anyone else's is their own, applied by their own phone
 (`capture::Whose`). The glossary is per person too: a recording is transcribed

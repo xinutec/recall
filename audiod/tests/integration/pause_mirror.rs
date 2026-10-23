@@ -1,8 +1,8 @@
-//! The pause mirror's decision rule, the part that can clobber a local pause:
-//! edge-triggering, the unparseable-value trap, and the conservative reading
-//! of an elapsed bound.
+//! The mirror's decision rule, the part that can clobber a local change:
+//! edge-triggering and the unparseable-value trap.
 
-use audiod::pause_mirror::{Decision, Desired, decide, source_liveness};
+use audiocore::capture::Window;
+use audiod::pause_mirror::{Decision, decide, source_liveness};
 use chrono::{DateTime, Utc};
 
 fn at(s: &str) -> DateTime<Utc> {
@@ -11,58 +11,51 @@ fn at(s: &str) -> DateTime<Utc> {
         .with_timezone(&Utc)
 }
 
-const NOW: &str = "2026-09-11T12:00:00Z";
-const LATER: &str = "2026-09-11T18:00:00+00:00";
-const EARLIER: &str = "2026-09-11T06:00:00+00:00";
+const OPEN: &str = "record 2026-09-11T18:00:00Z";
 
 #[test]
 fn an_unchanged_intent_touches_nothing() {
-    // Edge-triggered, or an unchanged "running" clobbers a local pause.
-    assert_eq!(decide("", None, at(NOW)), Decision::Unchanged);
-    assert_eq!(decide(LATER, Some(LATER), at(NOW)), Decision::Unchanged);
+    // Edge-triggered, or an unchanged intent clobbers a break-glass change.
+    assert_eq!(decide("off", "off"), Decision::Unchanged);
+    assert_eq!(decide(OPEN, OPEN), Decision::Unchanged);
 }
 
 #[test]
-fn a_new_pause_is_applied_and_recorded() {
-    let Decision::Apply { desired, record } = decide("", Some(LATER), at(NOW)) else {
+fn a_new_window_is_applied_and_recorded() {
+    let Decision::Apply { window, record } = decide("off", OPEN) else {
         panic!("a changed intent must apply");
     };
-    assert_eq!(desired, Desired::PausedUntil(LATER.to_owned()));
-    assert_eq!(record, LATER, "the marker records what the fleet said");
+    assert_eq!(window, Some(Window::Record(at("2026-09-11T18:00:00Z"))));
+    assert_eq!(record, OPEN, "the marker records what the fleet said");
 }
 
 #[test]
-fn a_cleared_intent_resumes() {
-    let Decision::Apply { desired, record } = decide(LATER, None, at(NOW)) else {
-        panic!("clearing a pause must apply");
+fn stopping_is_applied() {
+    let Decision::Apply { window, record } = decide(OPEN, "off") else {
+        panic!("stopping must apply");
     };
-    assert_eq!(desired, Desired::Running);
-    assert_eq!(record, "");
+    assert_eq!(window, Some(Window::Off));
+    assert_eq!(record, "off");
+}
+
+/// A marker from before windows (a pause's resume-by, or blank) is a change.
+#[test]
+fn the_first_window_replaces_an_older_marker() {
+    assert!(matches!(decide("", "off"), Decision::Apply { .. }));
+    assert!(matches!(
+        decide("2026-09-11T18:00:00+00:00", "off"),
+        Decision::Apply { .. }
+    ));
 }
 
 #[test]
-fn an_elapsed_bound_reads_as_running() {
-    // A bounded pause that has expired is not a pause, as `paused_until` and
-    // `intent_until` also read it.
-    let Decision::Apply { desired, .. } = decide("", Some(EARLIER), at(NOW)) else {
+fn an_unparseable_intent_is_a_fault_recorded_so_it_is_never_retried_forever() {
+    let Decision::Apply { window, record } = decide("off", "not-a-window") else {
         panic!("must apply");
     };
-    assert_eq!(desired, Desired::Running);
-}
-
-#[test]
-fn an_unparseable_intent_is_recorded_so_it_is_never_retried_forever() {
-    // A bad value reads as running and is recorded, so it is not retried.
-    let Decision::Apply { desired, record } = decide("", Some("not-a-time"), at(NOW)) else {
-        panic!("must apply");
-    };
-    assert_eq!(desired, Desired::Running);
-    assert_eq!(record, "not-a-time", "the bad value is recorded as seen");
-    // Once recorded, the next pass is a no-op rather than a retry.
-    assert_eq!(
-        decide("not-a-time", Some("not-a-time"), at(NOW)),
-        Decision::Unchanged
-    );
+    assert_eq!(window, None, "a fault, which records");
+    assert_eq!(record, "not-a-window", "the bad value is recorded as seen");
+    assert_eq!(decide("not-a-window", "not-a-window"), Decision::Unchanged);
 }
 
 #[test]

@@ -315,8 +315,11 @@ fn capture(api: &Api) -> Result<bool, Error> {
             "UNREACHABLE"
         }
     );
-    if let Some(until) = &capture.paused_until {
-        println!("paused until {until}");
+    match (&capture.until, capture.held) {
+        (Some(until), true) => println!("paused; the window ends {until}"),
+        (Some(until), false) => println!("recording until {until}"),
+        (None, _) if capture.running => println!("recording with no window: a fault"),
+        (None, _) => println!("off"),
     }
     Ok(true)
 }

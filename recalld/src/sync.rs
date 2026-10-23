@@ -74,7 +74,7 @@ pub async fn capture_route(State(st): State<Arc<Gate>>, body: axum::body::Bytes)
     };
 
     let root = st.root.clone();
-    let reported = body.paused_until.clone();
+    let reported = body.window.clone();
     // Subscribe before each derive, so no press is lost in between.
     let mut watcher = crate::capture::intent_watch();
     let mut reply = match crate::route::blocking("sync capture", move || {
@@ -88,7 +88,7 @@ pub async fn capture_route(State(st): State<Arc<Gate>>, body: axum::body::Bytes)
             &body.source_liveness,
         )?;
         Ok(Intent {
-            paused_until: crate::capture::intent_until(&conn, now)?,
+            window: crate::capture::intent_text(&conn, &crate::capture::Whose::House)?,
         })
     })
     .await
@@ -99,7 +99,7 @@ pub async fn capture_route(State(st): State<Arc<Gate>>, body: axum::body::Bytes)
 
     let wait = body.wait.clamp(0.0, WAIT_CAP.as_secs_f64());
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs_f64(wait);
-    while wait > 0.0 && reply.paused_until == body.known_intent {
+    while wait > 0.0 && Some(&reply.window) == body.known_intent.as_ref() {
         let now = std::time::Instant::now();
         if now >= deadline {
             break;
@@ -110,8 +110,11 @@ pub async fn capture_route(State(st): State<Arc<Gate>>, body: axum::body::Bytes)
         watcher = crate::capture::intent_watch();
         let root = st.root.clone();
         reply = match crate::route::blocking("sync capture intent", move || {
-            crate::capture::intent_until(&crate::work::open_write(&root)?, chrono::Utc::now())
-                .map(|paused_until| Intent { paused_until })
+            crate::capture::intent_text(
+                &crate::work::open_write(&root)?,
+                &crate::capture::Whose::House,
+            )
+            .map(|window| Intent { window })
         })
         .await
         {

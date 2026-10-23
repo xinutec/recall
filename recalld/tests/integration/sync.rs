@@ -1,7 +1,8 @@
 //! The Mac→fleet sync plane: its gate, the capture handshake, and the routes
 //! the Mac's agents read.
 
-use recalld::capture::{intent_pause, record_reported, reported_state};
+use audiocore::capture::Window;
+use recalld::capture::{Press, Whose, press, record_reported, reported_state};
 use recalld::sync::{bearer, check};
 use rusqlite::Connection;
 
@@ -22,6 +23,18 @@ fn setting(conn: &Connection, key: &str) -> Option<String> {
         r.get::<_, String>(0)
     })
     .ok()
+}
+
+/// Open a half-hour house window from `now`; its spelling.
+fn open_window(conn: &Connection, now: chrono::DateTime<chrono::Utc>) -> String {
+    press(
+        conn,
+        &Whose::House,
+        now,
+        Press::Record(now + chrono::Duration::minutes(30)),
+    )
+    .unwrap()
+    .spell()
 }
 
 fn liveness(pairs: &[(&str, &str)]) -> std::collections::BTreeMap<String, String> {
@@ -58,48 +71,43 @@ fn a_missing_or_wrong_token_is_rejected() {
 // --- what the report writes --------------------------------------------------
 
 #[test]
-fn a_reported_pause_is_stored_verbatim_so_settled_can_compare_it() {
-    // Stored verbatim: `settled` compares the Mac's echo as a string.
+fn a_reported_window_reads_back() {
     let conn = store();
-    let applied = "2026-09-09T21:15:05.645698+00:00";
+    let applied = "hold 2026-09-09T21:15:05Z";
 
     record_reported(&conn, at(0), false, Some(applied), &liveness(&[])).unwrap();
 
-    assert_eq!(
-        setting(&conn, "capture_reported_paused_until").as_deref(),
-        Some(applied)
-    );
     let back = reported_state(&conn, at(1)).unwrap().expect("fresh");
-    assert_eq!(back.paused_until.as_deref(), Some(applied));
+    assert_eq!(back.window, Window::parse(applied));
     assert!(!back.running);
 }
 
 #[test]
 fn the_intent_and_the_echo_of_it_settle() {
     let conn = store();
-    let intent = intent_pause(&conn, at(0), Some(30)).unwrap();
+    let intent = open_window(&conn, at(0));
 
-    record_reported(&conn, at(5), false, Some(&intent), &liveness(&[])).unwrap();
+    record_reported(&conn, at(5), true, Some(&intent), &liveness(&[])).unwrap();
 
     let state = recalld::capture::fleet_capture_state(&conn, at(6)).unwrap();
     assert!(state.settled, "the echo of an intent must settle it");
-    assert_eq!(state.paused_until.as_deref(), Some(intent.as_str()));
+    assert!(state.running);
 }
 
 #[test]
-fn recording_stores_an_empty_pause_not_a_missing_row() {
-    // Written, so "reported as running" is not "never reported".
+fn a_gate_that_did_not_read_is_stored_blank_not_a_missing_row() {
+    // Written, so "reported a fault" is not "never reported".
     let conn = store();
 
     record_reported(&conn, at(0), true, None, &liveness(&[])).unwrap();
 
     assert_eq!(
-        setting(&conn, "capture_reported_paused_until").as_deref(),
+        setting(&conn, "capture_reported_window").as_deref(),
         Some("")
     );
     let back = reported_state(&conn, at(1)).unwrap().expect("fresh");
     assert!(back.running);
-    assert_eq!(back.paused_until, None);
+    assert_eq!(back.window, None);
 }
 
 #[test]
@@ -207,18 +215,18 @@ async fn post(addr: &str, token: Option<&str>, body: serde_json::Value) -> (u16,
 async fn the_capture_handshake_is_reachable_and_returns_the_fleets_intent() {
     let (dir, addr) = serve(Some("sekrit")).await;
     let conn = recalld::work::open_write(dir.path()).expect("db");
-    let intent = intent_pause(&conn, chrono::Utc::now(), Some(30)).unwrap();
+    let intent = open_window(&conn, chrono::Utc::now());
     drop(conn);
 
     let (status, body) = post(
         &addr,
         Some("sekrit"),
-        serde_json::json!({"running": true, "pausedUntil": null}),
+        serde_json::json!({"running": true, "window": null}),
     )
     .await;
 
     assert_eq!(status, 200);
-    assert_eq!(body, format!(r#"{{"pausedUntil":"{intent}"}}"#));
+    assert_eq!(body, format!(r#"{{"window":"{intent}"}}"#));
 }
 
 #[tokio::test]
@@ -226,15 +234,15 @@ async fn the_report_lands_where_api_capture_reads_it() {
     // The report reaches the state the UI reads.
     let (dir, addr) = serve(Some("sekrit")).await;
     let conn = recalld::work::open_write(dir.path()).expect("db");
-    let intent = intent_pause(&conn, chrono::Utc::now(), Some(30)).unwrap();
+    let intent = open_window(&conn, chrono::Utc::now());
     drop(conn);
 
     let (status, _) = post(
         &addr,
         Some("sekrit"),
         serde_json::json!({
-            "running": false,
-            "pausedUntil": intent,
+            "running": true,
+            "window": intent,
             "sourceLiveness": {"usb": "2026-09-08T19:11:00+00:00"},
         }),
     )
@@ -243,9 +251,9 @@ async fn the_report_lands_where_api_capture_reads_it() {
 
     let conn = recalld::work::open_write(dir.path()).expect("db");
     let state = recalld::capture::fleet_capture_state(&conn, chrono::Utc::now()).unwrap();
-    assert!(state.settled, "the Mac's echo settles the pause");
+    assert!(state.settled, "the Mac's echo settles the window");
     assert!(state.mic_reachable, "a fresh report means the mic answered");
-    assert!(!state.running);
+    assert!(state.running);
     assert_eq!(
         setting(&conn, "capture_reported_source_liveness").as_deref(),
         Some(r#"{"usb":"2026-09-08T19:11:00+00:00"}"#)
@@ -261,7 +269,7 @@ async fn an_unauthenticated_report_cannot_move_the_state() {
         let (status, _) = post(
             &addr,
             token,
-            serde_json::json!({"running": true, "pausedUntil": null}),
+            serde_json::json!({"running": true, "window": null}),
         )
         .await;
         assert_eq!(status, 401, "token {token:?}");
@@ -284,7 +292,7 @@ async fn without_a_configured_token_the_route_is_absent_not_open() {
     let (status, _) = post(
         &addr,
         Some("sekrit"),
-        serde_json::json!({"running": true, "pausedUntil": null}),
+        serde_json::json!({"running": true, "window": null}),
     )
     .await;
 
@@ -299,7 +307,7 @@ async fn a_non_string_liveness_value_is_refused_like_pydantic_refuses_it() {
         &addr,
         Some("sekrit"),
         serde_json::json!({
-            "running": true, "pausedUntil": null,
+            "running": true, "window": null,
             "sourceLiveness": {"usb": 5},
         }),
     )
@@ -313,7 +321,7 @@ async fn a_long_poll_returns_at_once_when_the_intent_already_differs() {
     // A stale `knownIntent` is answered at once.
     let (dir, addr) = serve(Some("sekrit")).await;
     let conn = recalld::work::open_write(dir.path()).expect("db");
-    let intent = intent_pause(&conn, chrono::Utc::now(), Some(30)).unwrap();
+    let intent = open_window(&conn, chrono::Utc::now());
     drop(conn);
 
     let started = std::time::Instant::now();
@@ -321,14 +329,14 @@ async fn a_long_poll_returns_at_once_when_the_intent_already_differs() {
         &addr,
         Some("sekrit"),
         serde_json::json!({
-            "running": true, "pausedUntil": null,
+            "running": true, "window": null,
             "wait": 25, "knownIntent": null,
         }),
     )
     .await;
 
     assert_eq!(status, 200);
-    assert_eq!(body, format!(r#"{{"pausedUntil":"{intent}"}}"#));
+    assert_eq!(body, format!(r#"{{"window":"{intent}"}}"#));
     assert!(
         started.elapsed() < std::time::Duration::from_secs(2),
         "held for {:?} despite a changed intent",
@@ -337,8 +345,8 @@ async fn a_long_poll_returns_at_once_when_the_intent_already_differs() {
 }
 
 #[tokio::test]
-async fn a_long_poll_hangs_while_the_intent_is_unchanged_and_wakes_on_a_pause() {
-    // The fleet cannot dial the Mac: a pause reaches it through the waiting
+async fn a_long_poll_hangs_while_the_intent_is_unchanged_and_wakes_on_a_press() {
+    // The fleet cannot dial the Mac: a press reaches it through the waiting
     // request.
     let (dir, addr) = serve(Some("sekrit")).await;
     let root = dir.path().to_path_buf();
@@ -350,18 +358,18 @@ async fn a_long_poll_hangs_while_the_intent_is_unchanged_and_wakes_on_a_pause() 
                 &addr,
                 Some("sekrit"),
                 serde_json::json!({
-                    "running": true, "pausedUntil": null,
-                    "wait": 20, "knownIntent": null,
+                    "running": false, "window": "off",
+                    "wait": 20, "knownIntent": "off",
                 }),
             )
             .await
         }
     });
 
-    // Let it get into the hang, then press pause the way the UI would.
+    // Let it get into the hang, then press record the way the UI would.
     tokio::time::sleep(std::time::Duration::from_millis(300)).await;
     let conn = recalld::work::open_write(&root).expect("db");
-    let intent = intent_pause(&conn, chrono::Utc::now(), Some(30)).unwrap();
+    let intent = open_window(&conn, chrono::Utc::now());
     drop(conn);
 
     let started = std::time::Instant::now();
@@ -370,7 +378,7 @@ async fn a_long_poll_hangs_while_the_intent_is_unchanged_and_wakes_on_a_pause() 
     assert_eq!(status, 200);
     assert_eq!(
         body,
-        format!(r#"{{"pausedUntil":"{intent}"}}"#),
+        format!(r#"{{"window":"{intent}"}}"#),
         "the hang must return the NEW intent, not the one it started with"
     );
     // 500 ms separates a notify wake (about one round trip) from waiting out the
@@ -410,7 +418,7 @@ async fn a_writer_holding_the_lock_delays_the_handshake_rather_than_failing_it()
     let (status, _) = post(
         &addr,
         Some("sekrit"),
-        serde_json::json!({"running": true, "pausedUntil": null}),
+        serde_json::json!({"running": true, "window": null}),
     )
     .await;
     let waited = started.elapsed();
@@ -535,7 +543,7 @@ async fn the_read_routes_are_absent_when_no_token_is_configured() {
 async fn a_wait_that_elapses_with_no_change_returns_the_intent_it_started_with() {
     let (dir, addr) = serve(Some("sekrit")).await;
     let conn = recalld::work::open_write(dir.path()).expect("db");
-    let intent = intent_pause(&conn, chrono::Utc::now(), Some(30)).unwrap();
+    let intent = open_window(&conn, chrono::Utc::now());
     drop(conn);
 
     // `knownIntent` equals what is stored, so the route hangs until the wait
@@ -545,7 +553,7 @@ async fn a_wait_that_elapses_with_no_change_returns_the_intent_it_started_with()
         &addr,
         Some("sekrit"),
         serde_json::json!({
-            "running": false, "pausedUntil": intent,
+            "running": false, "window": intent,
             "wait": 1, "knownIntent": intent,
         }),
     )
@@ -555,7 +563,7 @@ async fn a_wait_that_elapses_with_no_change_returns_the_intent_it_started_with()
     assert_eq!(status, 200);
     assert_eq!(
         body,
-        format!(r#"{{"pausedUntil":"{intent}"}}"#),
+        format!(r#"{{"window":"{intent}"}}"#),
         "the unchanged intent must still come back"
     );
     assert!(

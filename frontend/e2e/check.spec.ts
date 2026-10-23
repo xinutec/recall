@@ -42,12 +42,14 @@ const moments = [
   sources: ['usb', 'pixel9'],
 }));
 
-/** Recording, settled: the state the capture long-poll answers when nothing changes. */
+/** Off, settled: the state the capture long-poll answers when nothing changes. */
 const CAPTURE = {
-  running: true,
-  pausedUntil: null,
-  desiredRunning: true,
-  desiredPausedUntil: null,
+  running: false,
+  until: null,
+  held: false,
+  desiredRunning: false,
+  desiredUntil: null,
+  desiredHeld: false,
   settled: true,
   micReachable: true,
   stateToken: 'x',

@@ -395,8 +395,12 @@ fn case(route: &str, a: &A) -> Option<Case> {
         "POST /api/devices/heartbeat" | "POST /api/devices/outbox" => {
             Global("a recorder's own report, sent without a session")
         }
-        "GET /api/capture" | "POST /api/capture/pause" | "POST /api/capture/resume" => {
-            Global("each person's own pause: a_pause_is_the_pausers_own")
+        "GET /api/capture"
+        | "POST /api/capture/record"
+        | "POST /api/capture/stop"
+        | "POST /api/capture/pause"
+        | "POST /api/capture/unpause" => {
+            Global("each person's own window: a_window_is_the_openers_own")
         }
         "POST /api/log" | "POST /api/telemetry" => Global("write-only logs"),
         _ => return None,
@@ -562,23 +566,26 @@ async fn a_recorder_speaks_for_its_sources_owner() {
     assert!(!nobody.contains("phone-"), "{nobody}");
 }
 
-/// Each person's pause is their own: B pausing leaves A recording, and the
+/// Each person's window is their own: B recording leaves A off, and the
 /// house, asked by no one in particular, keeps its own.
 #[tokio::test]
-async fn a_pause_is_the_pausers_own() {
+async fn a_window_is_the_openers_own() {
     let (f, _) = world().await;
     let wants_running = |text: &str| {
         serde_json::from_str::<serde_json::Value>(text).expect("json")["desiredRunning"]
             .as_bool()
             .expect("desiredRunning")
     };
-    let (status, text) = call(&f, "b", "POST", "/api/capture/pause", None).await;
+    let until = (chrono::Utc::now() + chrono::Duration::hours(1))
+        .to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
+    let path = format!("/api/capture/record?until={until}");
+    let (status, text) = call(&f, "b", "POST", &path, None).await;
     assert!(status.is_success(), "{status} {text}");
 
     let (_, b) = call(&f, "b", "GET", "/api/capture", None).await;
-    assert!(!wants_running(&b), "B paused: {b}");
+    assert!(wants_running(&b), "B recording: {b}");
     let (_, a) = call(&f, "a", "GET", "/api/capture", None).await;
-    assert!(wants_running(&a), "A untouched: {a}");
+    assert!(!wants_running(&a), "A untouched: {a}");
     let (_, house) = as_recorder(&f, None, Request::get("/api/capture"), Body::empty()).await;
-    assert!(wants_running(&house), "the house untouched: {house}");
+    assert!(!wants_running(&house), "the house untouched: {house}");
 }

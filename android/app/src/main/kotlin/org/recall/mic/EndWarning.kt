@@ -9,21 +9,21 @@ import android.util.Log
 import java.time.Instant
 
 /**
- * Acts on [planResumeWarning]: one exact alarm, [RESUME_WARNING_LEAD] before recording
- * resumes, for [ResumeWarningReceiver] to post a heads-up in time to extend the pause.
- * Exact and allowed while idle, so doze cannot shorten the lead.
+ * Acts on [planEndWarning]: one exact alarm, [END_WARNING_LEAD] before a recording
+ * window ends, for [EndWarningReceiver] to post a heads-up in time to extend it. Exact
+ * and allowed while idle, so doze cannot shorten the lead.
  *
- * Synced from the capture-state reads the pause banner uses ([StreamService]'s poll,
- * the open screen's long poll). Since the plan follows the household state, a pause
- * extended anywhere (here, the web, the CLI) moves the alarm and clears a stale warning.
+ * Synced from the capture-state reads the banner uses ([StreamService]'s poll, the open
+ * screen's long poll). Since the plan follows recall's state, a window moved anywhere
+ * (here, the web) moves the alarm and clears a stale warning.
  */
-object ResumeWarning {
-    private const val TAG = "ResumeWarning"
-    const val EXTRA_RESUME_AT_MILLIS = "resume_at_millis"
+object EndWarning {
+    private const val TAG = "EndWarning"
+    const val EXTRA_END_AT_MILLIS = "end_at_millis"
 
     // Fixed, so one PendingIntent both reschedules and cancels the alarm.
     private const val REQUEST_CODE = 1001
-    private const val ACTION = "org.recall.mic.RESUME_WARNING"
+    private const val ACTION = "org.recall.mic.END_WARNING"
 
     // When the alarm is armed for, so each poll does not re-arm the same one.
     // dev-lint: allow-object-var a memo of the last armed alarm; a fresh process re-derives it
@@ -31,23 +31,23 @@ object ResumeWarning {
 
     /** Arm, cancel or leave the alarm to match [capture]. */
     fun sync(context: Context, capture: CaptureState?, now: Instant) {
-        when (val plan = planResumeWarning(capture, now)) {
-            is ResumeWarningPlan.Warn -> schedule(context, plan.at, plan.resumeAt)
-            is ResumeWarningPlan.Cancel -> cancel(context)
-            is ResumeWarningPlan.Leave -> Unit
+        when (val plan = planEndWarning(capture, now)) {
+            is EndWarningPlan.Warn -> schedule(context, plan.at, plan.endAt)
+            is EndWarningPlan.Cancel -> cancel(context)
+            is EndWarningPlan.Leave -> Unit
         }
     }
 
-    private fun schedule(context: Context, at: Instant, resumeAt: Instant) {
+    private fun schedule(context: Context, at: Instant, endAt: Instant) {
         if (at == scheduledFor) return
         // The warn moment moved, so a posted warning shows a wrong time.
         dismiss(context)
         val alarms = context.getSystemService(AlarmManager::class.java)
-        val pending = pendingIntent(context, resumeAt)
+        val pending = pendingIntent(context, endAt)
         try {
             alarms.setExactAndAllowWhileIdle(AlarmManager.RTC_WAKEUP, at.toEpochMilli(), pending)
             scheduledFor = at
-            Log.i(UI_LOG, "resume-warning armed for $at (recording resumes $resumeAt)")
+            Log.i(UI_LOG, "end-warning armed for $at (recording stops $endAt)")
         } catch (e: SecurityException) {
             // Not expected with USE_EXACT_ALARM; inexact rather than crash the service.
             alarms.setAndAllowWhileIdle(AlarmManager.RTC_WAKEUP, at.toEpochMilli(), pending)
@@ -61,11 +61,11 @@ object ResumeWarning {
     fun cancel(context: Context) {
         context
             .getSystemService(AlarmManager::class.java)
-            .cancel(pendingIntent(context, resumeAt = null))
+            .cancel(pendingIntent(context, endAt = null))
         dismiss(context)
         if (scheduledFor != null) {
             scheduledFor = null
-            Log.i(UI_LOG, "resume-warning cancelled")
+            Log.i(UI_LOG, "end-warning cancelled")
         }
     }
 
@@ -73,15 +73,15 @@ object ResumeWarning {
     private fun dismiss(context: Context) {
         context
             .getSystemService(NotificationManager::class.java)
-            .cancel(NotificationIds.RESUME_WARNING)
+            .cancel(NotificationIds.END_WARNING)
     }
 
-    // FLAG_UPDATE_CURRENT refreshes the resume-at extra on rescheduling.
-    private fun pendingIntent(context: Context, resumeAt: Instant?): PendingIntent {
+    // FLAG_UPDATE_CURRENT refreshes the end-at extra on rescheduling.
+    private fun pendingIntent(context: Context, endAt: Instant?): PendingIntent {
         val intent =
-            Intent(context, ResumeWarningReceiver::class.java).apply {
+            Intent(context, EndWarningReceiver::class.java).apply {
                 action = ACTION
-                resumeAt?.let { putExtra(EXTRA_RESUME_AT_MILLIS, it.toEpochMilli()) }
+                endAt?.let { putExtra(EXTRA_END_AT_MILLIS, it.toEpochMilli()) }
             }
         return PendingIntent.getBroadcast(
             context,

@@ -5,22 +5,36 @@ import kotlinx.coroutines.withContext
 import org.json.JSONObject
 import java.net.HttpURLConnection
 import java.net.URL
+import java.time.Instant
+import java.time.temporal.ChronoUnit
 
 /**
- * The household's capture state, not just this phone's. [running] and [pausedUntil] are
- * what the mic confirmed; the `desired` pair what was asked, changed at the press;
- * [settled] that they agree. Until then the UI says "Pausing…" or "Resuming…".
+ * The capture state recall holds for whoever asks (this phone's token says who):
+ * [running], [until] and [held] as the mic applied them; the `desired` three as asked,
+ * changed at the press; [settled] that they agree. Until then the UI says "Starting…",
+ * "Stopping…" or "Pausing…". Off unless a person opened a recording window.
  */
 data class CaptureState(
     val running: Boolean,
-    val pausedUntil: String?,
+    /** The open window's end; null while off. */
+    val until: String?,
+    /** Whether that window is paused. */
+    val held: Boolean,
     val desiredRunning: Boolean,
-    val desiredPausedUntil: String?,
+    val desiredUntil: String?,
+    val desiredHeld: Boolean,
     val settled: Boolean,
     val micReachable: Boolean,
     /** Sent back as `?known=` to long-poll. */
     val stateToken: String,
-)
+) {
+    /** The window asked for; null for a fault (recording with no end), which records. */
+    fun desiredWindow(): Window? {
+        val end = desiredUntil ?: return if (desiredRunning) null else Window.Off
+        val at = Window.instant(end) ?: return null
+        return if (desiredHeld) Window.Hold(at) else Window.Record(at)
+    }
+}
 
 /**
  * One recorder's liveness. [active]: someone is being recorded audibly, so a silent
@@ -44,9 +58,11 @@ fun parseCaptureState(body: String): CaptureState? =
         fun instant(key: String) = if (json.isNull(key)) null else json.getString(key)
         CaptureState(
             running = json.getBoolean("running"),
-            pausedUntil = instant("pausedUntil"),
+            until = instant("until"),
+            held = json.getBoolean("held"),
             desiredRunning = json.getBoolean("desiredRunning"),
-            desiredPausedUntil = instant("desiredPausedUntil"),
+            desiredUntil = instant("desiredUntil"),
+            desiredHeld = json.getBoolean("desiredHeld"),
             settled = json.getBoolean("settled"),
             micReachable = json.getBoolean("micReachable"),
             stateToken = json.getString("stateToken"),
@@ -73,8 +89,8 @@ fun parseSources(body: String): List<SourceStatus> =
     }.getOrDefault(emptyList())
 
 /**
- * The web API on Isis: the household pause, read and set, and the recorders' liveness.
- * It answers during a pause, when the recorder's port is closed. A failed call returns
+ * The web API on Isis: the recording window, read and set, and the recorders'
+ * liveness. It answers while capture is off, when the recorder's port is closed. A failed call returns
  * null, and the panels stay hidden.
  */
 object CaptureApi {
@@ -99,11 +115,19 @@ object CaptureApi {
         )?.let { parseCaptureState(it) }
     }
 
-    suspend fun pause(host: String, token: String): CaptureState? =
-        get(endpoint(host, "/capture/pause"), "POST", token)?.let { parseCaptureState(it) }
+    /** Open a recording window until [until], or move its end. */
+    suspend fun record(host: String, token: String, until: Instant): CaptureState? =
+        press(host, token, "record?until=${until.truncatedTo(ChronoUnit.SECONDS)}")
 
-    suspend fun resume(host: String, token: String): CaptureState? =
-        get(endpoint(host, "/capture/resume"), "POST", token)?.let { parseCaptureState(it) }
+    suspend fun stop(host: String, token: String): CaptureState? = press(host, token, "stop")
+
+    /** Stop recording, keeping the window's end. */
+    suspend fun pause(host: String, token: String): CaptureState? = press(host, token, "pause")
+
+    suspend fun unpause(host: String, token: String): CaptureState? = press(host, token, "unpause")
+
+    private suspend fun press(host: String, token: String, verb: String): CaptureState? =
+        get(endpoint(host, "/capture/$verb"), "POST", token)?.let { parseCaptureState(it) }
 
     /** The recorders of whoever owns this phone ([token] says whose); null: the request
      * failed; empty: none. */

@@ -12,43 +12,43 @@ import java.time.Instant
 import java.time.ZoneId
 
 /**
- * Posts "recording resumes soon" when [ResumeWarning]'s alarm fires; tapping it opens
- * the app's pause controls. Extending the pause takes it down ([ResumeWarning]).
+ * Posts "recording stops soon" when [EndWarning]'s alarm fires; tapping it opens the
+ * app's recording controls. Moving the window's end takes it down ([EndWarning]).
  */
-class ResumeWarningReceiver : BroadcastReceiver() {
+class EndWarningReceiver : BroadcastReceiver() {
     override fun onReceive(context: Context, intent: Intent) {
-        val millis = intent.getLongExtra(ResumeWarning.EXTRA_RESUME_AT_MILLIS, 0L)
+        val millis = intent.getLongExtra(EndWarning.EXTRA_END_AT_MILLIS, 0L)
         if (millis <= 0L) return // the scheduler always sets it
-        val resumeAt = Instant.ofEpochMilli(millis)
+        val endAt = Instant.ofEpochMilli(millis)
 
         val mgr = context.getSystemService(NotificationManager::class.java)
         mgr.createNotificationChannel(
             NotificationChannel(
                 CHANNEL_ID,
-                "Resume warning",
+                "Recording ending",
                 // Silent: no sound, vibration or peek, so a room phone never makes a
                 // noise. Fixed once the channel exists.
                 NotificationManager.IMPORTANCE_LOW,
             ),
         )
-        mgr.notify(NotificationIds.RESUME_WARNING, build(context, resumeAt))
+        mgr.notify(NotificationIds.END_WARNING, build(context, endAt))
     }
 
-    private fun build(context: Context, resumeAt: Instant) =
+    private fun build(context: Context, endAt: Instant) =
         NotificationCompat
             .Builder(context, CHANNEL_ID)
-            .setContentTitle("Recording resumes soon")
-            .setContentText(resumeWarningText(resumeAt, Instant.now(), ZoneId.systemDefault()))
+            .setContentTitle("Recording stops soon")
+            .setContentText(endWarningText(endAt, Instant.now(), ZoneId.systemDefault()))
             .setSmallIcon(R.drawable.ic_mic)
             .setColor(ContextCompat.getColor(context, R.color.ic_launcher_background))
             .setAutoCancel(true)
-            // Gone at the resume even if the app never polls again; at once if the alarm
+            // Gone at the end even if the app never polls again; at once if the alarm
             // came late.
-            .setTimeoutAfter(msUntil(resumeAt).coerceAtLeast(1))
+            .setTimeoutAfter(msUntil(endAt).coerceAtLeast(1))
             .setContentIntent(launchApp(context))
             .build()
 
-    private fun msUntil(resumeAt: Instant) = resumeAt.toEpochMilli() - System.currentTimeMillis()
+    private fun msUntil(endAt: Instant) = endAt.toEpochMilli() - System.currentTimeMillis()
 
     private fun launchApp(context: Context): PendingIntent {
         val launch =
@@ -64,6 +64,6 @@ class ResumeWarningReceiver : BroadcastReceiver() {
     }
 
     private companion object {
-        const val CHANNEL_ID = "resume-warning"
+        const val CHANNEL_ID = "end-warning"
     }
 }

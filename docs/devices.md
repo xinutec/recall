@@ -16,7 +16,7 @@ audiod capture + audiod upload   # a Linux host's own mic (geb): store-and-forwa
 |---|---|
 | USB mic (`audiod capture`) | sox into ffmpeg, no socket and none of our code: a real-time device has no buffer to absorb a stall |
 | Phones | TCP to the ingest port, plus their own capture-stamped segments delivered with verified receipts |
-| Linux hosts (geb) | store-and-forward only: ffmpeg reads ALSA into audiod's segmenter, closed segments go to recalld with verified receipts; `audiod pause-mirror` honours the pause |
+| Linux hosts (geb) | store-and-forward only: ffmpeg reads ALSA into audiod's segmenter, closed segments go to recalld with verified receipts; `audiod pause-mirror` honours the recording window |
 
 The ingest server pumps socket bytes into ffmpeg's stdin; the kernel's receive
 buffer absorbs a momentary stall.
@@ -71,7 +71,7 @@ a second per chunk for a stream (`recalld::sources`). Rules:
 - A recently stale marker outranks a delivery: a phone's marker going quiet is a
   deliberate stop, newer than segments captured before it. Stale within the
   delivery window means just stopped; beyond it, a recorder that does not stream.
-- A pause discards delivered evidence for every recorder.
+- Capture being off discards delivered evidence for every recorder.
 - Uploaded recordings (meetings) are sources but not recorders, and are left out.
 
 Do not stop a recorder on the strength of this dot: a false "off" once cost two
@@ -79,7 +79,7 @@ minutes of audio. Where the panel and the ingest plane disagree, trust ingest.
 
 ## The heartbeat
 
-Liveness cannot tell a quiet room from a dead app, says nothing during a pause,
+Liveness cannot tell a quiet room from a dead app, says nothing while capture is off,
 and a phone gone without a FIN leaves its socket looking open. So:
 
 - the mic apps POST `/api/devices/heartbeat` hourly while started, streaming or
@@ -96,7 +96,7 @@ and a phone gone without a FIN leaves its socket looking open. So:
 | Stored | last status only, in one settings row (`recalld::devices`); at most 16 devices, aged out after 30 days, `DELETE /api/devices/heartbeat/{device}` |
 | Graded | on the Mac: `xinutec-infra/mac-mini/recall_mics.py` reads `/sync/devices/heartbeats` and takes a fresh beat or delivered audio as proof |
 
-`micOk` and `droppedBytes` are graded; `streaming` is false in every pause and a
+`micOk` and `droppedBytes` are graded; `streaming` is false whenever capture is off and a
 carried phone is off charge all day.
 
 `droppedBytes` is the audio the app's spool discarded since the previous beat
@@ -110,10 +110,11 @@ and the phone's FLAC copy, with a spool of its own, may still hold it.
 | iOS (`RecallMicApp`) | `client.start()`, once | a mic that dies after a good start |
 | audiod (geb) | the last producer start | |
 
-## Pause
+## Off
 
-The ingest server closes its listener and drops active streams, finalising the
-current segment; phones are refused and show "Recording paused"
+Capture is off unless a person opened a recording window (running.md). Off, or
+a paused window, the ingest server closes its listener and drops active streams,
+finalising the current segment; phones are refused and show "Not recording"
 (`audiod::server::serve`). Android's mic is then closed, since it opens only
 after connecting. iOS holds its audio session (or it is killed in the
 background) and drops the PCM in memory.

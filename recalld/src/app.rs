@@ -162,8 +162,10 @@ fn browsing(
         .merge(
             Router::new()
                 .route("/api/capture", get(capture::status_route))
+                .route("/api/capture/record", post(capture::record_route))
+                .route("/api/capture/stop", post(capture::stop_route))
                 .route("/api/capture/pause", post(capture::pause_route))
-                .route("/api/capture/resume", post(capture::resume_route))
+                .route("/api/capture/unpause", post(capture::unpause_route))
                 .with_state(Arc::new(capture::Control {
                     root: capture_root,
                     webauth: st.cfg.clone(),

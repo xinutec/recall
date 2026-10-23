@@ -15,29 +15,83 @@
 <!-- The bar every fleet app draws (@xinutec/ui-scaffold): the menu and "recall" on
      a main screen, an arrow up and the screen's name on one drilled into. -->
 <ui-scaffold class="bar" title="recall" [menu]="moreMenu">
-  <!-- On every screen, so recording can be paused from anywhere. -->
+  <!-- On every screen, so recording can be started or stopped from anywhere. -->
   <button
     matIconButton
     class="capture-toggle"
-    [class.paused]="paused()"
+    [class.recording]="mode() === 'recording' || mode() === 'fault'"
     [class.unreachable]="unreachable()"
-    (click)="paused() ? resumeCapture() : pauseCapture()"
+    [matMenuTriggerFor]="captureMenu"
     [matTooltip]="
       unreachable()
         ? 'Recorder not reporting — state unconfirmed'
         : transitioning()
           ? transitionLabel() + '… — tap to change your mind'
-          : paused()
-            ? 'Recording paused — tap to resume'
-            : 'Pause recording'
+          : mode() === 'off'
+            ? 'Not recording — tap to record'
+            : mode() === 'held'
+              ? 'Recording paused'
+              : 'Recording'
     "
-    aria-label="Pause or resume recording"
+    aria-label="Recording controls"
   >
     <mat-icon [class.spin]="transitioning()">
-      {{ transitioning() ? 'sync' : paused() ? 'mic_off' : 'mic' }}
+      {{
+        transitioning()
+          ? 'sync'
+          : mode() === 'off'
+            ? 'mic_off'
+            : mode() === 'held'
+              ? 'pause_circle'
+              : 'mic'
+      }}
     </mat-icon>
   </button>
 </ui-scaffold>
+
+<mat-menu #captureMenu="matMenu" class="capture-menu">
+  @if (mode() === 'recording') {
+    <button mat-menu-item (click)="pauseCapture()">
+      <mat-icon>pause</mat-icon>
+      <span>Pause</span>
+    </button>
+  } @else if (mode() === 'held') {
+    <button mat-menu-item (click)="unpauseCapture()">
+      <mat-icon>play_arrow</mat-icon>
+      <span>Unpause</span>
+    </button>
+  }
+  @if (mode() !== 'off') {
+    <button mat-menu-item (click)="stopCapture()">
+      <mat-icon>stop</mat-icon>
+      <span>Stop recording</span>
+    </button>
+  }
+  <div class="menu-heading">{{ mode() === 'off' ? 'Record for' : 'Record from now for' }}</div>
+  @for (span of spans; track span.minutes) {
+    <button mat-menu-item (click)="recordFor(span.minutes)">
+      <mat-icon>schedule</mat-icon>
+      <span>{{ span.label }}</span>
+    </button>
+  }
+  <div class="record-until">
+    <label>
+      Until
+      <!-- Clicks and keys stay in the field: the menu would close on them or
+           take the arrows for its own. -->
+      <input
+        type="time"
+        aria-label="Record until"
+        [value]="untilText()"
+        (input)="untilText.set($any($event.target).value)"
+        (click)="$event.stopPropagation()"
+        (keydown)="$event.stopPropagation()"
+        (keydown.enter)="recordUntil()"
+      />
+    </label>
+    <button matButton="tonal" (click)="recordUntil()">Record</button>
+  </div>
+</mat-menu>
 
 <mat-menu #moreMenu="matMenu">
   @for (item of more; track item.path) {
@@ -57,34 +111,44 @@
 </mat-menu>
 
 @if (unreachable()) {
-  <div class="paused-banner unreachable" role="status">
+  <div class="capture-banner unreachable" role="status">
     <mat-icon>cloud_off</mat-icon>
-    <span>Recorder not reporting — pause state unconfirmed</span>
+    <span>Recorder not reporting — recording state unconfirmed</span>
   </div>
 } @else if (transitioning()) {
-  <div class="paused-banner transitioning" role="status">
+  <div class="capture-banner transitioning" role="status">
     <mat-icon class="spin">sync</mat-icon>
     <span>{{ transitionLabel() }} — waiting for the recorder to confirm…</span>
   </div>
-} @else if (paused()) {
-  <div class="paused-banner" role="status">
-    <mat-icon class="rec-dot">fiber_manual_record</mat-icon>
-    <span>Recording paused — auto-resumes in {{ resumeIn() }} (by {{ resumeBy() }})</span>
-    <button
-      matIconButton
-      (click)="pauseCapture()"
-      matTooltip="Still away — reset the pause to a full 24h (no recording)"
-      aria-label="Reset pause to 24 hours"
-    >
-      <mat-icon>snooze</mat-icon>
-    </button>
-    <button
-      matIconButton
-      (click)="resumeCapture()"
-      matTooltip="Resume recording now"
-      aria-label="Resume recording"
-    >
-      <mat-icon>play_arrow</mat-icon>
+} @else if (mode() !== 'off') {
+  <div class="capture-banner" [class.held]="mode() === 'held'" role="status">
+    <mat-icon class="rec-dot">{{
+      mode() === 'held' ? 'pause_circle' : 'fiber_manual_record'
+    }}</mat-icon>
+    <span>
+      @switch (mode()) {
+        @case ('recording') {
+          Recording until {{ endsAt() }} · {{ endsIn() }} left
+        }
+        @case ('held') {
+          Paused · the window ends {{ endsAt() }}
+        }
+        @default {
+          Recording with no window set — a recorder fault
+        }
+      }
+    </span>
+    @if (mode() === 'recording') {
+      <button matIconButton (click)="pauseCapture()" matTooltip="Pause" aria-label="Pause">
+        <mat-icon>pause</mat-icon>
+      </button>
+    } @else if (mode() === 'held') {
+      <button matIconButton (click)="unpauseCapture()" matTooltip="Unpause" aria-label="Unpause">
+        <mat-icon>play_arrow</mat-icon>
+      </button>
+    }
+    <button matIconButton (click)="stopCapture()" matTooltip="Stop recording" aria-label="Stop">
+      <mat-icon>stop</mat-icon>
     </button>
   </div>
 }

@@ -138,8 +138,10 @@ fn the_browsing_plane_is_gated_and_the_recording_plane_is_not() {
     for (m, p) in [
         ("GET", "/api/capture"),
         ("GET", "/api/sources"),
+        ("POST", "/api/capture/record"),
+        ("POST", "/api/capture/stop"),
         ("POST", "/api/capture/pause"),
-        ("POST", "/api/capture/resume"),
+        ("POST", "/api/capture/unpause"),
         ("POST", "/api/log"),
         ("POST", "/api/devices/outbox"),
         ("POST", "/api/devices/heartbeat"),

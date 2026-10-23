@@ -1,18 +1,19 @@
 import SwiftUI
 
-/// The one screen, as on Android: status, mic level, the household pause banner, the
+/// The one screen, as on Android: status, mic level, the recording window, the
 /// devices, the settings and Start/Stop.
 struct ContentView: View {
     @ObservedObject var state: MicState
     var onStart: () -> Void
     var onStop: () -> Void
-    var onPause: () -> Void  // "Pause recording" and "Still away (24h)" (snooze re-pauses)
-    var onResume: () -> Void
+    var onPress: (Press) -> Void
     var onHostChanged: () -> Void
 
     @State private var host: String = Prefs.host
     @State private var controlHost: String = Prefs.controlHost
     @State private var ingestToken: String = Prefs.ingestToken
+    /// The "until" picker's time; the next one after now when pressed.
+    @State private var untilTime = Date(timeIntervalSinceNow: 3600)
     private let segments = 24
 
     var body: some View {
@@ -60,47 +61,83 @@ struct ContentView: View {
         .opacity(state.connected ? 1 : 0.4)
     }
 
-    // MARK: household pause banner (shown whenever the API is reachable)
+    // MARK: the recording window (shown whenever the API is reachable)
+
+    /// The windows one press opens, as the web app's menu.
+    private let spans: [(String, TimeInterval)] = [("30 min", 1800), ("1 h", 3600), ("2 h", 7200)]
 
     @ViewBuilder private var captureBanner: some View {
         if state.capture.reachable {
-            // The desired state, with "Pausing…"/"Resuming…" until the mic confirms.
-            let paused = !state.capture.desiredRunning
-            let transitioning = state.capture.micReachable && !state.capture.settled
+            // The desired window, with "Starting…" etc. until the mic confirms.
+            let window = state.capture.desiredWindow?.at(Date())
+            let recording = window == nil || { if case .record = window { true } else { false } }()
             VStack(alignment: .leading, spacing: 10) {
                 // Every 30 s, for the minute countdown.
                 TimelineView(.periodic(from: .now, by: 30)) { ctx in
-                    Text(bannerTitle(paused: paused, transitioning: transitioning, now: ctx.date))
-                        .font(.headline)
+                    Text(bannerTitle(now: ctx.date)).font(.headline)
                 }
                 // Enabled mid-transition: a press just replaces the desired state.
-                if paused {
+                if window != .off {
                     HStack(spacing: 12) {
-                        Button("Still away (24h)", action: onPause)
+                        switch window {
+                        case .record:
+                            Button("Pause") { onPress(.pause) }
+                                .buttonStyle(.bordered).frame(maxWidth: .infinity)
+                        case .hold:
+                            Button("Unpause") { onPress(.unpause) }
+                                .buttonStyle(.borderedProminent).frame(maxWidth: .infinity)
+                        default:
+                            EmptyView()
+                        }
+                        Button("Stop") { onPress(.stop) }
                             .buttonStyle(.bordered).frame(maxWidth: .infinity)
-                        Button("Resume now", action: onResume)
-                            .buttonStyle(.borderedProminent).frame(maxWidth: .infinity)
                     }
-                } else {
-                    Button("Pause recording", action: onPause)
+                }
+                Text(window == .off ? "Record for" : "Record from now for").font(.subheadline)
+                HStack(spacing: 8) {
+                    ForEach(spans, id: \.0) { label, seconds in
+                        Button(label) {
+                            onPress(.record(until: Date(timeIntervalSinceNow: seconds)))
+                        }
                         .buttonStyle(.bordered).frame(maxWidth: .infinity)
+                    }
+                }
+                HStack(spacing: 12) {
+                    DatePicker("Until", selection: $untilTime, displayedComponents: .hourAndMinute)
+                    Button("Record") {
+                        onPress(.record(until: Self.next(untilTime, after: Date())))
+                    }
+                    .buttonStyle(.bordered)
                 }
             }
             .frame(maxWidth: .infinity, alignment: .leading)
             .padding()
-            .background((paused ? Color.orange : Color.gray).opacity(0.15))
+            .background((recording ? Color.red : Color.gray).opacity(0.15))
             .clipShape(RoundedRectangle(cornerRadius: 12))
         }
     }
 
-    private func bannerTitle(paused: Bool, transitioning: Bool, now: Date) -> String {
-        guard state.capture.micReachable else {
+    private func bannerTitle(now: Date) -> String {
+        let capture = state.capture
+        guard capture.micReachable else {
             return "Recorder not reporting — state unconfirmed"
         }
-        if transitioning { return paused ? "Pausing…" : "Resuming…" }
-        guard paused else { return "Recording active" }
-        return Banner.pausedText(
-            pausedUntil: state.capture.pausedUntil, now: now, timeZone: .current)
+        let window = capture.desiredWindow?.at(now)
+        if capture.micReachable && !capture.settled {
+            switch window {
+            case .hold: return "Pausing…"
+            case .off: return "Stopping…"
+            default: return "Starting…"
+            }
+        }
+        return Banner.windowText(window, now: now, timeZone: .current)
+    }
+
+    /// The picked time of day, next after `now`: today, or tomorrow once it has passed.
+    static func next(_ picked: Date, after now: Date) -> Date {
+        let calendar = Calendar.current
+        let hm = calendar.dateComponents([.hour, .minute], from: picked)
+        return calendar.nextDate(after: now, matching: hm, matchingPolicy: .nextTime) ?? picked
     }
 
     // MARK: devices fleet panel
@@ -158,7 +195,7 @@ struct ContentView: View {
         }
     }
 
-    // Isis, for the pause banner and the devices panel.
+    // Isis, for the recording window and the devices panel.
     private var controlHostField: some View {
         VStack(alignment: .leading, spacing: 6) {
             Text("Control host (Isis)").font(.caption).foregroundStyle(.secondary)
@@ -216,7 +253,7 @@ struct ContentView: View {
     private var dotColor: Color {
         switch state.phase {
         case .streaming: return .green
-        case .paused: return .orange
+        case .off: return .orange
         case .waitingForHost: return .red
         case .stopped: return .gray
         }

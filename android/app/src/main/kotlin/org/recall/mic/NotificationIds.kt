@@ -11,8 +11,8 @@ object NotificationIds {
     /** [MeetingService]'s, while it records. */
     const val MEETING = 2
 
-    /** [ResumeWarningReceiver]'s "recording resumes soon". */
-    const val RESUME_WARNING = 3
+    /** [EndWarningReceiver]'s "recording stops soon". */
+    const val END_WARNING = 3
 
     /** [BootReceiver]'s "stopped by reboot" prompt. */
     const val BOOT = 4

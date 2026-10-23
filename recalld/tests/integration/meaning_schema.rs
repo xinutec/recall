@@ -439,3 +439,39 @@ fn glossary_terms_arrive_with_an_owner() {
         "the instant guard survives the rebuild"
     );
 }
+
+/// v65: a pause's resume-by, or blank for running, spells no window, so every
+/// intent starts off; the Mac's old pause report goes.
+#[test]
+fn every_capture_intent_starts_off() {
+    let conn = rusqlite::Connection::open_in_memory().expect("db");
+    ensure_to(&conn, 64).expect("v64");
+    for (key, value) in [
+        ("capture_intent", ""),
+        ("capture_intent/someone", "2026-10-23T12:00:00+00:00"),
+        ("capture_reported_paused_until", "2026-10-23T12:00:00+00:00"),
+        ("capture_reported_running", "1"),
+    ] {
+        conn.execute("INSERT INTO settings VALUES (?1, ?2)", [key, value])
+            .expect("v64 row");
+    }
+
+    ensure_to(&conn, 65).expect("v65");
+
+    let rows: Vec<(String, String)> = conn
+        .prepare("SELECT key, value FROM settings ORDER BY key")
+        .expect("prepare")
+        .query_map([], |r| Ok((r.get(0)?, r.get(1)?)))
+        .expect("query")
+        .collect::<Result<_, _>>()
+        .expect("rows");
+    let owned = |k: &str, v: &str| (k.to_owned(), v.to_owned());
+    assert_eq!(
+        rows,
+        [
+            owned("capture_intent", "off"),
+            owned("capture_intent/someone", "off"),
+            owned("capture_reported_running", "1"),
+        ]
+    );
+}

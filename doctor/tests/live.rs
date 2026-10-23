@@ -89,9 +89,13 @@ fn enough_turns_are_actually_graded() {
 }
 
 #[test]
-fn the_pause_still_skips_the_liveness_check() {
+fn a_paused_window_still_skips_the_liveness_check() {
     let until = now() + chrono::Duration::hours(1);
-    let checks = live_checks(&Ok(talking(Some(4.0), 40)), now(), Some(until));
+    let checks = live_checks(
+        &Ok(talking(Some(4.0), 40)),
+        now(),
+        Some(audiocore::capture::Window::Hold(until)),
+    );
     assert_eq!(checks[1].verdict, Verdict::Skip);
     assert!(
         checks[1].observed.contains("paused"),

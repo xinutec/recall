@@ -63,7 +63,7 @@ $rail-w: 220px;
   --mat-toolbar-container-background-color: var(--mat-sys-surface-container);
 }
 
-.capture-toggle.paused {
+.capture-toggle.recording {
   color: var(--mat-sys-error);
 }
 
@@ -85,7 +85,7 @@ $rail-w: 220px;
   }
 }
 
-.paused-banner {
+.capture-banner {
   position: sticky;
   top: var(--toolbar-h);
   z-index: 9;
@@ -109,13 +109,24 @@ $rail-w: 220px;
     flex: 1 1 auto;
   }
 
+  // A window kept open but not recording: calm, the dot still.
+  &.held {
+    background: var(--mat-sys-secondary-container);
+    color: var(--mat-sys-on-secondary-container);
+
+    .rec-dot {
+      color: inherit;
+      animation: none;
+    }
+  }
+
   // Neutral: progress, not an alarm.
   &.transitioning {
     background: var(--mat-sys-surface-variant);
     color: var(--mat-sys-on-surface-variant);
   }
 
-  // State unknown; distinct from paused.
+  // State unknown; distinct from every known one.
   &.unreachable {
     background: var(--mat-sys-tertiary-container);
     color: var(--mat-sys-on-tertiary-container);
@@ -123,7 +134,7 @@ $rail-w: 220px;
 }
 
 // Beside the rail on a wide screen, not under it.
-:host:has(.rail) .paused-banner {
+:host:has(.rail) .capture-banner {
   margin-inline-start: $rail-w;
 }
 

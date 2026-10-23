@@ -10,15 +10,20 @@ import { BUILD_INFO } from './build-info';
 import { RecallApi } from './recall-api';
 import { CaptureState } from './models';
 
-/** A settled CaptureState (desired == confirmed), overridable per test. */
+const END = '2026-06-17T20:00:00Z';
+
+/** A settled CaptureState (desired == confirmed): off unless overridden. */
 function cap(overrides: Partial<CaptureState> = {}): CaptureState {
-  const running = overrides.running ?? true;
-  const pausedUntil = overrides.pausedUntil ?? null;
+  const until = overrides.until ?? null;
+  const held = overrides.held ?? false;
+  const running = overrides.running ?? (until !== null && !held);
   return {
     running,
-    pausedUntil,
+    until,
+    held,
     desiredRunning: running,
-    desiredPausedUntil: pausedUntil,
+    desiredUntil: until,
+    desiredHeld: held,
     settled: true,
     micReachable: true,
     stateToken: '',
@@ -31,33 +36,29 @@ function setup(initial: CaptureState = cap()) {
   const capture = vi.fn(() => state);
   // A press answers mid-transition: desired flipped, confirmed unchanged, as
   // the next poll would.
-  const pauseCapture = vi.fn(() =>
-    of(
-      cap({
-        running: true,
-        desiredRunning: false,
-        desiredPausedUntil: '2026-06-17T20:00:00Z',
-        settled: false,
-      }),
-    ),
-  );
-  const resumeCapture = vi.fn(() =>
+  const recordCapture = vi.fn((until: Date) =>
     of(
       cap({
         running: false,
-        pausedUntil: '2026-06-17T20:00:00Z',
         desiredRunning: true,
-        desiredPausedUntil: null,
+        desiredUntil: until.toISOString(),
         settled: false,
       }),
     ),
   );
+  const answer = (overrides: Partial<CaptureState>) => vi.fn(() => of(cap(overrides)));
+  const stopCapture = answer({});
+  const pauseCapture = answer({ until: END, held: true });
+  const unpauseCapture = answer({ until: END });
   TestBed.configureTestingModule({
     imports: [App],
     providers: [
       provideZonelessChangeDetection(),
       provideRouter([]),
-      { provide: RecallApi, useValue: { capture, pauseCapture, resumeCapture } },
+      {
+        provide: RecallApi,
+        useValue: { capture, recordCapture, stopCapture, pauseCapture, unpauseCapture },
+      },
       // The shell starts the update check; disabled, as with no worker.
       provideServiceWorker('ngsw-worker.js', { enabled: false }),
     ],
@@ -65,7 +66,7 @@ function setup(initial: CaptureState = cap()) {
   const fixture = TestBed.createComponent(App);
   // eslint-disable-next-line @typescript-eslint/no-explicit-any -- the component's private state, reached in a test
   const c = fixture.componentInstance as any;
-  return { fixture, c, capture, pauseCapture, resumeCapture };
+  return { fixture, c, capture, recordCapture, stopCapture, pauseCapture, unpauseCapture };
 }
 
 describe('App', () => {
@@ -107,62 +108,100 @@ describe('App', () => {
     expect(overlay?.querySelector('.version')?.textContent).toContain(BUILD_INFO.sha);
   });
 
-  it('shows the paused banner only when capture is paused', () => {
-    const { fixture, c } = setup(cap({ running: false, pausedUntil: '2026-06-17T20:00:00Z' }));
+  it('off is the quiet default: no banner', () => {
+    const { fixture, c } = setup();
     fixture.detectChanges();
-    expect(c.paused()).toBe(true);
-    expect((fixture.nativeElement as HTMLElement).querySelector('.paused-banner')).toBeTruthy();
+    expect(c.mode()).toBe('off');
+    expect((fixture.nativeElement as HTMLElement).querySelector('.capture-banner')).toBeFalsy();
   });
 
-  it('resume-by leads with a yyyy-mm-dd date before the time', () => {
-    const { c } = setup(cap({ running: false, pausedUntil: '2026-06-17T20:00:00Z' }));
+  it('an open window shows its end and the time left, with pause and stop', () => {
+    const until = new Date(Date.now() + 45 * 60_000 + 20_000).toISOString();
+    const { fixture, c } = setup(cap({ until }));
+    fixture.detectChanges();
+    expect(c.mode()).toBe('recording');
+    expect(c.endsIn()).toBe('45m');
+    const banner = (fixture.nativeElement as HTMLElement).querySelector('.capture-banner');
+    expect(banner?.textContent).toContain('Recording until');
+    expect(banner?.querySelector('[aria-label="Pause"]')).toBeTruthy();
+    expect(banner?.querySelector('[aria-label="Stop"]')).toBeTruthy();
+  });
+
+  it('a window on another day names its date', () => {
+    const { c } = setup(cap({ until: END }));
     // The shape only: the value depends on the runner's timezone.
-    expect(c.resumeBy()).toMatch(/^\d{4}-\d{2}-\d{2} \S/);
+    expect(c.endsAt()).toMatch(/^\d{4}-\d{2}-\d{2} \S/);
   });
 
-  it('resume-in shows the remaining hours/minutes', () => {
-    const { c } = setup(
-      cap({
-        running: false,
-        pausedUntil: new Date(Date.now() + 5 * 3_600_000 + 23 * 60_000).toISOString(),
-      }),
-    );
-    expect(c.resumeIn()).toBe('5h 23m');
+  it('a paused window offers unpause, and keeps its end', () => {
+    const { fixture, c } = setup(cap({ until: END, held: true }));
+    fixture.detectChanges();
+    expect(c.mode()).toBe('held');
+    const banner = (fixture.nativeElement as HTMLElement).querySelector('.capture-banner.held');
+    expect(banner?.textContent).toContain('the window ends');
+    expect(banner?.querySelector('[aria-label="Unpause"]')).toBeTruthy();
   });
 
-  it('resume-in is empty when capture is running', () => {
-    expect(setup().c.resumeIn()).toBe('');
+  it('recording with no window is said to be a fault, and can be stopped', () => {
+    const { fixture, c } = setup(cap({ running: true }));
+    fixture.detectChanges();
+    expect(c.mode()).toBe('fault');
+    const banner = (fixture.nativeElement as HTMLElement).querySelector('.capture-banner');
+    expect(banner?.textContent).toContain('fault');
+    expect(banner?.querySelector('[aria-label="Stop"]')).toBeTruthy();
+  });
+
+  it('record-for opens a window that many minutes ahead', () => {
+    const { c, recordCapture } = setup();
+    const before = Date.now();
+    c.recordFor(60);
+    const until = recordCapture.mock.calls[0][0].getTime();
+    expect(until - before).toBeGreaterThanOrEqual(60 * 60_000);
+    expect(until - before).toBeLessThan(60 * 60_000 + 5_000);
+  });
+
+  it('record-until takes the typed time, and refuses what is not one', () => {
+    const { c, recordCapture } = setup();
+    c.untilText.set('noon');
+    c.recordUntil();
+    expect(recordCapture).not.toHaveBeenCalled();
+    c.untilText.set('18:30');
+    c.recordUntil();
+    const until = recordCapture.mock.calls[0][0];
+    expect([until.getHours(), until.getMinutes()]).toEqual([18, 30]);
   });
 
   it('a press flips to the desired state as transitioning — no flap possible', () => {
-    // Once, the press said paused and the next poll the mic's stale running,
+    // Once, a press said one thing and the next poll the mic's stale state,
     // and the banner blinked between them.
-    const { fixture, c, pauseCapture } = setup();
-    expect(c.paused()).toBe(false);
+    const { fixture, c } = setup();
+    c.recordFor(30);
+    expect(c.mode()).toBe('recording');
+    expect(c.transitioning()).toBe(true);
+    expect(c.transitionLabel()).toBe('Starting');
+    fixture.detectChanges();
+    const el = fixture.nativeElement as HTMLElement;
+    expect(el.querySelector('.capture-banner.transitioning')?.textContent).toContain('Starting');
+    // Not yet the settled banner with its buttons.
+    expect(el.querySelector('.capture-banner .rec-dot')).toBeFalsy();
+  });
+
+  it('pause, unpause and stop each say what they asked for', () => {
+    const { c, stopCapture, pauseCapture, unpauseCapture } = setup(cap({ until: END }));
     c.pauseCapture();
     expect(pauseCapture).toHaveBeenCalled();
-    expect(c.paused()).toBe(true);
-    expect(c.transitioning()).toBe(true);
-    expect(c.transitionLabel()).toBe('Pausing');
-    fixture.detectChanges();
-    const el = fixture.nativeElement as HTMLElement;
-    expect(el.querySelector('.paused-banner.transitioning')?.textContent).toContain('Pausing');
-    // Not yet the settled banner with its resume buttons.
-    expect(el.querySelector('.paused-banner .rec-dot')).toBeFalsy();
+    expect(c.mode()).toBe('held');
+    c.unpauseCapture();
+    expect(unpauseCapture).toHaveBeenCalled();
+    expect(c.mode()).toBe('recording');
+    c.stopCapture();
+    expect(stopCapture).toHaveBeenCalled();
+    expect(c.mode()).toBe('off');
   });
 
-  it('settles once the mic confirms: transitioning clears, paused banner shows', () => {
-    const { fixture, c } = setup(cap({ running: false, pausedUntil: '2026-06-17T20:00:00Z' }));
-    fixture.detectChanges();
-    expect(c.transitioning()).toBe(false);
-    const el = fixture.nativeElement as HTMLElement;
-    expect(el.querySelector('.paused-banner .rec-dot')).toBeTruthy();
-  });
-
-  it('a transition is abortable: the toggle stays enabled to change your mind', () => {
-    // Pressing the opposite mid-transition just replaces the desired state.
+  it('the toggle stays enabled mid-transition, to change your mind', () => {
     const { fixture, c } = setup();
-    c.pauseCapture();
+    c.recordFor(30);
     expect(c.transitioning()).toBe(true);
     fixture.detectChanges();
     const btn = (fixture.nativeElement as HTMLElement).querySelector<HTMLButtonElement>(
@@ -172,14 +211,12 @@ describe('App', () => {
   });
 
   it('an unreachable mic is said out loud, not presented as fact', () => {
-    const { fixture, c } = setup(
-      cap({ running: false, desiredRunning: false, settled: false, micReachable: false }),
-    );
+    const { fixture, c } = setup(cap({ settled: false, micReachable: false }));
     fixture.detectChanges();
     expect(c.unreachable()).toBe(true);
     expect(c.transitioning()).toBe(false); // unknown ≠ in-flight
     const banner = (fixture.nativeElement as HTMLElement).querySelector(
-      '.paused-banner.unreachable',
+      '.capture-banner.unreachable',
     );
     expect(banner?.textContent).toContain('not reporting');
   });

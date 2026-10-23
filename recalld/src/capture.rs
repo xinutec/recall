@@ -1,13 +1,15 @@
-//! Capture control: the household's pause.
+//! Capture control: each person's recording window.
 //!
-//! Isis holds the intent; the Mac applies it and reports back. The API serves
-//! both: `running`/`pausedUntil` as the Mac confirmed them, `desired*` as
-//! intended, and `settled` when they agree. A pause nobody can confirm is
-//! worthless, hence the two halves.
+//! Off unless a person opened a window (`record until`), which they can stop,
+//! or pause and unpause up to its end. Isis holds the intent; the Mac applies
+//! the household's and reports back, and a person's own phone applies theirs.
+//! The API serves both: `running`/`until`/`held` as applied, `desired*` as
+//! intended, and `settled` when they agree. A stored intent that does not read
+//! is a fault, and a fault records: see [`Window`].
 
 use crate::settings;
-use audiocore::capture::CaptureState;
-use chrono::{DateTime, Duration, Utc};
+use audiocore::capture::{CaptureState, Window};
+use chrono::{DateTime, Duration, SecondsFormat, Utc};
 use rusqlite::Connection;
 use sha2::{Digest, Sha256};
 use std::collections::BTreeMap;
@@ -19,11 +21,12 @@ crate::statements! {
         "INSERT INTO capture_events (utc, kind, source_id, detail) VALUES (?1, ?2, NULL, ?3)";
 }
 
-/// ISO resume-by; blank or absent means running.
+/// A [`Window`], spelled; never set means off.
 const INTENT_KEY: &str = "capture_intent";
 /// What the Mac last reported it had actually applied.
 const REPORTED_RUNNING_KEY: &str = "capture_reported_running";
-const REPORTED_PAUSED_KEY: &str = "capture_reported_paused_until";
+/// The Mac's gate file, spelled; blank when it did not read (a fault).
+const REPORTED_WINDOW_KEY: &str = "capture_reported_window";
 const REPORTED_AT_KEY: &str = "capture_reported_at";
 /// Each source's last proved recording time, as the Mac reported it: a JSON
 /// object of source id to ISO instant. The fleet has no liveness of its own.
@@ -41,12 +44,14 @@ fn report_fresh() -> Duration {
 #[must_use]
 pub fn stamped(mut state: CaptureState) -> CaptureState {
     let json = serde_json::json!({
-        "desiredPausedUntil": state.desired_paused_until,
+        "desiredHeld": state.desired_held,
         "desiredRunning": state.desired_running,
+        "desiredUntil": state.desired_until,
+        "held": state.held,
         "micReachable": state.mic_reachable,
-        "pausedUntil": state.paused_until,
         "running": state.running,
         "settled": state.settled,
+        "until": state.until,
     })
     .to_string();
     // sha2 0.11's digest is an array with no `LowerHex`; `hex` spells it out.
@@ -55,15 +60,52 @@ pub fn stamped(mut state: CaptureState) -> CaptureState {
     state
 }
 
-/// What the Mac last said it had applied.
+/// The state's fields for one window at `now`: `None` is a fault, which
+/// records with no end.
+fn fields(window: Option<Window>, now: DateTime<Utc>) -> (bool, Option<String>, bool) {
+    let window = window.map(|w| w.at(now));
+    (
+        window.is_none_or(|w| w.records(now)),
+        window
+            .and_then(Window::until)
+            .map(|t| t.to_rfc3339_opts(SecondsFormat::Secs, true)),
+        matches!(window, Some(Window::Hold(_))),
+    )
+}
+
+/// The state from what is applied and what is wanted.
+fn state(
+    applied: Option<Window>,
+    desired: Option<Window>,
+    settled: bool,
+    mic_reachable: bool,
+    now: DateTime<Utc>,
+) -> CaptureState {
+    let (running, until, held) = fields(applied, now);
+    let (desired_running, desired_until, desired_held) = fields(desired, now);
+    stamped(CaptureState {
+        running,
+        until,
+        held,
+        desired_running,
+        desired_until,
+        desired_held,
+        settled,
+        mic_reachable,
+        state_token: String::new(),
+    })
+}
+
+/// What the Mac last said it had applied: its gate's window, `None` when that
+/// did not read.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Reported {
     pub running: bool,
-    pub paused_until: Option<String>,
+    pub window: Option<Window>,
 }
 
-/// Whose pause a request controls: the household's, which the Mac applies and
-/// confirms, or one person's, which their own phone applies.
+/// Whose window a request controls: the household's, which the Mac applies
+/// and confirms, or one person's, which their own phone applies.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Whose {
     House,
@@ -99,35 +141,24 @@ impl Whose {
     }
 }
 
-/// The desired resume-by, or `None` when running. An elapsed or unreadable
-/// intent reads as running. Returns the stored spelling: the Mac echoes it and
-/// `settled` compares strings.
-pub fn intent_until(conn: &Connection, now: DateTime<Utc>) -> rusqlite::Result<Option<String>> {
-    intent_until_of(conn, &Whose::House, now)
-}
-
-/// [`intent_until`] for `whose` pause.
+/// `whose` intent as stored: off when never set. The Mac mirrors this text.
 ///
 /// # Errors
 /// If the database refuses.
-pub fn intent_until_of(
+pub fn intent_text(conn: &Connection, whose: &Whose) -> rusqlite::Result<String> {
+    Ok(settings::get(conn, &whose.intent_key())?.unwrap_or_else(|| Window::Off.spell()))
+}
+
+/// `whose` window at `now`; `None` when the stored intent does not read.
+///
+/// # Errors
+/// If the database refuses.
+pub fn intent_of(
     conn: &Connection,
     whose: &Whose,
     now: DateTime<Utc>,
-) -> rusqlite::Result<Option<String>> {
-    let Some(raw) = settings::get(conn, &whose.intent_key())? else {
-        return Ok(None);
-    };
-    if raw.is_empty() {
-        return Ok(None);
-    }
-    let Some(parsed) = audiocore::instant::parse(&raw) else {
-        return Ok(None);
-    };
-    if parsed.with_timezone(&Utc) <= now {
-        return Ok(None);
-    }
-    Ok(audiocore::instant::respell_utc(&raw))
+) -> rusqlite::Result<Option<Window>> {
+    Ok(Window::parse(&intent_text(conn, whose)?).map(|w| w.at(now)))
 }
 
 /// Whether the Mac reported within [`report_fresh`] of `now`.
@@ -139,6 +170,9 @@ fn report_is_fresh(conn: &Connection, now: DateTime<Utc>) -> rusqlite::Result<bo
 }
 
 /// The Mac's last report if fresh.
+///
+/// # Errors
+/// If the database refuses.
 pub fn reported_state(conn: &Connection, now: DateTime<Utc>) -> rusqlite::Result<Option<Reported>> {
     let Some(running) = settings::get(conn, REPORTED_RUNNING_KEY)? else {
         return Ok(None);
@@ -148,21 +182,26 @@ pub fn reported_state(conn: &Connection, now: DateTime<Utc>) -> rusqlite::Result
     }
     Ok(Some(Reported {
         running: running == "1",
-        paused_until: settings::get(conn, REPORTED_PAUSED_KEY)?.filter(|s| !s.is_empty()),
+        window: settings::get(conn, REPORTED_WINDOW_KEY)?
+            .as_deref()
+            .and_then(Window::parse),
     }))
 }
 
-/// Record what the Mac says it has applied. `paused_until` is stored verbatim
-/// for the string comparison behind `settled`.
+/// Record what the Mac says it has applied: `window` is its gate file
+/// spelled, `None` when that did not read.
+///
+/// # Errors
+/// If the database refuses.
 pub fn record_reported(
     conn: &Connection,
     now: DateTime<Utc>,
     running: bool,
-    paused_until: Option<&str>,
+    window: Option<&str>,
     source_liveness: &BTreeMap<String, String>,
 ) -> rusqlite::Result<()> {
     settings::set(conn, REPORTED_RUNNING_KEY, if running { "1" } else { "0" })?;
-    settings::set(conn, REPORTED_PAUSED_KEY, paused_until.unwrap_or(""))?;
+    settings::set(conn, REPORTED_WINDOW_KEY, window.unwrap_or(""))?;
     settings::set(
         conn,
         REPORTED_AT_KEY,
@@ -174,7 +213,6 @@ pub fn record_reported(
         &serde_json::to_string(source_liveness).expect("a string map serialises"),
     )
 }
-
 /// Each source's last proved recording time, or `None` when the Mac's report
 /// is stale (an empty map: no live sources). Malformed entries are dropped.
 pub fn reported_source_liveness(
@@ -214,113 +252,82 @@ pub fn capture_state_of(
     if *whose == Whose::House {
         return fleet_capture_state(conn, now);
     }
-    let desired_until = intent_until_of(conn, whose, now)?;
-    let desired_running = desired_until.is_none();
-    Ok(stamped(CaptureState {
-        running: desired_running,
-        paused_until: desired_until.clone(),
-        desired_running,
-        desired_paused_until: desired_until,
-        settled: true,
-        mic_reachable: true,
-        state_token: String::new(),
-    }))
+    let desired = intent_of(conn, whose, now)?;
+    Ok(state(desired, desired, true, true, now))
 }
 
 /// The fleet's view: intent, plus the Mac's confirmation of it.
+///
+/// # Errors
+/// If the database refuses.
 pub fn fleet_capture_state(
     conn: &Connection,
     now: DateTime<Utc>,
 ) -> rusqlite::Result<CaptureState> {
-    let desired_until = intent_until(conn, now)?;
-    let desired_running = desired_until.is_none();
-
+    let desired = intent_of(conn, &Whose::House, now)?;
     let Some(reported) = reported_state(conn, now)? else {
-        return Ok(stamped(CaptureState {
-            running: desired_running,
-            paused_until: desired_until.clone(),
-            desired_running,
-            desired_paused_until: desired_until,
-            settled: false,
-            mic_reachable: false,
-            state_token: String::new(),
-        }));
+        return Ok(state(desired, desired, false, false, now));
     };
-
-    // When paused the resume-by must match too, so extending a pause reads as
-    // transitioning until applied.
-    let settled = reported.running == desired_running
-        && (desired_running || reported.paused_until == desired_until);
-
-    Ok(stamped(CaptureState {
-        running: reported.running,
-        paused_until: reported.paused_until,
-        desired_running,
-        desired_paused_until: desired_until,
-        settled,
-        mic_reachable: true,
-        state_token: String::new(),
-    }))
+    // The whole window must match, so moving an end reads as transitioning
+    // until applied.
+    let applied = reported.window.map(|w| w.at(now));
+    Ok(state(applied, desired, applied == desired, true, now))
 }
 
-/// A pause is always bounded: a forgotten one would silently lose days of the
-/// archive.
-fn max_pause() -> Duration {
-    Duration::hours(24)
-}
-
-/// When a pause starting at `now` ends: `None` means the full bound, and a
-/// negative count clamps to zero.
-pub fn compute_resume_by(now: DateTime<Utc>, minutes: Option<i64>) -> DateTime<Utc> {
-    let span = match minutes {
-        None => max_pause(),
-        Some(m) => Duration::minutes(m).min(max_pause()),
-    };
-    now + span.max(Duration::zero())
-}
-
-/// Record a bounded pause as the intent and return its resume-by, as stored.
-pub fn intent_pause(
-    conn: &Connection,
-    now: DateTime<Utc>,
-    minutes: Option<i64>,
-) -> rusqlite::Result<String> {
-    intent_pause_of(conn, &Whose::House, now, minutes)
-}
-
-/// [`intent_pause`] for `whose` pause.
+/// Set `whose` window and wake every poll.
 ///
 /// # Errors
 /// If the database refuses.
-pub fn intent_pause_of(
-    conn: &Connection,
-    whose: &Whose,
-    now: DateTime<Utc>,
-    minutes: Option<i64>,
-) -> rusqlite::Result<String> {
-    let until = compute_resume_by(now, minutes);
-    let iso = audiocore::instant::python_isoformat_utc(until);
-    settings::set(conn, &whose.intent_key(), &iso)?;
-    notify_intent_changed();
-    Ok(iso)
-}
-
-/// Record "run" as the intent: an empty value, not a deleted row.
-pub fn intent_resume(conn: &Connection) -> rusqlite::Result<()> {
-    intent_resume_of(conn, &Whose::House)
-}
-
-/// [`intent_resume`] for `whose` pause.
-///
-/// # Errors
-/// If the database refuses.
-pub fn intent_resume_of(conn: &Connection, whose: &Whose) -> rusqlite::Result<()> {
-    settings::set(conn, &whose.intent_key(), "")?;
+pub fn set_intent(conn: &Connection, whose: &Whose, window: Window) -> rusqlite::Result<()> {
+    settings::set(conn, &whose.intent_key(), &window.spell())?;
     notify_intent_changed();
     Ok(())
 }
 
-/// Record who asked for a pause or resume. Capture control needs no login, so
+/// What a press asks of `whose` window.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Press {
+    /// Record until this time, at most a day ahead.
+    Record(DateTime<Utc>),
+    Stop,
+    Pause,
+    Unpause,
+}
+
+impl Press {
+    const fn verb(self) -> &'static str {
+        match self {
+            Self::Record(_) => "record",
+            Self::Stop => "stop",
+            Self::Pause => "pause",
+            Self::Unpause => "unpause",
+        }
+    }
+}
+
+/// Apply `press` to `whose` window and return the window now. A fault reads as
+/// off here: whoever presses pause wants quiet, not recording.
+///
+/// # Errors
+/// If the database refuses.
+pub fn press(
+    conn: &Connection,
+    whose: &Whose,
+    now: DateTime<Utc>,
+    press: Press,
+) -> rusqlite::Result<Window> {
+    let current = intent_of(conn, whose, now)?.unwrap_or(Window::Off);
+    let next = match press {
+        Press::Record(until) => Window::open(now, until),
+        Press::Stop => Window::Off,
+        Press::Pause => current.paused(),
+        Press::Unpause => current.unpaused(),
+    };
+    set_intent(conn, whose, next)?;
+    Ok(next)
+}
+
+/// Record who pressed what. Capture control needs no login, so
 /// this carries the request's origin.
 pub fn record_control_origin(
     conn: &Connection,
@@ -450,9 +457,9 @@ pub async fn status_route(
 }
 
 #[derive(Deserialize)]
-pub struct PauseQuery {
-    /// Absent: the full bound.
-    pub minutes: Option<i64>,
+pub struct RecordQuery {
+    /// When to stop, an instant; a day ahead at most.
+    pub until: String,
 }
 
 /// The request fields the audit needs.
@@ -502,29 +509,48 @@ fn audit(conn: &Connection, verb: &str, origin: &str) {
     }
 }
 
-/// `POST /api/capture/pause`. Answers unsettled until the Mac applies it.
+/// `POST /api/capture/record?until=`: open a window, or move its end.
+/// Answers unsettled until the Mac applies it.
+pub async fn record_route(
+    State(st): State<Arc<Control>>,
+    Query(q): Query<RecordQuery>,
+    request: axum::extract::Request,
+) -> Response {
+    let Some(until) = audiocore::instant::parse_utc(&q.until) else {
+        return (
+            axum::http::StatusCode::BAD_REQUEST,
+            "until is not an instant",
+        )
+            .into_response();
+    };
+    control(st, Press::Record(until), request).await
+}
+
+/// `POST /api/capture/stop`.
+pub async fn stop_route(
+    State(st): State<Arc<Control>>,
+    request: axum::extract::Request,
+) -> Response {
+    control(st, Press::Stop, request).await
+}
+
+/// `POST /api/capture/pause`: stop recording, keeping the window's end.
 pub async fn pause_route(
     State(st): State<Arc<Control>>,
-    Query(q): Query<PauseQuery>,
     request: axum::extract::Request,
 ) -> Response {
-    control(st, Intent::Pause { minutes: q.minutes }, request).await
+    control(st, Press::Pause, request).await
 }
 
-/// `POST /api/capture/resume`.
-pub async fn resume_route(
+/// `POST /api/capture/unpause`: record again, to the window's end.
+pub async fn unpause_route(
     State(st): State<Arc<Control>>,
     request: axum::extract::Request,
 ) -> Response {
-    control(st, Intent::Resume, request).await
+    control(st, Press::Unpause, request).await
 }
 
-enum Intent {
-    Resume,
-    Pause { minutes: Option<i64> },
-}
-
-async fn control(st: Arc<Control>, intent: Intent, request: axum::extract::Request) -> Response {
+async fn control(st: Arc<Control>, pressed: Press, request: axum::extract::Request) -> Response {
     let (parts, _) = request.into_parts();
     let peer = parts
         .extensions
@@ -541,18 +567,13 @@ async fn control(st: Arc<Control>, intent: Intent, request: axum::extract::Reque
         let conn = crate::work::open_write(&root)?;
         let now = chrono::Utc::now();
         let whose = Whose::of(&conn, viewer.as_ref())?;
-        let verb = match intent {
-            Intent::Pause { minutes } => {
-                intent_pause_of(&conn, &whose, now, minutes)?;
-                "pause"
-            }
-            Intent::Resume => {
-                intent_resume_of(&conn, &whose)?;
-                "resume"
-            }
-        };
+        press(&conn, &whose, now, pressed)?;
         // After the action, so the audit cannot prevent it.
-        audit(&conn, verb, &asker.describe(&cfg, now.timestamp()));
+        audit(
+            &conn,
+            pressed.verb(),
+            &asker.describe(&cfg, now.timestamp()),
+        );
         capture_state_of(&conn, &whose, now)
     })
     .await

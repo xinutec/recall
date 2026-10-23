@@ -7,8 +7,8 @@
 //! there is no separate heartbeat and a silent stream cannot read as recording.
 
 use crate::events;
+use crate::gate;
 use crate::meter::{SILENCE_PEAK, StreamMeter};
-use crate::pause;
 use crate::rebase::{connection_offset, rebase_segment_names};
 use crate::segmenter::{CaptureConfig, build_segment_argv, segment_output_pattern};
 use crate::wire::{Handshake, HandshakeError, read_handshake};
@@ -26,7 +26,7 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 /// peer is gone (keepalive never probes a healthy-looking connection).
 const READ_TIMEOUT: Duration = Duration::from_secs(15);
 const READ_CHUNK_BYTES: usize = 65536;
-/// How often the accept loop re-checks the global pause.
+/// How often the accept loop re-checks the gate.
 const PAUSE_POLL: Duration = Duration::from_secs(2);
 /// How long a nonblocking accept sleeps when nothing is waiting.
 const ACCEPT_IDLE: Duration = Duration::from_millis(250);
@@ -302,13 +302,13 @@ struct ConnHandle {
 /// Accept device connections on one shared port; each announces itself in a
 /// handshake, then gets its own segmenter.
 ///
-/// While paused, the listener is closed and any active stream dropped.
+/// While the gate is shut, the listener is closed and any active stream dropped.
 pub fn serve(root: &Path, port: u16, config: &CaptureConfig) -> ! {
     let conns: Arc<Mutex<HashMap<u64, ConnHandle>>> = Arc::new(Mutex::new(HashMap::new()));
     let mut listener: Option<TcpListener> = None;
     let mut next_id: u64 = 0;
     loop {
-        if pause::is_paused(root, Utc::now()) {
+        if !gate::records(root, Utc::now()) {
             if listener.take().is_some() {
                 for (_, conn) in conns.lock().expect("conns lock").drain() {
                     conn.dropped_by_pause.store(true, Ordering::Relaxed);

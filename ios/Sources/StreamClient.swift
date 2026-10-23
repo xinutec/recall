@@ -126,11 +126,11 @@ final class StreamClient {
             }
             if Task.isCancelled { break }
 
-            // Not connected: ask Isis whether this is a pause.
+            // Not connected: ask Isis whether capture is off.
             let cap = await CaptureApi.state(host: Prefs.controlHost)
             await MainActor.run {
                 state.capture = cap
-                state.phase = (cap.reachable && !cap.running) ? .paused : .waitingForHost
+                state.phase = (cap.reachable && !cap.running) ? .off : .waitingForHost
             }
             try? await Task.sleep(nanoseconds: reconnectDelayNs)
         }

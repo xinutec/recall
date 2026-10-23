@@ -90,3 +90,23 @@ export function timeOfDaySeconds(iso: string): string {
     second: '2-digit',
   });
 }
+
+/** The next `hh:mm` (local) after `from`: today, or tomorrow once today's has
+ *  passed, so "until 01:00" late at night means the coming night. `null` for
+ *  text that is not a time. */
+export function nextTimeOfDay(hhmm: string, from: Date): Date | null {
+  const match = /^(\d{1,2}):(\d{2})$/.exec(hhmm);
+  if (!match) {
+    return null;
+  }
+  const [h, m] = [Number(match[1]), Number(match[2])];
+  if (h > 23 || m > 59) {
+    return null;
+  }
+  const at = new Date(from);
+  at.setHours(h, m, 0, 0);
+  if (at <= from) {
+    at.setDate(at.getDate() + 1);
+  }
+  return at;
+}
