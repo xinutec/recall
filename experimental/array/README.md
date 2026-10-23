@@ -31,34 +31,48 @@ cargo run --release -p array -- --root /Volumes/Backup/recall \
   0.004 over the minute, at most 0.04 in 2 s windows; coherence ≈ 0 in every
   band, against 1.00 for the control.
 
-## Second look, same call: it is the room, and the shared signal is in the echo
+## Measured right: the mics share most of the waveform
 
-Aligned every 2 s and measured with 171 ms windows instead of 21 ms, usb and
-each phone share about 30% coherent power across 300 Hz–4 kHz (21 ms: 0.02–0.09;
-the estimate's floor is about 0.05):
+A first pass reported coherence ≈ 0, then 0.3: both were my alignment errors (a
+coarse search that could not reach a later mic, and a fine alignment off by its
+own search margin, 10–50 ms). Each run below has the reference against itself
+through the same code as a control, at 1.00 in every band.
 
-| usb against | 100–300 | 300–1k | 1–2k | 2–4k | 4–8k |
+Coherence with 171 ms windows, each 2 s steered by its own measured delay
+(estimate floor about 0.05):
+
+**The 22 Oct call** (speech, two talkers), against usb:
+
+| mic | 100–300 | 300–1k | 1–2k | 2–4k | 4–8k |
 |---|---|---|---|---|---|
-| oneplus6t-0 | 0.25 | 0.34 | 0.35 | 0.31 | 0.15 |
-| oneplus6t-1 | 0.21 | 0.33 | 0.28 | 0.28 | 0.12 |
-| pixel5      | 0.20 | 0.32 | 0.32 | 0.29 | 0.09 |
+| oneplus6t-0 | 0.40 | 0.60 | 0.57 | 0.52 | 0.22 |
+| oneplus6t-1 | 0.30 | 0.58 | 0.58 | 0.51 | 0.21 |
+| pixel5      | 0.26 | 0.47 | 0.51 | 0.43 | 0.12 |
+| iphone11    | 0.05 | 0.04 | 0.04 | 0.05 | 0.04 |
 
-- The capture path keeps the waveform: a scrambled one could not gain coherence
-  with a longer window.
-- One talker's echo is that talker through each mic's room response, a linear
-  filter hundreds of milliseconds long. A short window cannot see it; a long one
-  can. At these distances most of the shared signal is echo, not direct sound,
-  which is why delay-and-sum (the direct path only) found almost nothing.
-- So the combiner to try is a multichannel Wiener filter on long frames: per
-  frequency, each mic's relation to the reference's speech is estimated from the
-  recordings and the mics are combined through it. Its gain is bounded by this
-  coherence.
+iphone11 aligned with nothing on the call; on the loudspeaker test it is the
+best mic. Not yet explained.
 
-## The loudspeaker test, 2026-10-23 21:47 (failed)
+**White noise from the right loudspeaker, 2026-10-23 21:59** (one fixed
+source), against oneplus6t-0:
 
-White noise and read speech from the living room's left and right outputs
-(`Khonsu L`/`R`), at the volume as set: most mics did not rise above their floor
-(usb not at all). Where one did (oneplus6t-0, about 9 dB), the played noise was
-not found in it by correlation at any lag (peak 0.003), so the speaker path does
-not keep the waveform, as a lossy link would not. Loudspeakers are no source for
-a waveform comparison here; speech in the room is.
+| mic | 100–300 | 300–1k | 1–2k | 2–4k | 4–8k |
+|---|---|---|---|---|---|
+| iphone11    | 0.96 | 0.82 | 0.84 | 0.72 | 0.73 |
+| oneplus6t-1 | 0.25 | 0.62 | 0.69 | 0.63 | 0.76 |
+| usb         | 0.37 | 0.68 | 0.64 | 0.56 | 0.62 |
+| pixel5      | 0.21 | 0.38 | 0.51 | 0.49 | 0.55 |
+| geb         | 0.32 | 0.42 | 0.10 | 0.06 | 0.05 |
+
+- Most pairs sit near the ceiling their own noise floors allow: the room costs
+  little at 171 ms. A room's echo is a linear filter of the source, so a window
+  long enough to hold it keeps the relation; at 21 ms most of it is lost.
+- geb loses coherence above 1 kHz and its delay wanders by up to 14 ms within
+  16 s; its capture path needs a look before it joins a combination.
+- The loudspeaker path itself loses the waveform (the played file is not found
+  in any mic), so loudspeaker tests compare mics with each other, never with the
+  file. At the volume first set, most mics did not hear them at all.
+
+So the combiner to build is a multichannel Wiener filter on long frames: per
+frequency, each mic's relation to the reference's speech, estimated from the
+recordings, and the mics combined through it.
