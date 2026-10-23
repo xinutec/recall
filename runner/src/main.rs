@@ -88,13 +88,7 @@ fn parse_args() -> Config {
         };
         (url, token)
     });
-    let (program, args) = match cli.shim.split_first() {
-        Some((program, args)) => (program.clone(), args.to_vec()),
-        None => (
-            "python".to_owned(),
-            vec!["-m".to_owned(), "recall.shim_asr".to_owned()],
-        ),
-    };
+    let (program, args) = shim::command(&cli.shim);
     Config {
         base: cli.url,
         token,

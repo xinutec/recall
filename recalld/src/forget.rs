@@ -207,6 +207,26 @@ pub(crate) struct Recording {
     pub path: String,
 }
 
+impl Recording {
+    /// A row of `id, source_id, start_utc, path`, as every query here selects.
+    fn from_row(r: &rusqlite::Row<'_>) -> rusqlite::Result<Self> {
+        Ok(Self {
+            id: r.get(0)?,
+            source: crate::sql::source_id(r, 1)?,
+            start: r.get(2)?,
+            path: r.get(3)?,
+        })
+    }
+}
+
+/// Every recording of one source.
+fn source_audio(meaning: &Connection, source: &str) -> rusqlite::Result<Vec<Recording>> {
+    SOURCE_AUDIO
+        .prepare(meaning)?
+        .query_map([source], Recording::from_row)?
+        .collect()
+}
+
 /// One ingest-plane file, its start respelled for the meaning plane.
 struct Segment {
     source: SourceId,
@@ -282,14 +302,7 @@ pub fn span(
     let (from, to) = span.meaning();
     let audio: Vec<Recording> = {
         let mut stmt = AUDIO.prepare(meaning)?;
-        let rows = stmt.query_map((&from, &to, json(&uploads)?), |r| {
-            Ok(Recording {
-                id: r.get(0)?,
-                source: crate::sql::source_id(r, 1)?,
-                start: r.get(2)?,
-                path: r.get(3)?,
-            })
-        })?;
+        let rows = stmt.query_map((&from, &to, json(&uploads)?), Recording::from_row)?;
         rows.collect::<rusqlite::Result<_>>()?
     };
     let live: Vec<i64> = {
@@ -391,18 +404,7 @@ pub fn retire_source(
         })?;
         rows.collect::<rusqlite::Result<_>>()?
     };
-    let audio: Vec<Recording> = {
-        let mut stmt = SOURCE_AUDIO.prepare(meaning)?;
-        let rows = stmt.query_map([source.as_str()], |r| {
-            Ok(Recording {
-                id: r.get(0)?,
-                source: crate::sql::source_id(r, 1)?,
-                start: r.get(2)?,
-                path: r.get(3)?,
-            })
-        })?;
-        rows.collect::<rusqlite::Result<_>>()?
-    };
+    let audio = source_audio(meaning, source.as_str())?;
     let mut clips: Vec<ClipId> = Vec::new();
     for segment in &segments {
         if let Some(clip) = crate::clips::by_filename(ingest, &segment.filename)? {
@@ -593,18 +595,7 @@ pub fn rename_source(
         let rows = stmt.query_map([from.as_str()], |r| r.get(0))?;
         rows.collect::<rusqlite::Result<_>>()?
     };
-    let audio: Vec<Recording> = {
-        let mut stmt = SOURCE_AUDIO.prepare(meaning)?;
-        let rows = stmt.query_map([from.as_str()], |r| {
-            Ok(Recording {
-                id: r.get(0)?,
-                source: crate::sql::source_id(r, 1)?,
-                start: r.get(2)?,
-                path: r.get(3)?,
-            })
-        })?;
-        rows.collect::<rusqlite::Result<_>>()?
-    };
+    let audio = source_audio(meaning, from.as_str())?;
     let lines: usize = {
         let n: i64 = COUNT_SOURCE_LINES.query_row(meaning, [from.as_str()], |r| r.get(0))?;
         usize::try_from(n).unwrap_or(0)

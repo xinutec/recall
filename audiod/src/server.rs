@@ -121,7 +121,10 @@ impl Pump<'_> {
             };
             let data = &buf[..n];
             // The archive comes first; meter after.
-            let stdin = self.stdin.as_mut().expect("stdin open while pumping");
+            let Some(stdin) = self.stdin.as_mut() else {
+                self.ended = "segmenter already closed".into();
+                return;
+            };
             if let Err(err) = stdin.write_all(data) {
                 self.ended = format!("segmenter pipe broke ({err})");
                 tracing::error!(source = self.source_id, error = %err, "ingest: segmenter died mid-stream");
@@ -330,7 +333,10 @@ pub fn serve(root: &Path, port: u16, config: &CaptureConfig) -> ! {
                 }
             }
         }
-        match listener.as_ref().expect("bound above").accept() {
+        let Some(bound) = listener.as_ref() else {
+            continue;
+        };
+        match bound.accept() {
             Ok((stream, _addr)) => {
                 // Reads on the connection are bounded (READ_TIMEOUT), so
                 // blocking mode is what the pump wants.

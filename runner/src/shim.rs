@@ -57,6 +57,19 @@ impl std::fmt::Display for Error {
 
 impl std::error::Error for Error {}
 
+/// The program and its arguments from `--shim`'s words; none means the
+/// transcribing shim, `python -m recall.shim_asr`.
+#[must_use]
+pub fn command(words: &[String]) -> (String, Vec<String>) {
+    match words.split_first() {
+        Some((program, args)) => (program.clone(), args.to_vec()),
+        None => (
+            "python".to_owned(),
+            vec!["-m".to_owned(), "recall.shim_asr".to_owned()],
+        ),
+    }
+}
+
 /// A running shim (`recall.shim`), held for the life of the runner because
 /// loading a model costs seconds.
 pub struct Shim {
