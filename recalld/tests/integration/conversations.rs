@@ -1,22 +1,28 @@
 //! Conversation and moment folding.
 
 use audiocore::instant::Stamp;
-use chrono::{DateTime, TimeDelta, Utc};
+use chrono::{DateTime, Utc};
 use recalld::conversations::{
     DEFAULT_GAP_SECONDS, Turn, best_colocated_guess, cluster_moments, fold, segment_conversations,
 };
-use transcript::SourceId;
+use transcript::{Instant, SourceId, Span};
 
 fn at(seconds: i64) -> DateTime<Utc> {
     DateTime::from_timestamp(1_780_000_000 + seconds, 0).expect("in range")
+}
+
+/// From `start` to `end`, in milliseconds after `at(0)`.
+fn millis(start: i64, end: i64) -> Span {
+    let base = at(0).timestamp_micros();
+    let instant = |ms: i64| Instant::from_micros(base + ms * 1_000).expect("in range");
+    Span::new(instant(start), instant(end)).expect("in order")
 }
 
 /// A turn with everything the folds ignore left empty.
 fn turn(id: i64, start: i64, end: i64, source: &str) -> Turn {
     Turn {
         id,
-        start: at(start),
-        end: at(end),
+        span: millis(start * 1_000, end * 1_000),
         speaker_label: None,
         source_id: Some(SourceId::parse(source).expect("source id")),
         asr_confidence: None,
@@ -382,13 +388,10 @@ fn a_gap_measured_in_fractions_of_a_second_is_respected() {
     // The gap is compared as a float, not whole seconds.
     let turns = vec![
         Turn {
-            end: at(0) + TimeDelta::milliseconds(500),
+            span: millis(0, 500),
             ..turn(1, 0, 0, "usb")
         },
-        Turn {
-            start: at(2),
-            ..turn(2, 2, 3, "usb")
-        },
+        turn(2, 2, 3, "usb"),
     ];
 
     // The real gap is 1.5s.
@@ -404,6 +407,7 @@ fn segment(id: i64, start: i64, end: i64, text: &str) -> recalld::reads::Segment
         id,
         start_utc: Stamp::of(at(start)),
         end_utc: Stamp::of(at(end)),
+        span: millis(start * 1_000, end * 1_000),
         text: text.to_owned(),
         language: None,
         asr_confidence: None,
@@ -562,6 +566,11 @@ fn heard(mic: usize, slot: i64, late: f64, words: &[(f64, f64, &str)]) -> recall
     );
     s.start_utc = stamp(first);
     s.end_utc = stamp(last);
+    s.span = Span::new(
+        Instant::from_micros(us(first)).expect("in range"),
+        Instant::from_micros(us(last)).expect("in range"),
+    )
+    .expect("in order");
     s.text = words.iter().map(|w| w.2).collect::<Vec<_>>().join(" ");
     s.words = words
         .iter()

@@ -196,6 +196,23 @@ fn the_tier_badge_is_the_stored_tier_and_an_unknown_one_fails_the_read() {
     assert!(reads::timeline(&conn, 50, None).is_err());
 }
 
+/// A line that ends before it starts cannot be placed, so the read refuses it
+/// instead of folding it somewhere.
+#[test]
+fn a_line_ending_before_it_starts_fails_the_read() {
+    let conn = db();
+    turn(&conn, 1, "2026-09-01T10:00:05+00:00", "t", &[]);
+    assert!(reads::timeline(&conn, 50, None).is_ok());
+    turn(
+        &conn,
+        2,
+        "2026-09-01T10:00:06+00:00",
+        "t",
+        &[("end_utc", "2026-09-01T10:00:04+00:00")],
+    );
+    assert!(reads::timeline(&conn, 50, None).is_err());
+}
+
 #[test]
 fn a_page_boundary_never_splits_turns_that_share_an_instant() {
     // Several turns can share a start; a page cut inside the group would make

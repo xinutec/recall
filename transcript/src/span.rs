@@ -49,6 +49,22 @@ impl Span {
         self.start < other.end && other.start < self.end
     }
 
+    /// Microseconds the two share; zero when they only touch or are apart.
+    pub fn shared_micros(self, other: Self) -> i64 {
+        (self.end.min(other.end).micros() - self.start.max(other.start).micros()).max(0)
+    }
+
+    /// The span `micros` later (earlier when negative); `None` past the
+    /// representable range.
+    #[must_use]
+    pub fn shifted(self, micros: i64) -> Option<Self> {
+        let at = |i: Instant| Instant::from_micros(i.micros().checked_add(micros)?);
+        Some(Self {
+            start: at(self.start)?,
+            end: at(self.end)?,
+        })
+    }
+
     /// The smallest span containing both.
     #[must_use]
     pub fn cover(self, other: Self) -> Self {

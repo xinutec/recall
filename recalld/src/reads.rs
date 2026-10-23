@@ -5,7 +5,7 @@ use rusqlite::{Connection, OptionalExtension, Row};
 use serde::Serialize;
 use std::path::Path;
 use std::time::Duration;
-use transcript::SourceId;
+use transcript::{Instant, SourceId, Span};
 
 use crate::line::{HiddenKind, HiddenReason, Stage};
 use audiocore::instant::Stamp;
@@ -108,8 +108,11 @@ pub struct PageOut {
 /// A turn's stored columns, before the display rules.
 pub struct Segment {
     pub id: i64,
+    /// The stored spellings, which the wire repeats.
     pub start_utc: Stamp,
     pub end_utc: Stamp,
+    /// The same instants, in order: checked once, where the row is read.
+    pub span: Span,
     pub text: String,
     pub language: Option<String>,
     pub asr_confidence: Option<f64>,
@@ -129,10 +132,24 @@ pub struct Segment {
 
 impl Segment {
     fn from_row(row: &Row<'_>) -> rusqlite::Result<Self> {
+        let start_utc: Stamp = row.get("start_utc")?;
+        let end_utc: Stamp = row.get("end_utc")?;
+        let span = Span::new(
+            Instant::from_utc(start_utc.utc()),
+            Instant::from_utc(end_utc.utc()),
+        )
+        .ok_or_else(|| {
+            rusqlite::Error::FromSqlConversionFailure(
+                0,
+                rusqlite::types::Type::Text,
+                format!("a line ending before it starts: {start_utc} to {end_utc}").into(),
+            )
+        })?;
         Ok(Self {
             id: row.get("id")?,
-            start_utc: row.get("start_utc")?,
-            end_utc: row.get("end_utc")?,
+            start_utc,
+            end_utc,
+            span,
             text: row.get("text")?,
             language: row.get("language")?,
             asr_confidence: row.get("asr_confidence")?,

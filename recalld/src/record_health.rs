@@ -71,7 +71,12 @@ pub fn faults_since(log: &Path, since: DateTime<Utc>) -> std::io::Result<Faults>
 /// # Errors
 /// If the database refuses.
 pub fn doubled_minutes(meaning: &Connection, since: DateTime<Utc>) -> rusqlite::Result<Doubled> {
-    let parse = |raw: &str| audiocore::instant::parse_utc(raw);
+    let span = |start: &str, end: &str| {
+        transcript::Span::new(
+            transcript::Instant::parse(start)?,
+            transcript::Instant::parse(end)?,
+        )
+    };
     let mut stmt = COPY_CANDIDATES.prepare(meaning)?;
     let rows = stmt.query_map(
         (
@@ -91,11 +96,7 @@ pub fn doubled_minutes(meaning: &Connection, since: DateTime<Utc>) -> rusqlite::
     let mut minutes = Vec::new();
     for row in rows {
         let (source, a_start, a_end, b_start, b_end) = row?;
-        let spans = (
-            parse(&a_start).zip(parse(&a_end)),
-            parse(&b_start).zip(parse(&b_end)),
-        );
-        if let (Some(a), Some(b)) = spans
+        if let (Some(a), Some(b)) = (span(&a_start, &a_end), span(&b_start, &b_end))
             && same_span(a, b)
         {
             minutes.push(DoubledMinute {

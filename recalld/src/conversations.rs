@@ -4,21 +4,19 @@
 //! one, each shown line is a *moment*, carrying the other microphones' versions
 //! of the same speech.
 
-use crate::same_speech::{overlap, same_span, seconds as seconds_between};
-use chrono::{DateTime, Utc};
+use crate::same_speech::same_span;
 use std::collections::HashMap;
-use transcript::SourceId;
+use transcript::{Instant, SourceId, Span};
 
 /// A conversation breaks after a silence longer than this; the `gap` query
 /// parameter overrides it.
 pub const DEFAULT_GAP_SECONDS: f64 = 300.0;
 
-/// A turn reduced to what folding reads, its instants parsed once.
+/// A turn reduced to what folding reads.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Turn {
     pub id: i64,
-    pub start: DateTime<Utc>,
-    pub end: DateTime<Utc>,
+    pub span: Span,
     pub speaker_label: Option<String>,
     pub source_id: Option<SourceId>,
     pub asr_confidence: Option<f64>,
@@ -26,9 +24,23 @@ pub struct Turn {
     pub speaker_score: Option<f64>,
     /// The clip it came from: a mic's two clips of one span are copies.
     pub audio_segment_id: Option<i64>,
-    /// Its words as [`spoken`] spells them, each with its start in
-    /// microseconds: what [`clock_offsets`] matches across mics.
-    pub words: Vec<(i64, String)>,
+    /// Its words as [`spoken`] spells them, each with its start: what
+    /// [`clock_offsets`] matches across mics.
+    pub words: Vec<(Instant, String)>,
+}
+
+/// How far a mic's clock sits from the reference mic's: what to add to its
+/// stamps to land on the reference's clock.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub struct ClockOffset {
+    micros: i64,
+}
+
+impl ClockOffset {
+    #[must_use]
+    pub const fn micros(self) -> i64 {
+        self.micros
+    }
 }
 
 /// How far apart two mics' clocks are searched for: phones have been seen
@@ -57,7 +69,7 @@ pub fn spoken(word: &str) -> String {
 /// heard: the time difference most of them agree on. A source with fewer than
 /// [`MIN_AGREEING_WORDS`] agreeing keeps its own clock, so it is absent.
 #[must_use]
-pub fn clock_offsets<'a>(turns: &'a [Turn], group: &[usize]) -> HashMap<&'a SourceId, i64> {
+pub fn clock_offsets<'a>(turns: &'a [Turn], group: &[usize]) -> HashMap<&'a SourceId, ClockOffset> {
     let mut order: Vec<&SourceId> = Vec::new();
     let mut words: HashMap<&SourceId, Vec<(i64, &str)>> = HashMap::new();
     for &i in group {
@@ -73,7 +85,7 @@ pub fn clock_offsets<'a>(turns: &'a [Turn], group: &[usize]) -> HashMap<&'a Sour
                 .words
                 .iter()
                 .filter(|(_, w)| !w.is_empty())
-                .map(|(t, w)| (*t, w.as_str())),
+                .map(|(t, w)| (t.micros(), w.as_str())),
         );
     }
     // The most words, the first on a tie.
@@ -115,7 +127,8 @@ pub fn clock_offsets<'a>(turns: &'a [Turn], group: &[usize]) -> HashMap<&'a Sour
             }
         }
         if best.1 - best.0 >= MIN_AGREEING_WORDS {
-            out.insert(source, deltas[usize::midpoint(best.0, best.1)]);
+            let micros = deltas[usize::midpoint(best.0, best.1)];
+            out.insert(source, ClockOffset { micros });
         }
     }
     out
@@ -131,13 +144,11 @@ pub fn aligned(turns: &[Turn], group: &[usize]) -> Vec<Turn> {
         let Some(&offset) = turns[i].source_id.as_ref().and_then(|s| offsets.get(s)) else {
             continue;
         };
-        let shift = chrono::TimeDelta::microseconds(offset);
-        let turn = &mut out[i];
-        turn.start += shift;
-        turn.end += shift;
-        for (t, _) in &mut turn.words {
-            *t += offset;
-        }
+        // An offset is a few seconds, nowhere near the edge of time.
+        let Some(span) = turns[i].span.shifted(offset.micros()) else {
+            continue;
+        };
+        out[i].span = span;
     }
     out
 }
@@ -147,16 +158,18 @@ pub fn aligned(turns: &[Turn], group: &[usize]) -> Vec<Turn> {
 pub fn segment_conversations(turns: &[Turn], gap_seconds: f64) -> Vec<Vec<usize>> {
     let mut conversations = Vec::new();
     let mut current: Vec<usize> = Vec::new();
-    let mut prev_end: Option<DateTime<Utc>> = None;
+    let gap_micros = gap_seconds * 1e6;
+    let mut prev_end: Option<Instant> = None;
     for (index, turn) in turns.iter().enumerate() {
         if let Some(end) = prev_end
-            && seconds_between(end, turn.start) > gap_seconds
+            && (turn.span.start().micros() - end.micros()) as f64 > gap_micros
         {
             conversations.push(std::mem::take(&mut current));
             prev_end = None;
         }
         current.push(index);
-        prev_end = Some(prev_end.map_or(turn.end, |end| end.max(turn.end)));
+        let end = turn.span.end();
+        prev_end = Some(prev_end.map_or(end, |last| last.max(end)));
     }
     if !current.is_empty() {
         conversations.push(current);
@@ -181,20 +194,20 @@ pub struct Moment {
 pub fn cluster_moments(turns: &[Turn], group: &[usize]) -> Vec<Moment> {
     let mut stretches: Vec<Vec<usize>> = Vec::new();
     let mut current: Vec<usize> = Vec::new();
-    let mut running_end: Option<DateTime<Utc>> = None;
+    let mut running_end: Option<Instant> = None;
     for &index in group {
         let turn = &turns[index];
         match running_end {
-            Some(end) if turn.start < end => {
+            Some(end) if turn.span.start() < end => {
                 current.push(index);
-                running_end = Some(end.max(turn.end));
+                running_end = Some(end.max(turn.span.end()));
             }
             _ => {
                 if !current.is_empty() {
                     stretches.push(std::mem::take(&mut current));
                 }
                 current = vec![index];
-                running_end = Some(turn.end);
+                running_end = Some(turn.span.end());
             }
         }
     }
@@ -205,10 +218,6 @@ pub fn cluster_moments(turns: &[Turn], group: &[usize]) -> Vec<Moment> {
         .iter()
         .flat_map(|stretch| moments_of(turns, stretch))
         .collect()
-}
-
-fn span(turn: &Turn) -> (DateTime<Utc>, DateTime<Utc>) {
-    (turn.start, turn.end)
 }
 
 /// One stretch's moments, in order.
@@ -224,10 +233,10 @@ fn moments_of(turns: &[Turn], stretch: &[usize]) -> Vec<Moment> {
     let mut missed: Vec<usize> = Vec::new();
     for &other in &rest {
         // The most overlapped shown line; the first on a tie, hence `>`.
-        let mut best: Option<(usize, f64)> = None;
+        let mut best: Option<(usize, i64)> = None;
         for (k, moment) in moments.iter().enumerate() {
-            let shared = overlap(span(&turns[other]), span(&turns[moment.primary]));
-            if shared > 0.0 && best.is_none_or(|(_, most)| shared > most) {
+            let shared = turns[other].span.shared_micros(turns[moment.primary].span);
+            if shared > 0 && best.is_none_or(|(_, most)| shared > most) {
                 best = Some((k, shared));
             }
         }
@@ -241,10 +250,10 @@ fn moments_of(turns: &[Turn], stretch: &[usize]) -> Vec<Moment> {
     missed.sort_by(|&a, &b| quality(turns, &[b]).total_cmp(&quality(turns, &[a])));
     let mut found: Vec<Moment> = Vec::new();
     for other in missed {
-        let heard = span(&turns[other]);
+        let heard = turns[other].span;
         match found
             .iter_mut()
-            .find(|m| same_span(heard, span(&turns[m.primary])))
+            .find(|m| same_span(heard, turns[m.primary].span))
         {
             Some(moment) => moment.alternates.push(other),
             None => found.push(Moment {
@@ -255,15 +264,16 @@ fn moments_of(turns: &[Turn], stretch: &[usize]) -> Vec<Moment> {
     }
     moments.extend(found);
     for moment in &mut moments {
-        moment.alternates.sort_by_key(|&i| turns[i].start);
+        moment.alternates.sort_by_key(|&i| turns[i].span.start());
     }
-    moments.sort_by_key(|m| turns[m.primary].start);
+    moments.sort_by_key(|m| turns[m.primary].span.start());
     moments
 }
 
-/// At least a millisecond, so a zero-length turn still weighs something.
+/// In microseconds, at least a millisecond, so a zero-length turn still
+/// weighs something.
 fn duration(turn: &Turn) -> f64 {
-    seconds_between(turn.start, turn.end).max(0.001)
+    turn.span.micros().max(1_000) as f64
 }
 
 /// ASR confidence weighted by duration; a missing score counts as zero.
@@ -276,30 +286,22 @@ fn quality(turns: &[Turn], indices: &[usize]) -> f64 {
     if total > 0.0 { heard / total } else { 0.0 }
 }
 
-/// Seconds covered by the union of these turns' spans.
-fn covered(turns: &[Turn], indices: &[usize]) -> f64 {
-    let mut spans: Vec<(DateTime<Utc>, DateTime<Utc>)> = indices
-        .iter()
-        .map(|&i| (turns[i].start, turns[i].end))
-        .collect();
+/// Microseconds covered by the union of these turns' spans.
+fn covered(turns: &[Turn], indices: &[usize]) -> i64 {
+    let mut spans: Vec<Span> = indices.iter().map(|&i| turns[i].span).collect();
     spans.sort();
-    let mut total = 0.0;
-    let mut open: Option<(DateTime<Utc>, DateTime<Utc>)> = None;
-    for (start, end) in spans {
+    let mut total = 0;
+    let mut open: Option<Span> = None;
+    for span in spans {
         match open {
-            Some((from, to)) if start <= to => open = Some((from, to.max(end))),
+            Some(run) if span.start() <= run.end() => open = Some(run.cover(span)),
             _ => {
-                if let Some((from, to)) = open {
-                    total += seconds_between(from, to);
-                }
-                open = Some((start, end));
+                total += open.map_or(0, Span::micros);
+                open = Some(span);
             }
         }
     }
-    if let Some((from, to)) = open {
-        total += seconds_between(from, to);
-    }
-    total
+    total + open.map_or(0, Span::micros)
 }
 
 /// One mic's turns split into shown and copies. A phone's minute arrives twice
@@ -314,23 +316,19 @@ fn without_copies(turns: &[Turn], indices: &[usize]) -> (Vec<usize>, Vec<usize>)
             None => clips.push((clip, vec![i])),
         }
     }
-    let span = |members: &[usize]| {
-        let start = members.iter().map(|&i| turns[i].start).min();
-        let end = members.iter().map(|&i| turns[i].end).max();
-        start.zip(end)
-    };
+    let span = |members: &[usize]| members.iter().map(|&i| turns[i].span).reduce(Span::cover);
     clips.sort_by(|a, b| quality(turns, &b.1).total_cmp(&quality(turns, &a.1)));
-    let mut kept: Vec<(DateTime<Utc>, DateTime<Utc>)> = Vec::new();
+    let mut kept: Vec<Span> = Vec::new();
     let (mut shown, mut copies) = (Vec::new(), Vec::new());
     for (_, members) in clips {
-        let Some((start, end)) = span(&members) else {
+        let Some(heard) = span(&members) else {
             continue;
         };
-        let copy = kept.iter().any(|&kept| same_span((start, end), kept));
+        let copy = kept.iter().any(|&kept| same_span(heard, kept));
         if copy {
             copies.extend(members);
         } else {
-            kept.push((start, end));
+            kept.push(heard);
             shown.extend(members);
         }
     }
@@ -362,8 +360,8 @@ fn spine(turns: &[Turn], stretch: &[usize]) -> (Vec<usize>, Vec<usize>) {
     let span = covered(turns, stretch);
     let key = |source: Option<&str>| {
         let shown = &split[&source].0;
-        let coverage = if span > 0.0 {
-            covered(turns, shown) / span
+        let coverage = if span > 0 {
+            covered(turns, shown) as f64 / span as f64
         } else {
             1.0
         };
@@ -386,7 +384,7 @@ fn spine(turns: &[Turn], stretch: &[usize]) -> (Vec<usize>, Vec<usize>) {
 
     let (shown, copies) = &split[&best];
     let mut primary = shown.clone();
-    primary.sort_by_key(|&i| turns[i].start);
+    primary.sort_by_key(|&i| turns[i].span.start());
     let rest: Vec<usize> = order
         .iter()
         .filter(|&&source| source != best)
@@ -411,7 +409,7 @@ pub fn best_colocated_guess(
     let overlapping: Vec<&Turn> = alternates
         .iter()
         .map(|&i| &turns[i])
-        .filter(|alt| alt.speaker_guess.is_some() && alt.start < turn.end && alt.end > turn.start)
+        .filter(|alt| alt.speaker_guess.is_some() && alt.span.overlaps(turn.span))
         .collect();
     let (mut guess, mut score) = (turn.speaker_guess.clone(), turn.speaker_score);
     match &guess {
@@ -506,8 +504,7 @@ fn turns_of(segments: &[reads::Segment]) -> (Vec<Turn>, Vec<usize>) {
     for (index, segment) in segments.iter().enumerate() {
         turns.push(Turn {
             id: segment.id,
-            start: segment.start_utc.utc(),
-            end: segment.end_utc.utc(),
+            span: segment.span,
             speaker_label: segment.speaker_label.clone(),
             source_id: segment.source_id.clone(),
             asr_confidence: segment.asr_confidence,
@@ -517,7 +514,8 @@ fn turns_of(segments: &[reads::Segment]) -> (Vec<Turn>, Vec<usize>) {
             words: segment
                 .words
                 .iter()
-                .map(|w| (w.start_us, spoken(&w.text)))
+                // A word time outside chrono's range is no word time.
+                .filter_map(|w| Some((Instant::from_micros(w.start_us)?, spoken(&w.text))))
                 .collect(),
         });
         kept.push(index);
@@ -563,7 +561,7 @@ fn conversation_out(
     let on_one_clock = aligned(turns, group);
     // Folding reads the group in start order, which moving a clock changes.
     let mut by_start = group.to_vec();
-    by_start.sort_by_key(|&i| (on_one_clock[i].start, on_one_clock[i].id));
+    by_start.sort_by_key(|&i| (on_one_clock[i].span.start(), on_one_clock[i].id));
     let moments = cluster_moments(&on_one_clock, &by_start);
     let shown: Vec<usize> = moments.iter().map(|m| m.primary).collect();
     let preview = shown
@@ -585,7 +583,7 @@ fn conversation_out(
             .iter()
             .rev()
             .copied()
-            .max_by_key(|&i| turns[i].end)
+            .max_by_key(|&i| turns[i].span.end())
             .map(|i| row(i).end_utc.to_string())
             .unwrap_or_default(),
         turn_count: shown.len(),

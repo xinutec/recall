@@ -65,6 +65,23 @@ fn spans_overlap_only_when_they_share_time() {
 }
 
 #[test]
+fn spans_share_only_the_time_both_cover() {
+    let span = |a, b| Span::new(us(a), us(b)).unwrap();
+    assert_eq!(span(0, 10).shared_micros(span(5, 15)), 5);
+    assert_eq!(span(5, 15).shared_micros(span(0, 10)), 5);
+    assert_eq!(span(0, 10).shared_micros(span(10, 20)), 0, "touching");
+    assert_eq!(span(0, 10).shared_micros(span(30, 40)), 0, "apart");
+}
+
+#[test]
+fn a_shifted_span_keeps_its_length_and_refuses_the_edge_of_time() {
+    let span = Span::new(us(10), us(20)).unwrap();
+    let later = span.shifted(-4).expect("in range");
+    assert_eq!((later.start(), later.end()), (us(6), us(16)));
+    assert!(span.shifted(i64::MAX).is_none());
+}
+
+#[test]
 fn a_source_id_is_one_safe_path_component() {
     for good in [
         "usb",
