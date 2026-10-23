@@ -31,15 +31,34 @@ cargo run --release -p array -- --root /Volumes/Backup/recall \
   0.004 over the minute, at most 0.04 in 2 s windows; coherence ≈ 0 in every
   band, against 1.00 for the control.
 
-Not yet told apart:
-1. Room physics: a few metres from the talker each mic hears mostly
-   reverberation, which is uncorrelated between points metres apart. Then a
-   steered sum of these mics gains nothing, and only a close mic or a compact
-   array (one clock, centimetres apart) can.
-2. The capture path: a phone that fell back from `UNPROCESSED` to processed
-   `MIC`, or a stream that drops samples, keeps the envelope and scrambles the
-   waveform. The app does not log which source it opened.
+## Second look, same call: it is the room, and the shared signal is in the echo
 
-The test that separates them: two phones side by side (~10 cm) and a mic 2–3 m
-away, someone speaking at 1 m. Side by side must cohere strongly below ~1 kHz if
-the capture path is sound; how much the distant pair keeps is the room's answer.
+Aligned every 2 s and measured with 171 ms windows instead of 21 ms, usb and
+each phone share about 30% coherent power across 300 Hz–4 kHz (21 ms: 0.02–0.09;
+the estimate's floor is about 0.05):
+
+| usb against | 100–300 | 300–1k | 1–2k | 2–4k | 4–8k |
+|---|---|---|---|---|---|
+| oneplus6t-0 | 0.25 | 0.34 | 0.35 | 0.31 | 0.15 |
+| oneplus6t-1 | 0.21 | 0.33 | 0.28 | 0.28 | 0.12 |
+| pixel5      | 0.20 | 0.32 | 0.32 | 0.29 | 0.09 |
+
+- The capture path keeps the waveform: a scrambled one could not gain coherence
+  with a longer window.
+- One talker's echo is that talker through each mic's room response, a linear
+  filter hundreds of milliseconds long. A short window cannot see it; a long one
+  can. At these distances most of the shared signal is echo, not direct sound,
+  which is why delay-and-sum (the direct path only) found almost nothing.
+- So the combiner to try is a multichannel Wiener filter on long frames: per
+  frequency, each mic's relation to the reference's speech is estimated from the
+  recordings and the mics are combined through it. Its gain is bounded by this
+  coherence.
+
+## The loudspeaker test, 2026-10-23 21:47 (failed)
+
+White noise and read speech from the living room's left and right outputs
+(`Khonsu L`/`R`), at the volume as set: most mics did not rise above their floor
+(usb not at all). Where one did (oneplus6t-0, about 9 dB), the played noise was
+not found in it by correlation at any lag (peak 0.003), so the speaker path does
+not keep the waveform, as a lossy link would not. Loudspeakers are no source for
+a waveform comparison here; speech in the room is.
