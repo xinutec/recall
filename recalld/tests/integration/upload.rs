@@ -151,6 +151,7 @@ fn a_title_the_user_chose_survives_a_re_registration() {
         &conn,
         "m",
         "Neuro-oncology clinic",
+        Some("a"),
         std::path::Path::new("/data/x.mp3"),
         at("2026-07-03T08:50:00+00:00"),
         MEDIA,
@@ -161,6 +162,7 @@ fn a_title_the_user_chose_survives_a_re_registration() {
         &conn,
         "m",
         "Meeting 2026-07-03 09:50",
+        Some("b"),
         std::path::Path::new("/data/x.mp3"),
         at("2026-07-03T08:50:00+00:00"),
         MEDIA,
@@ -171,6 +173,10 @@ fn a_title_the_user_chose_survives_a_re_registration() {
         .query_row("SELECT name FROM sources WHERE id='m'", [], |r| r.get(0))
         .expect("read back");
     assert_eq!(name, "Neuro-oncology clinic");
+    let owner: Option<String> = conn
+        .query_row("SELECT owner FROM sources WHERE id = 'm'", [], |r| r.get(0))
+        .expect("owner");
+    assert_eq!(owner.as_deref(), Some("a"), "and so does whose it is");
 }
 
 #[test]
@@ -181,6 +187,7 @@ fn the_segments_span_is_the_measured_duration() {
         &conn,
         "m",
         "M",
+        None,
         std::path::Path::new("/data/x.mp3"),
         at("2026-07-03T08:50:00+00:00"),
         MEDIA,
@@ -211,6 +218,7 @@ fn re_registering_the_same_segment_does_not_duplicate_it() {
             &conn,
             "m",
             "M",
+            None,
             std::path::Path::new("/data/x.mp3"),
             at("2026-07-03T08:50:00+00:00"),
             MEDIA,
@@ -367,14 +375,15 @@ async fn a_real_recording_uploads_and_becomes_a_session() {
 
     // The file is on disk, and the source is an upload.
     let conn = Connection::open(dir.path().join("recall.sqlite")).expect("db");
-    let (kind, path): (String, String) = conn
+    let (kind, owner, path): (String, Option<String>, String) = conn
         .query_row(
-            "SELECT s.kind, a.path FROM sources s JOIN audio_segments a ON a.source_id = s.id",
+            "SELECT s.kind, s.owner, a.path FROM sources s JOIN audio_segments a ON a.source_id = s.id",
             [],
-            |r| Ok((r.get(0)?, r.get(1)?)),
+            |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
         )
         .expect("row");
     assert_eq!(kind, "upload");
+    assert_eq!(owner.as_deref(), Some("user"), "the uploader's");
     assert!(
         std::path::Path::new(&path).exists(),
         "the audio is on disk at {path}"
@@ -669,7 +678,7 @@ fn two_uploads_in_the_repeated_hour_stay_two_sessions_with_two_files() {
     for started in [first, second] {
         let (id, title) = meeting_id(started);
         let path = stored_path(root, &id, started, ".mp3");
-        register(&conn, &id, &title, &path, started, MEDIA).expect("registered");
+        register(&conn, &id, &title, None, &path, started, MEDIA).expect("registered");
         paths.push(path);
     }
 

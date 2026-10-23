@@ -15,7 +15,8 @@ use std::process::Command;
 
 crate::statements! {
     ADD_SOURCE: Meaning =
-        "INSERT INTO sources (id, name, kind) VALUES (?1, ?2, ?3) ON CONFLICT(id) DO NOTHING";
+        "INSERT INTO sources (id, name, kind, owner) VALUES (?1, ?2, ?3, ?4)
+         ON CONFLICT(id) DO NOTHING";
     ADD_AUDIO_SEGMENT: Meaning =
         "INSERT OR IGNORE INTO audio_segments \
              (source_id, path, start_utc, end_utc, sample_rate, channels) \
@@ -250,16 +251,20 @@ pub fn was_deleted(
 }
 
 /// Register the source and its one audio segment. A re-upload keeps the title
-/// the session already has.
+/// and owner the session already has.
 pub fn register(
     conn: &Connection,
     source: &str,
     name: &str,
+    owner: Option<&str>,
     path: &Path,
     started: DateTime<Utc>,
     media: Media,
 ) -> Result<(), UploadError> {
-    ADD_SOURCE.execute(conn, (source, name, crate::sources::SourceKind::Upload))?;
+    ADD_SOURCE.execute(
+        conn,
+        (source, name, crate::sources::SourceKind::Upload, owner),
+    )?;
     let end = started + chrono::Duration::microseconds((media.duration_s * 1e6).round() as i64);
     ADD_AUDIO_SEGMENT.execute(
         conn,
@@ -391,8 +396,11 @@ async fn read_form(mut parts: Multipart) -> Result<Form, Response> {
 
 pub async fn create_session_route(
     State(st): State<Arc<reads::State>>,
+    viewer: Option<axum::Extension<crate::webauth::Viewer>>,
     parts: Multipart,
 ) -> Response {
+    // The uploader's; an upload by device token is nobody's until claimed.
+    let owner = viewer.map(|axum::Extension(v)| v.user_id);
     let form = match read_form(parts).await {
         Ok(form) => form,
         Err(response) => return response,
@@ -439,7 +447,15 @@ pub async fn create_session_route(
                 }
             };
             let ingest = crate::store::open(&root)?;
-            register(&meaning, &source, &name, &path, started, media)?;
+            register(
+                &meaning,
+                &source,
+                &name,
+                owner.as_deref(),
+                &path,
+                started,
+                media,
+            )?;
             // Before the ingest row, so the first transcription leases with it.
             let id = transcript::SourceId::parse(&source).expect("meeting_id spells a source id");
             if let Some(language) = language {

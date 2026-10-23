@@ -9,7 +9,7 @@ use audiocore::instant::Stamp;
 use audiocore::job::Kind;
 use audiocore::work::Span;
 use chrono::{DateTime, Utc};
-use rusqlite::Connection;
+use rusqlite::{Connection, OptionalExtension};
 use std::collections::{HashMap, HashSet};
 
 crate::statements! {
@@ -32,10 +32,13 @@ crate::statements! {
              ORDER BY s.start_utc DESC";
     DERIVE_JOB: Ingest =
         "INSERT OR IGNORE INTO jobs (kind, filename, created_utc) VALUES (?1, ?2, ?3)";
+    /// What a naming act names: a clip, or rarely a whole source.
+    ACT_TARGET: Meaning = "SELECT clip_id, source_id FROM edits WHERE id = ?1";
+    SOURCE_OWNER: Meaning = "SELECT owner FROM sources WHERE id = ?1";
     ADD_SPEAKER: Meaning =
-        "INSERT OR IGNORE INTO speakers (name) VALUES (?1)";
+        "INSERT OR IGNORE INTO speakers (name, owner) VALUES (?1, ?2)";
     SPEAKER_ID: Meaning =
-        "SELECT id FROM speakers WHERE name = ?1";
+        "SELECT id FROM speakers WHERE name = ?1 AND owner IS ?2";
     ADD_EMBEDDING: Meaning =
         "INSERT INTO speaker_embeddings (speaker_id, vector, created_utc, source_edit_id)
          VALUES (?1, ?2, ?3, ?4)";
@@ -281,8 +284,34 @@ fn still_wanted(meaning: &Connection) -> rusqlite::Result<HashMap<i64, String>> 
         .collect())
 }
 
+/// Whose recording a naming act names: its person joins their roster. `None`
+/// for a source nobody has claimed.
+fn owner_of_act(
+    meaning: &Connection,
+    ingest: &Connection,
+    act: i64,
+) -> rusqlite::Result<Option<String>> {
+    let (clip, source): (Option<i64>, Option<String>) =
+        ACT_TARGET.query_row(meaning, [act], |r| Ok((r.get(0)?, r.get(1)?)))?;
+    let source = match (source, clip) {
+        (Some(source), _) => Some(source),
+        (None, Some(clip)) => crate::clips::by_id(ingest, transcript::ClipId::from_stored(clip))
+            .map_err(|err| rusqlite::Error::ToSqlConversionFailure(Box::new(err)))?
+            .map(|c| c.source.as_str().to_owned()),
+        (None, None) => None,
+    };
+    let Some(source) = source else {
+        return Ok(None);
+    };
+    Ok(SOURCE_OWNER
+        .query_row(meaning, [source], |r| r.get(0))
+        .optional()?
+        .flatten())
+}
+
 fn enrol_one(
     meaning: &Connection,
+    ingest: &Connection,
     person: &str,
     print: &Print,
     now: &Stamp,
@@ -290,8 +319,9 @@ fn enrol_one(
     // An error, never a stand-in: an empty print matches everyone.
     let vector = serde_json::to_string(&print.vector)
         .map_err(|err| rusqlite::Error::ToSqlConversionFailure(err.into()))?;
-    ADD_SPEAKER.execute(meaning, [person])?;
-    let speaker_id: i64 = SPEAKER_ID.query_row(meaning, [person], |r| r.get(0))?;
+    let owner = owner_of_act(meaning, ingest, print.segment_id)?;
+    ADD_SPEAKER.execute(meaning, (person, &owner))?;
+    let speaker_id: i64 = SPEAKER_ID.query_row(meaning, (person, &owner), |r| r.get(0))?;
     ADD_EMBEDDING.execute(
         meaning,
         rusqlite::params![speaker_id, vector, now, print.segment_id],
@@ -353,7 +383,7 @@ pub fn write_pass(
             }
             match wanted.remove(&print.segment_id) {
                 Some(person) => {
-                    enrol_one(meaning, &person, print, now)?;
+                    enrol_one(meaning, ingest, &person, print, now)?;
                     wrote += 1;
                 }
                 None => pass.stale += 1,

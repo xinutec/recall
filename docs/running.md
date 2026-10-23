@@ -113,6 +113,12 @@ under the old name. `forget-device --id <id>` drops the heartbeat and outbox
 rows of an id no recorder uses any more, which fleetwatch otherwise reads as a
 silent phone.
 
+Each source and each named person belongs to one sign-in user: an upload to
+its uploader, a device to the `--owner` it was declared with, a name to the
+owner of the recording it was given on. `claim-unowned --owner <user>` counts
+what nobody owns (what was recorded before owners existed), and `--apply`
+gives it to that user.
+
 Phones: [android](../android/README.md), [ios](../ios/README.md); protocol and
 liveness: [devices.md](devices.md).
 

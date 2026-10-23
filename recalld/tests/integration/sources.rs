@@ -568,24 +568,19 @@ fn a_device_is_registered_only_once_declared() {
         count("SELECT count(*) FROM audio_segments WHERE source_id = 'oneplus6t-9'"),
         0
     );
-    let first = recalld::sources::declare(
-        &fleet.meaning,
-        &id,
-        "OnePlus 6T 9",
-        SourceKind::TcpPcm,
-        false,
-    )
-    .expect("declare");
-    let again =
-        recalld::sources::declare(&fleet.meaning, &id, "other name", SourceKind::TcpPcm, false)
-            .expect("declare again");
+    let declare = |name: &str, owner: Option<&str>, rename: bool| {
+        recalld::sources::declare(&fleet.meaning, &id, name, SourceKind::TcpPcm, owner, rename)
+            .expect("declare")
+    };
+    let first = declare("OnePlus 6T 9", Some("a"), false);
+    let again = declare("other name", Some("b"), false);
     assert!(first.created && !again.created && !again.renamed);
     assert_eq!(
         count(
-            "SELECT count(*) FROM sources WHERE id = 'oneplus6t-9' AND name = 'OnePlus 6T 9' AND kind = 'tcp_pcm'"
+            "SELECT count(*) FROM sources WHERE id = 'oneplus6t-9' AND name = 'OnePlus 6T 9' AND kind = 'tcp_pcm' AND owner = 'a'"
         ),
         1,
-        "the first declaration stands"
+        "the first declaration stands, whose it is included"
     );
     let pass = recalld::registrar::register_segments(
         &fleet.meaning,
@@ -596,14 +591,7 @@ fn a_device_is_registered_only_once_declared() {
     )
     .expect("pass");
     assert_eq!((pass.waiting, pass.added), (0, 1), "declared: registered");
-    let relabel = recalld::sources::declare(
-        &fleet.meaning,
-        &id,
-        "OnePlus 6T nine",
-        SourceKind::TcpPcm,
-        true,
-    )
-    .expect("rename");
+    let relabel = declare("OnePlus 6T nine", None, true);
     assert!(!relabel.created && relabel.renamed);
     assert_eq!(
         count("SELECT count(*) FROM sources WHERE id = 'oneplus6t-9' AND name = 'OnePlus 6T nine'"),

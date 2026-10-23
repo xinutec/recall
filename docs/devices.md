@@ -34,8 +34,9 @@ keeps arrival time; the shift is only ever backwards.
 id, one directory) in the capture log, and writes the same 60 s segments as the
 USB mic. A new recorder needs one declaration on Isis before its segments are
 registered, `recalld --root /data declare-source --id <id> --name <name> --kind
-tcp_pcm` in the pod: the registrar holds a source's segments until its kind is
-declared, and the Mac's own `register` event does not travel.
+tcp_pcm --owner <user>` in the pod: the registrar holds a source's segments until
+its kind is declared, and the Mac's own `register` event does not travel.
+`--owner` is the sign-in user whose recordings these are.
 
 The offset is measured once per connection
 (`audiod::rebase::connection_offset`), so a replayed backlog would be stamped

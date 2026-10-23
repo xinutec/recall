@@ -755,6 +755,50 @@ pub const MIGRATIONS: &[&str] = &[
             (NEW.end_utc IS NULL OR NEW.end_utc GLOB '[0-9][0-9][0-9][0-9]-[0-1][0-9]-[0-3][0-9]T[0-2][0-9]:[0-5][0-9]:[0-6][0-9]+00:00' OR NEW.end_utc GLOB '[0-9][0-9][0-9][0-9]-[0-1][0-9]-[0-3][0-9]T[0-2][0-9]:[0-5][0-9]:[0-6][0-9].[0-9][0-9][0-9][0-9][0-9][0-9]+00:00'))
     BEGIN SELECT RAISE(ABORT, 'audio_segments: an instant not in the stored spelling'); END;
 "#,
+    // v63
+    r#"
+    -- Each source belongs to one person, a sign-in user id; NULL until
+    -- claimed (`recalld claim-unowned`). A name is unique per owner, so two
+    -- people may each know an "Alex". The index, not UNIQUE (owner, name):
+    -- that treats NULL owners as distinct, and enrolment's INSERT OR IGNORE
+    -- would make a second person of every unowned name.
+    ALTER TABLE sources ADD COLUMN owner TEXT;
+    -- Both tables are rebuilt, the prints with them: with foreign keys on, a
+    -- parent dropped under its children counts every child as a violation,
+    -- and a rename drags the children's REFERENCES along. Built beside the
+    -- old pair, the old child dropped before the old parent, then renamed into
+    -- place, which points the new prints at the new `speakers`.
+    CREATE TABLE speakers_v63 (
+        id    INTEGER PRIMARY KEY,
+        owner TEXT,
+        name  TEXT NOT NULL
+    );
+    INSERT INTO speakers_v63 (id, owner, name) SELECT id, NULL, name FROM speakers;
+    CREATE TABLE speaker_embeddings_v63 (
+        id                   INTEGER PRIMARY KEY,
+        speaker_id           INTEGER NOT NULL REFERENCES speakers_v63(id),
+        vector               TEXT NOT NULL,
+        created_utc          TEXT NOT NULL,
+        source_correction_id INTEGER,
+        source_segment_id    INTEGER,
+        source_edit_id       INTEGER
+    );
+    INSERT INTO speaker_embeddings_v63
+        SELECT id, speaker_id, vector, created_utc, source_correction_id,
+               source_segment_id, source_edit_id
+        FROM speaker_embeddings;
+    DROP TABLE speaker_embeddings;
+    DROP TABLE speakers;
+    ALTER TABLE speakers_v63 RENAME TO speakers;
+    ALTER TABLE speaker_embeddings_v63 RENAME TO speaker_embeddings;
+    CREATE UNIQUE INDEX speakers_owner_name ON speakers (ifnull(owner, ''), name);
+    CREATE TRIGGER speaker_embeddings_instants_insert BEFORE INSERT ON speaker_embeddings
+    WHEN NOT ((NEW.created_utc IS NULL OR NEW.created_utc GLOB '[0-9][0-9][0-9][0-9]-[0-1][0-9]-[0-3][0-9]T[0-2][0-9]:[0-5][0-9]:[0-6][0-9]+00:00' OR NEW.created_utc GLOB '[0-9][0-9][0-9][0-9]-[0-1][0-9]-[0-3][0-9]T[0-2][0-9]:[0-5][0-9]:[0-6][0-9].[0-9][0-9][0-9][0-9][0-9][0-9]+00:00'))
+    BEGIN SELECT RAISE(ABORT, 'speaker_embeddings: an instant not in the stored spelling'); END;
+    CREATE TRIGGER speaker_embeddings_instants_update BEFORE UPDATE OF created_utc ON speaker_embeddings
+    WHEN NOT ((NEW.created_utc IS NULL OR NEW.created_utc GLOB '[0-9][0-9][0-9][0-9]-[0-1][0-9]-[0-3][0-9]T[0-2][0-9]:[0-5][0-9]:[0-6][0-9]+00:00' OR NEW.created_utc GLOB '[0-9][0-9][0-9][0-9]-[0-1][0-9]-[0-3][0-9]T[0-2][0-9]:[0-5][0-9]:[0-6][0-9].[0-9][0-9][0-9][0-9][0-9][0-9]+00:00'))
+    BEGIN SELECT RAISE(ABORT, 'speaker_embeddings: an instant not in the stored spelling'); END;
+"#,
 ];
 
 /// Bring `conn` up to the latest version, running only the steps it has not had.

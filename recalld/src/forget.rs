@@ -63,7 +63,7 @@ crate::statements! {
         "SELECT id, source_id, start_utc, path FROM audio_segments WHERE source_id = ?1";
     DROP_TOMBSTONES: Meaning = "DELETE FROM deleted_segments WHERE source_id = ?1";
     DROP_SOURCE: Meaning = "DELETE FROM sources WHERE id = ?1";
-    SOURCE_ROW: Meaning = "SELECT name, kind FROM sources WHERE id = ?1";
+    SOURCE_ROW: Meaning = "SELECT name, kind, owner FROM sources WHERE id = ?1";
     SEGMENTS_OF: Ingest = "SELECT filename FROM segments WHERE source = ?1";
     COUNT_SOURCE_LINES: Meaning = "SELECT count(*) FROM rendered_lines WHERE source_id = ?1";
     /// The rename, one statement per table. `?1`: the old id, `?2`: the new,
@@ -106,7 +106,8 @@ crate::statements! {
     RENAME_TOMBSTONES: Meaning = "UPDATE deleted_segments SET source_id = ?2 WHERE source_id = ?1";
     RENAME_EDITS: Meaning = "UPDATE edits SET source_id = ?2 WHERE source_id = ?1";
     RENAME_LINES: Meaning = "UPDATE rendered_lines SET source_id = ?2 WHERE source_id = ?1";
-    INSERT_SOURCE: Meaning = "INSERT INTO sources (id, name, kind) VALUES (?1, ?2, ?3)";
+    INSERT_SOURCE: Meaning =
+        "INSERT INTO sources (id, name, kind, owner) VALUES (?1, ?2, ?3, ?4)";
 }
 
 /// `[from, to)`, in UTC.
@@ -510,7 +511,7 @@ fn rename_rows(
     from: &SourceId,
     to: &SourceId,
     (old_prefix, new_prefix): (&str, &str),
-    (name, kind): (&str, &str),
+    (name, kind, owner): (&str, &str, Option<&str>),
     root: &Path,
 ) -> Result<(), ForgetError> {
     let tx = crate::sql::write(ingest)?;
@@ -541,7 +542,7 @@ fn rename_rows(
     let new_abs = format!("{}/", crate::store::source_dir(root, to.as_str()).display());
     let tx = crate::sql::write(meaning)?;
     tx.pragma_update(None, "defer_foreign_keys", true)?;
-    INSERT_SOURCE.execute(&tx, (to.as_str(), name, kind))?;
+    INSERT_SOURCE.execute(&tx, (to.as_str(), name, kind, owner))?;
     let paths = (
         from.as_str(),
         to.as_str(),
@@ -578,10 +579,12 @@ pub fn rename_source(
     apply: bool,
 ) -> Result<Renamed, ForgetError> {
     use rusqlite::OptionalExtension as _;
-    let row: Option<(String, String)> = SOURCE_ROW
-        .query_row(meaning, [from.as_str()], |r| Ok((r.get(0)?, r.get(1)?)))
+    let row: Option<(String, String, Option<String>)> = SOURCE_ROW
+        .query_row(meaning, [from.as_str()], |r| {
+            Ok((r.get(0)?, r.get(1)?, r.get(2)?))
+        })
         .optional()?;
-    let Some((name, kind)) = row else {
+    let Some((name, kind, owner)) = row else {
         return Err(ForgetError::NoSuchSource(from.clone()));
     };
     let taken: Option<String> = SOURCE_ROW
@@ -643,7 +646,7 @@ pub fn rename_source(
         from,
         to,
         (&old_prefix, &new_prefix),
-        (&name, &kind),
+        (&name, &kind, owner.as_deref()),
         root,
     ) {
         // The rows did not take: put the files back under their old names, so

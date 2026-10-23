@@ -430,3 +430,36 @@ fn enrolment_outranks_capture_time_or_it_would_never_be_leased() {
         "the older clip's print comes first"
     );
 }
+
+/// A print joins the roster of whoever owns the recording that was named, not
+/// someone else's person of the same name.
+#[test]
+fn a_print_joins_the_roster_of_the_recordings_owner() {
+    let (f, clip) = fleet();
+    f.meaning
+        .execute_batch(
+            "UPDATE sources SET owner = 'a' WHERE id = 'usb';
+             INSERT INTO speakers (owner, name) VALUES ('b', 'Alice');",
+        )
+        .expect("owners");
+    let act = name(&f, &clip, 2.0, 6.0, "Alice", true);
+    finished(
+        &f.ingest,
+        CLIP,
+        &reply(&[Print {
+            segment_id: act,
+            vector: vec![0.5, -0.25],
+        }]),
+    );
+
+    assert_eq!(pass(&f).prints, 1);
+    let owner: Option<String> = f
+        .meaning
+        .query_row(
+            "SELECT s.owner FROM speaker_embeddings e JOIN speakers s ON s.id = e.speaker_id",
+            [],
+            |r| r.get(0),
+        )
+        .expect("the print's person");
+    assert_eq!(owner.as_deref(), Some("a"));
+}

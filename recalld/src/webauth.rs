@@ -48,6 +48,13 @@ pub struct Session {
     pub display_name: String,
 }
 
+/// Who a request is from, when a session cookie carried it: the gate puts it
+/// in the request's extensions. A device token carries no one.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Viewer {
+    pub user_id: String,
+}
+
 /// Lets `verify` enforce expiry, so no caller can forget it.
 trait Expires {
     fn exp(&self) -> i64;
@@ -506,7 +513,7 @@ fn cookie_value(headers: &HeaderMap, name: &str) -> Option<String> {
 /// tried only after the cookie fails.
 pub async fn gate(
     State(st): State<GateState>,
-    request: axum::extract::Request,
+    mut request: axum::extract::Request,
     next: axum::middleware::Next,
 ) -> Response {
     let method = request.method().as_str().to_owned();
@@ -537,6 +544,9 @@ pub async fn gate(
         )
             .into_response();
     }
+    request.extensions_mut().insert(Viewer {
+        user_id: session.user_id,
+    });
     next.run(request).await
 }
 

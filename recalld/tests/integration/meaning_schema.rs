@@ -298,3 +298,100 @@ fn the_python_capture_columns_go_and_an_audio_row_keeps_its_instant_guard() {
     );
     assert!(moved.is_err(), "an update is held to it too");
 }
+
+/// v63: a source and a name belong to someone. The names already known keep
+/// their ids and prints; a name is unique per owner, and unowned names still
+/// collide, so enrolment's `INSERT OR IGNORE` cannot make a second person.
+#[test]
+fn owners_arrive_without_losing_a_name_or_its_prints() {
+    let conn = rusqlite::Connection::open_in_memory().expect("db");
+    ensure_to(&conn, 62).expect("v62");
+    conn.execute_batch(
+        "INSERT INTO sources (id, name, kind) VALUES ('usb', 'USB', 'coreaudio');
+         INSERT INTO speakers (id, name) VALUES (7, 'Alex');
+         INSERT INTO speaker_embeddings (speaker_id, vector, created_utc)
+             VALUES (7, '[1.0]', '2026-10-01T10:00:00+00:00');",
+    )
+    .expect("v62 rows");
+
+    ensure_to(&conn, 63).expect("v63");
+
+    let owner: Option<String> = conn
+        .query_row("SELECT owner FROM sources WHERE id = 'usb'", [], |r| {
+            r.get(0)
+        })
+        .expect("source");
+    assert_eq!(owner, None, "unclaimed until an operator claims it");
+    let kept: (i64, Option<String>) = conn
+        .query_row(
+            "SELECT id, owner FROM speakers WHERE name = 'Alex'",
+            [],
+            |r| Ok((r.get(0)?, r.get(1)?)),
+        )
+        .expect("speaker");
+    assert_eq!(kept, (7, None));
+    let prints: i64 = conn
+        .query_row(
+            "SELECT count(*) FROM speaker_embeddings WHERE speaker_id = 7",
+            [],
+            |r| r.get(0),
+        )
+        .expect("prints");
+    assert_eq!(prints, 1);
+    let broken: i64 = conn
+        .query_row("SELECT count(*) FROM pragma_foreign_key_check", [], |r| {
+            r.get(0)
+        })
+        .expect("fk check");
+    assert_eq!(broken, 0);
+    // The rebuilt prints point at `speakers`, and still refuse a bad instant.
+    let prints_sql: String = conn
+        .query_row(
+            "SELECT sql FROM sqlite_master WHERE name = 'speaker_embeddings'",
+            [],
+            |r| r.get(0),
+        )
+        .expect("prints sql");
+    assert!(
+        prints_sql.contains("REFERENCES \"speakers\"")
+            || prints_sql.contains("REFERENCES speakers("),
+        "{prints_sql}"
+    );
+    assert!(
+        conn.execute(
+            "INSERT INTO speaker_embeddings (speaker_id, vector, created_utc) VALUES (7, '[1.0]', 'yesterday')",
+            [],
+        )
+        .is_err()
+    );
+
+    // Unowned still collides: the ignore keeps one Alex.
+    conn.execute("INSERT OR IGNORE INTO speakers (name) VALUES ('Alex')", [])
+        .expect("ignored");
+    // Two owners may each know an Alex; one owner may not know two.
+    conn.execute(
+        "INSERT INTO speakers (owner, name) VALUES ('a', 'Alex')",
+        [],
+    )
+    .expect("a's Alex");
+    conn.execute(
+        "INSERT INTO speakers (owner, name) VALUES ('b', 'Alex')",
+        [],
+    )
+    .expect("b's Alex");
+    assert!(
+        conn.execute(
+            "INSERT INTO speakers (owner, name) VALUES ('a', 'Alex')",
+            []
+        )
+        .is_err()
+    );
+    let alexes: i64 = conn
+        .query_row(
+            "SELECT count(*) FROM speakers WHERE name = 'Alex'",
+            [],
+            |r| r.get(0),
+        )
+        .expect("count");
+    assert_eq!(alexes, 3);
+}

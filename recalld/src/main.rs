@@ -72,6 +72,15 @@ enum Task {
         #[arg(long)]
         apply: bool,
     },
+    /// Give every source and name nobody owns to one sign-in user
+    /// (`recalld::owners::claim_unowned`): what was recorded before owners
+    /// existed. Without `--apply` it only counts them.
+    ClaimUnowned {
+        #[arg(long)]
+        owner: String,
+        #[arg(long)]
+        apply: bool,
+    },
     /// Remove a derived source (one built from the mics, not recorded) from
     /// both planes and the disk. Refused for anything recorded.
     RetireSource {
@@ -103,6 +112,9 @@ enum Task {
         /// `tcp_pcm` for a phone, `coreaudio` for a microphone on the Mac.
         #[arg(long)]
         kind: String,
+        /// The sign-in user whose recordings these are.
+        #[arg(long)]
+        owner: Option<String>,
         /// Give a row already there this name too.
         #[arg(long)]
         rename: bool,
@@ -166,6 +178,9 @@ fn run_task(root: &std::path::Path, task: Task) -> ExitCode {
                 recalld::forget::span(meaning, ingest, root, &span, &now, apply)
             })
         }
+        Task::ClaimUnowned { owner, apply } => report(root, |meaning, _ingest| {
+            recalld::owners::claim_unowned(meaning, &owner, apply)
+        }),
         Task::RetireSource { source, apply } => {
             let Some(source) = transcript::SourceId::parse(&source) else {
                 eprintln!("recalld: --source must be a source id");
@@ -191,6 +206,7 @@ fn run_task(root: &std::path::Path, task: Task) -> ExitCode {
             id,
             name,
             kind,
+            owner,
             rename,
         } => {
             let (Some(id), Some(kind)) = (
@@ -201,7 +217,7 @@ fn run_task(root: &std::path::Path, task: Task) -> ExitCode {
                 return ExitCode::FAILURE;
             };
             report(root, |meaning, _ingest| {
-                recalld::sources::declare(meaning, &id, &name, kind, rename)
+                recalld::sources::declare(meaning, &id, &name, kind, owner.as_deref(), rename)
             })
         }
         Task::ForgetDevice { id } => report(root, |meaning, _ingest| {

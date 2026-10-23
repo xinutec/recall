@@ -312,6 +312,10 @@ fn renaming_a_source_moves_its_history_and_files_and_nothing_else() {
     let mut fleet = fleet();
     let root = fleet.dir.path().to_owned();
     std::fs::create_dir_all(root.join("usb")).expect("marker dir");
+    fleet
+        .meaning
+        .execute("UPDATE sources SET owner = 'a' WHERE id = 'usb'", [])
+        .expect("owner");
     // The measured tables reference segments by filename: the rename must
     // carry them, and the foreign keys must let it.
     for start in [INSIDE, OUTSIDE] {
@@ -382,6 +386,13 @@ fn renaming_a_source_moves_its_history_and_files_and_nothing_else() {
         .map(|b| b.device)
         .collect();
     assert_eq!(beats, ["usb-1"], "the heartbeat moved with the source");
+    let owner: Option<String> = fleet
+        .meaning
+        .query_row("SELECT owner FROM sources WHERE id = 'usb-1'", [], |r| {
+            r.get(0)
+        })
+        .expect("renamed row");
+    assert_eq!(owner.as_deref(), Some("a"), "whose it is moved with it");
     assert_renamed(&fleet, &root, seen.lines);
 }
 

@@ -13,7 +13,8 @@ crate::statements! {
     SOURCES: Meaning =
         "SELECT id, name, kind FROM sources ORDER BY id";
     DECLARE: Meaning =
-        "INSERT INTO sources (id, name, kind) VALUES (?1, ?2, ?3) ON CONFLICT(id) DO NOTHING";
+        "INSERT INTO sources (id, name, kind, owner) VALUES (?1, ?2, ?3, ?4)
+         ON CONFLICT(id) DO NOTHING";
     RELABEL: Meaning = "UPDATE sources SET name = ?2 WHERE id = ?1 AND name <> ?2";
 }
 
@@ -31,7 +32,8 @@ pub struct Declared {
 /// Give a capture device its `sources` row: the operator's declaration of its
 /// kind (`recalld declare-source`), which the registrar waits for before it
 /// registers the device's segments. A row already there is left as it is,
-/// name included, unless `rename`: display names are otherwise the web UI's.
+/// name and owner included, unless `rename`: display names are otherwise the
+/// web UI's. `owner` is the sign-in user whose recordings these are.
 ///
 /// # Errors
 /// If the database refuses.
@@ -40,9 +42,10 @@ pub fn declare(
     id: &transcript::SourceId,
     name: &str,
     kind: SourceKind,
+    owner: Option<&str>,
     rename: bool,
 ) -> rusqlite::Result<Declared> {
-    let created = DECLARE.execute(meaning, (id.as_str(), name, kind))? == 1;
+    let created = DECLARE.execute(meaning, (id.as_str(), name, kind, owner))? == 1;
     let renamed = !created && rename && RELABEL.execute(meaning, (id.as_str(), name))? == 1;
     Ok(Declared {
         id: id.clone(),
