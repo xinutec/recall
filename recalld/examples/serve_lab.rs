@@ -39,6 +39,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             device_token: None,
         }),
         now: Arc::new(move || now),
+        recorders: None,
     };
     let cookie = webauth::make_session_cookie(
         SECRET,

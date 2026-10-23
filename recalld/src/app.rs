@@ -24,7 +24,7 @@ pub struct Config {
     /// `<root>/ingest.sqlite`.
     pub root: PathBuf,
     /// The write gate. `None` = open (dev, tests); the fleet mounts a file.
-    pub tokens: Option<Tokens>,
+    pub tokens: Option<std::sync::Arc<Tokens>>,
     /// The read gate (listing, blobs). `None` = open, same pattern.
     pub read_token: Option<String>,
     pub max_body_bytes: usize,

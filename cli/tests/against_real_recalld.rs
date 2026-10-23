@@ -26,6 +26,7 @@ fn serve(root: &Path) -> String {
             device_token: None,
         }),
         now: Arc::new(|| 1_700_000_000),
+        recorders: None,
     };
     let config = Arc::new(ServerConfig {
         root: root.to_owned(),

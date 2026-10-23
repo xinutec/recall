@@ -87,6 +87,11 @@ enum CaptureApi {
         var req = URLRequest(url: u)
         req.httpMethod = method
         req.timeoutInterval = timeout
+        // This phone's own token says whose phone asks: recalld answers with its
+        // owner's recorders.
+        if !Prefs.ingestToken.isEmpty {
+            req.setValue("Bearer \(Prefs.ingestToken)", forHTTPHeaderField: "Authorization")
+        }
         do {
             let (data, resp) = try await URLSession.shared.data(for: req)
             guard (resp as? HTTPURLResponse)?.statusCode == 200 else { return nil }

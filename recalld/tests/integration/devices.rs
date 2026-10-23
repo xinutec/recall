@@ -408,6 +408,7 @@ fn gated(root: &std::path::Path) -> axum::Router {
                 device_token: None,
             }),
             now: Arc::new(|| NOW),
+            recorders: None,
         }),
         sync_token: None,
         frontend: None,

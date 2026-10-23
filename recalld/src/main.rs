@@ -132,7 +132,10 @@ enum Task {
 /// The browsing plane's gate, mounted only with SSO configured: unconfigured
 /// means absent, not open. Refused while more than one person can sign in and
 /// something belongs to nobody (`recalld::owners::ready_for`).
-fn sso_gate(root: &std::path::Path) -> Result<Option<recalld::webauth::GateState>, String> {
+fn sso_gate(
+    root: &std::path::Path,
+    tokens: Option<Arc<Tokens>>,
+) -> Result<Option<recalld::webauth::GateState>, String> {
     let Some(cfg) = recalld::webauth::Config::from_process_env() else {
         return Ok(None);
     };
@@ -142,6 +145,12 @@ fn sso_gate(root: &std::path::Path) -> Result<Option<recalld::webauth::GateState
     Ok(Some(recalld::webauth::GateState {
         cfg: std::sync::Arc::new(cfg),
         now: std::sync::Arc::new(|| chrono::Utc::now().timestamp()),
+        recorders: tokens.map(|tokens| {
+            Arc::new(recalld::webauth::Recorders {
+                tokens,
+                root: root.to_owned(),
+            })
+        }),
     }))
 }
 
@@ -314,14 +323,14 @@ fn main() -> ExitCode {
     // plane must be a choice, not a typo.
     let tokens = match (tokens_path, std::env::var("RECALLD_INGEST_TOKENS")) {
         (Some(path), _) => match Tokens::load(&path) {
-            Ok(tokens) => Some(tokens),
+            Ok(tokens) => Some(Arc::new(tokens)),
             Err(err) => {
                 eprintln!("recalld: cannot read tokens file {}: {err}", path.display());
                 return ExitCode::FAILURE;
             }
         },
         (None, Ok(text)) if !text.trim().is_empty() => match Tokens::parse(&text) {
-            Ok(tokens) => Some(tokens),
+            Ok(tokens) => Some(Arc::new(tokens)),
             Err(err) => {
                 eprintln!("recalld: RECALLD_INGEST_TOKENS does not parse: {err}");
                 return ExitCode::FAILURE;
@@ -347,7 +356,7 @@ fn main() -> ExitCode {
         eprintln!("recalld: {complaint}");
         return ExitCode::FAILURE;
     }
-    let webauth = match sso_gate(&root) {
+    let webauth = match sso_gate(&root, tokens.clone()) {
         Ok(gate) => gate,
         Err(complaint) => {
             eprintln!("recalld: {complaint}");

@@ -335,12 +335,18 @@ pub fn fleet_sources(
 }
 
 /// `GET /api/sources`: per-recorder liveness. Uploads are not devices.
-/// A signed-in person sees their own recorders; a device, all of them.
+/// The asker's own recorders: a signed-in person's, or a recorder's owner's.
 pub async fn sources_route(
     axum::extract::State(st): axum::extract::State<std::sync::Arc<crate::reads::State>>,
     asked: crate::webauth::Asked,
 ) -> axum::response::Response {
     let viewer = crate::webauth::viewer(asked);
+    // Nobody known (no session, no recorder's token): nobody's recorders.
+    if viewer.is_none() {
+        return axum::response::IntoResponse::into_response(axum::Json(SourcesOut {
+            items: Vec::new(),
+        }));
+    }
     let root = st.root.clone();
     crate::route::json("sources", move || {
         let mut out = fleet_sources(&root, &crate::work::open_write(&root)?, Utc::now())?;

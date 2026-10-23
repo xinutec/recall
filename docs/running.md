@@ -126,8 +126,12 @@ anyone else's, as for one that does not exist. A voice is guessed only among
 its recording's owner's people. Live lines carry no source and are shown to
 the owner of the Mac's own mic (a `coreaudio` source). A device's status rows
 are its source's owner's; a row whose id has no source at all is anyone's to
-clear. Still one for everybody: the capture pause and the glossary. A request
-no session carried (a recorder) sees everything it is allowed to reach. With
+clear. Still one for everybody: the capture pause and the glossary. A recorder
+says whose it is with its own segment token (the ingest token table): on the
+routes open to devices it speaks for its source's owner, so its list of
+recorders is theirs and a meeting it uploads is theirs; with no identity at all
+the list is empty. The phones' shared device token speaks for the one person
+allowed to sign in, and is refused once several may. With
 more than one person able to sign in, recalld refuses to start while anything
 belongs to nobody. `recalld/tests/integration/separation.rs` calls every
 route in `recalld/src/app.rs` as one person against another's things.

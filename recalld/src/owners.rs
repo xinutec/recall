@@ -10,6 +10,7 @@ crate::statements! {
     UNOWNED_SPEAKERS: Meaning = "SELECT count(*) FROM speakers WHERE owner IS NULL";
     CLAIM_SOURCES: Meaning = "UPDATE sources SET owner = ?1 WHERE owner IS NULL";
     CLAIM_SPEAKERS: Meaning = "UPDATE speakers SET owner = ?1 WHERE owner IS NULL";
+    SOURCE_OWNER: Meaning = "SELECT owner FROM sources WHERE id = ?1";
 }
 
 /// What a claim found, and whether it was made.
@@ -67,4 +68,16 @@ pub fn ready_for<S: std::hash::BuildHasher>(
         "{sources} sources and {speakers} names belong to nobody, and more than one person can \
          sign in: claim them first (`recalld claim-unowned --owner <user> --apply`)"
     ))
+}
+
+/// Whose recordings `source` holds; `None` for an unknown or unclaimed one.
+///
+/// # Errors
+/// If the database refuses.
+pub fn owner_of_source(meaning: &Connection, source: &str) -> rusqlite::Result<Option<String>> {
+    use rusqlite::OptionalExtension;
+    Ok(SOURCE_OWNER
+        .query_row(meaning, [source], |r| r.get(0))
+        .optional()?
+        .flatten())
 }

@@ -17,7 +17,9 @@ fn serve(server_root: &Path, tokens_text: &str) -> String {
     recalld::app::prepare(server_root).expect("planes");
     let config = Arc::new(ServerConfig {
         root: server_root.to_owned(),
-        tokens: Some(Tokens::load(&tokens_path).expect("parse")),
+        tokens: Some(std::sync::Arc::new(
+            Tokens::load(&tokens_path).expect("parse"),
+        )),
         read_token: None,
         max_body_bytes: 16 * 1024 * 1024,
         trusted_proxies: Vec::new(),

@@ -515,6 +515,27 @@ pub type Clock = Arc<dyn Fn() -> i64 + Send + Sync>;
 pub struct GateState {
     pub cfg: Arc<Config>,
     pub now: Clock,
+    /// Recorders, known by their own ingest token: one speaks for its
+    /// source's owner. `None` where no token table is configured.
+    pub recorders: Option<Arc<Recorders>>,
+}
+
+/// The recorders' tokens and where to look up whose each source is.
+pub struct Recorders {
+    pub tokens: Arc<crate::tokens::Tokens>,
+    pub root: std::path::PathBuf,
+}
+
+impl Recorders {
+    /// Whose recorder presented `authorization`: its source's owner.
+    fn owner_of(&self, authorization: Option<&str>) -> Option<String> {
+        let bearer = authorization?.strip_prefix("Bearer ")?;
+        let source = self.tokens.source_of(bearer)?;
+        let meaning = crate::reads::open(&self.root).ok()?;
+        crate::owners::owner_of_source(&meaning, source)
+            .ok()
+            .flatten()
+    }
 }
 
 fn cookie_value(headers: &HeaderMap, name: &str) -> Option<String> {
@@ -543,12 +564,20 @@ pub async fn gate(
     let cookie = cookie_value(&headers, COOKIE_NAME);
     let session = read_session_cookie(&st.cfg.session_secret, cookie.as_deref(), now)
         .filter(|s| st.cfg.permits(&s.user_id));
+    let authorization = headers
+        .get(header::AUTHORIZATION)
+        .and_then(|v| v.to_str().ok());
+    // A recorder's own token speaks for whoever owns its source.
+    let recorder = || {
+        st.recorders
+            .as_ref()
+            .and_then(|r| r.owner_of(authorization))
+    };
     if !requires_session(&method, &path) {
-        // Open to a device, but a signed-in person still sees only theirs.
-        if let Some(session) = session {
-            request.extensions_mut().insert(Viewer {
-                user_id: session.user_id,
-            });
+        // Open to a device, but whoever asks still sees only theirs: the
+        // signed-in person, else the recorder's owner, else nobody's.
+        if let Some(user_id) = session.map(|s| s.user_id).or_else(recorder) {
+            request.extensions_mut().insert(Viewer { user_id });
         }
         return next.run(request).await;
     }
@@ -556,6 +585,12 @@ pub async fn gate(
         let auth = headers
             .get(header::AUTHORIZATION)
             .and_then(|v| v.to_str().ok());
+        if accepts_device_token(&method, &path)
+            && let Some(user_id) = recorder()
+        {
+            request.extensions_mut().insert(Viewer { user_id });
+            return next.run(request).await;
+        }
         if st.cfg.presents_device_token(&method, &path, auth) {
             // The shared token names no person: it speaks for the one person
             // allowed, and among several for nobody, whose upload would be

@@ -25,7 +25,7 @@ class MeetingUpload(
 ) : CoroutineWorker(ctx, params) {
     override suspend fun doWork(): Result {
         val host = Prefs.controlHost(applicationContext)
-        val token = Prefs.deviceToken(applicationContext)
+        val token = Prefs.uploadToken(applicationContext)
         val outbox = MeetingQueue.outbox(applicationContext)
         val queue = MeetingQueue.list(outbox, ZoneId.systemDefault())
         if (queue.isEmpty()) {

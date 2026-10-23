@@ -85,6 +85,19 @@ impl Tokens {
     }
 }
 
+impl Tokens {
+    /// The source whose own token this is; `None` for an unknown token and for
+    /// a `*` one, which writes for every source and so names none.
+    #[must_use]
+    pub fn source_of(&self, bearer: &str) -> Option<&str> {
+        let hashed = digest(bearer);
+        self.by_source
+            .iter()
+            .find(|(_, list)| list.contains(&hashed))
+            .map(|(source, _)| source.as_str())
+    }
+}
+
 /// Equality for a single-token gate, the one comparison every gate uses: the
 /// digests, in constant time, so neither a prefix nor the length leaks.
 pub fn same_token(presented: &str, expected: &str) -> bool {

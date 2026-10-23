@@ -63,9 +63,14 @@ object Prefs {
         prefs(ctx).edit().putString(KEY_DEVICE_TOKEN, token.trim()).apply()
     }
 
-    /** The bearer for `PUT`ting this phone's own segments to recalld, and nothing
-     * else. Empty sends no header. */
+    /** The bearer for `PUT`ting this phone's own segments to recalld. It also says
+     * whose phone this is: recalld shows its owner's recorders and files its meetings
+     * under its owner. Empty sends no header. */
     fun ingestToken(ctx: Context): String = prefs(ctx).getString(KEY_INGEST_TOKEN, "") ?: ""
+
+    /** The bearer for a meeting upload: this phone's own token, which files the meeting
+     * under its owner, else the shared [deviceToken]. */
+    fun uploadToken(ctx: Context): String = ingestToken(ctx).ifBlank { deviceToken(ctx) }
 
     fun saveIngestToken(ctx: Context, token: String) {
         prefs(ctx).edit().putString(KEY_INGEST_TOKEN, token.trim()).apply()

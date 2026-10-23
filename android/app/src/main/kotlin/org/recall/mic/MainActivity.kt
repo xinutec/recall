@@ -169,6 +169,7 @@ fun MicScreen(
             val cap =
                 CaptureApi.state(
                     controlHost,
+                    Prefs.ingestToken(context),
                     waitS = 25,
                     known = MicState.capture.value?.stateToken,
                 )
@@ -194,7 +195,7 @@ fun MicScreen(
         delay(500) // debounce, as above
         while (true) {
             // null: the request failed; keep the last list.
-            CaptureApi.sources(controlHost)?.let { devices = it }
+            CaptureApi.sources(controlHost, Prefs.ingestToken(context))?.let { devices = it }
             delay(1_500)
         }
     }
@@ -203,8 +204,10 @@ fun MicScreen(
     val selfId = remember { Prefs.deviceId(context) }
 
     // Pause or resume on Isis, publishing the answer to MicState.
-    fun control(call: suspend (String) -> CaptureState?) {
-        scope.launch { call(controlHost)?.let { MicState.setCapture(it) } }
+    fun control(call: suspend (String, String) -> CaptureState?) {
+        scope.launch {
+            call(controlHost, Prefs.ingestToken(context))?.let { MicState.setCapture(it) }
+        }
     }
 
     val drawer = rememberDrawerState(DrawerValue.Closed)
@@ -277,7 +280,7 @@ private fun MicContent(
     selfId: String,
     onStart: () -> Unit,
     onStop: () -> Unit,
-    onCapture: (suspend (String) -> CaptureState?) -> Unit,
+    onCapture: (suspend (String, String) -> CaptureState?) -> Unit,
 ) {
     Scaffold(
         topBar = {

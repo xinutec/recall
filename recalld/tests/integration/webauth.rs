@@ -461,6 +461,7 @@ fn gated(c: Config) -> Router {
     let st = GateState {
         cfg: Arc::new(c),
         now: Arc::new(|| NOW),
+        recorders: None,
     };
     Router::new()
         .route("/api/timeline", get(|| async { "the archive" }))
@@ -539,6 +540,7 @@ async fn a_device_token_opens_its_route_through_the_middleware_and_no_other() {
     let st = GateState {
         cfg: Arc::new(c),
         now: Arc::new(|| NOW),
+        recorders: None,
     };
     let app = Router::new()
         .route("/api/sessions", post(|| async { "uploaded" }))

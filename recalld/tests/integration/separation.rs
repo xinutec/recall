@@ -214,9 +214,12 @@ fn report_from_a(f: &Fleet) {
 
 fn app(f: &Fleet) -> axum::Router {
     recalld::app::prepare(f.root()).expect("planes");
+    let tokens = Arc::new(
+        recalld::tokens::Tokens::parse("phone-a token-a\nphone-b token-b\n").expect("tokens"),
+    );
     router(Arc::new(Config {
         root: f.root().to_path_buf(),
-        tokens: None,
+        tokens: Some(tokens.clone()),
         read_token: None,
         max_body_bytes: DEFAULT_MAX_BODY,
         trusted_proxies: Vec::new(),
@@ -232,6 +235,10 @@ fn app(f: &Fleet) -> axum::Router {
                 device_token: None,
             }),
             now: Arc::new(|| NOW),
+            recorders: Some(Arc::new(webauth::Recorders {
+                tokens,
+                root: f.root().to_path_buf(),
+            })),
         }),
         sync_token: None,
         frontend: None,
@@ -489,4 +496,48 @@ fn jobs(f: &Fleet) -> Vec<(String, String)> {
         .expect("rows")
         .collect::<Result<_, _>>()
         .expect("collect")
+}
+
+/// A request as a recorder sends it: its own token, no cookie.
+async fn as_recorder(
+    f: &Fleet,
+    token: Option<&str>,
+    request: axum::http::request::Builder,
+    body: Body,
+) -> (StatusCode, String) {
+    let request = match token {
+        Some(t) => request.header("authorization", format!("Bearer {t}")),
+        None => request,
+    };
+    let response = app(f)
+        .oneshot(request.body(body).expect("request"))
+        .await
+        .expect("call");
+    let status = response.status();
+    let bytes = axum::body::to_bytes(response.into_body(), 1 << 24)
+        .await
+        .expect("body");
+    (status, String::from_utf8_lossy(&bytes).into_owned())
+}
+
+/// A recorder speaks for whoever owns its source: its list of recorders is
+/// that person's, a request with no credential sees none, and a meeting it
+/// uploads is its owner's.
+#[tokio::test]
+async fn a_recorder_speaks_for_its_sources_owner() {
+    let (f, _) = world().await;
+    let list = |token| as_recorder(&f, token, Request::get("/api/sources"), Body::empty());
+    let (status, mine) = list(Some("token-a")).await;
+    assert_eq!(status, StatusCode::OK);
+    assert!(
+        mine.contains("phone-a") && !mine.contains("phone-b"),
+        "{mine}"
+    );
+    let (_, theirs) = list(Some("token-b")).await;
+    assert!(
+        theirs.contains("phone-b") && !theirs.contains("phone-a"),
+        "{theirs}"
+    );
+    let (_, nobody) = list(None).await;
+    assert!(!nobody.contains("phone-"), "{nobody}");
 }

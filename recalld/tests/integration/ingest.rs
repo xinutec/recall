@@ -23,7 +23,7 @@ fn harness(tokens: Option<&str>, read_token: Option<&str>) -> Harness {
     let tokens = tokens.map(|text| {
         let path = dir.path().join("tokens");
         std::fs::write(&path, text).expect("write tokens");
-        Tokens::load(&path).expect("load tokens")
+        Arc::new(Tokens::load(&path).expect("load tokens"))
     });
     recalld::app::prepare(dir.path()).expect("planes");
     let app = router(Arc::new(Config {

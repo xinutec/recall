@@ -90,7 +90,7 @@ class ShareActivity : ComponentActivity() {
                             )
                         }
                     ShareUpload
-                        .upload(host, cached, name, start, Prefs.deviceToken(this@ShareActivity))
+                        .upload(host, cached, name, start, Prefs.uploadToken(this@ShareActivity))
                         .getOrThrow()
                         .title
                 } finally {

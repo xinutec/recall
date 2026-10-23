@@ -457,6 +457,7 @@ async fn the_capture_routes_are_reachable_through_the_real_router() {
                 device_token: None,
             }),
             now: std::sync::Arc::new(|| 1_788_000_000),
+            recorders: None,
         }),
         sync_token: None,
         frontend: None,

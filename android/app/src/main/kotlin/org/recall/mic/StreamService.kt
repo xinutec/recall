@@ -206,7 +206,12 @@ class StreamService : Service() {
                     // would kill the app.
                     val cap =
                         try {
-                            runBlocking { CaptureApi.state(controlHost) }
+                            runBlocking {
+                                CaptureApi.state(
+                                    controlHost,
+                                    Prefs.ingestToken(this@StreamService),
+                                )
+                            }
                         } catch (_: InterruptedException) {
                             break
                         }

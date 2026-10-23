@@ -84,33 +84,47 @@ object CaptureApi {
 
     /** With [waitS] and [known] (the last stateToken), a long poll: the server answers
      * when the state changes, so the read timeout covers the wait. */
-    suspend fun state(host: String, waitS: Int = 0, known: String? = null): CaptureState? {
+    suspend fun state(
+        host: String,
+        token: String,
+        waitS: Int = 0,
+        known: String? = null,
+    ): CaptureState? {
         val query = if (waitS > 0) "?wait=$waitS&known=${known.orEmpty()}" else ""
         return get(
             endpoint(host, "/capture$query"),
             "GET",
+            token,
             readTimeoutMs = TIMEOUT_MS + waitS * 1000,
         )?.let { parseCaptureState(it) }
     }
 
-    suspend fun pause(host: String): CaptureState? =
-        get(endpoint(host, "/capture/pause"), "POST")?.let { parseCaptureState(it) }
+    suspend fun pause(host: String, token: String): CaptureState? =
+        get(endpoint(host, "/capture/pause"), "POST", token)?.let { parseCaptureState(it) }
 
-    suspend fun resume(host: String): CaptureState? =
-        get(endpoint(host, "/capture/resume"), "POST")?.let { parseCaptureState(it) }
+    suspend fun resume(host: String, token: String): CaptureState? =
+        get(endpoint(host, "/capture/resume"), "POST", token)?.let { parseCaptureState(it) }
 
-    // null: the request failed; empty: no sources.
-    suspend fun sources(host: String): List<SourceStatus>? =
-        get(endpoint(host, "/sources"), "GET")?.let { parseSources(it) }
+    /** The recorders of whoever owns this phone ([token] says whose); null: the request
+     * failed; empty: none. */
+    suspend fun sources(host: String, token: String): List<SourceStatus>? =
+        get(endpoint(host, "/sources"), "GET", token)?.let { parseSources(it) }
 
-    /** One request; returns the response body, or null on any failure. */
-    private suspend fun get(url: String, method: String, readTimeoutMs: Int = TIMEOUT_MS): String? =
+    /** One request; returns the response body, or null on any failure. [token], this
+     * phone's own (`Prefs.ingestToken`), says whose phone asks; blank sends none. */
+    private suspend fun get(
+        url: String,
+        method: String,
+        token: String,
+        readTimeoutMs: Int = TIMEOUT_MS,
+    ): String? =
         withContext(Dispatchers.IO) {
             runCatching {
                 val conn = URL(url).openConnection() as HttpURLConnection
                 conn.requestMethod = method
                 conn.connectTimeout = TIMEOUT_MS
                 conn.readTimeout = readTimeoutMs
+                if (token.isNotBlank()) conn.setRequestProperty("Authorization", "Bearer $token")
                 if (method == "POST") {
                     conn.doOutput = true
                     conn.outputStream.close() // empty body; the endpoints take none

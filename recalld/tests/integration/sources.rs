@@ -388,6 +388,8 @@ fn an_unknown_source_kind_is_an_error_not_a_silent_skip() {
 async fn the_route_is_mounted_and_answers_without_a_session() {
     let (_dir, root) = root_with(&[("pixel9", "Pixel 9", "tcp_pcm")]);
     let conn = recalld::work::open_write(&root).expect("db");
+    conn.execute("UPDATE sources SET owner = 'p' WHERE id = 'pixel9'", [])
+        .expect("whose");
     recalld::capture::record_reported(
         &conn,
         chrono::Utc::now(),
@@ -398,10 +400,12 @@ async fn the_route_is_mounted_and_answers_without_a_session() {
     .unwrap();
     drop(conn);
     recalld::app::prepare(&root).expect("planes");
+    let tokens =
+        std::sync::Arc::new(recalld::tokens::Tokens::parse("pixel9 tok\n").expect("tokens"));
 
     let app = recalld::app::router(std::sync::Arc::new(recalld::app::Config {
-        root,
-        tokens: None,
+        root: root.clone(),
+        tokens: Some(tokens.clone()),
         read_token: None,
         max_body_bytes: recalld::app::DEFAULT_MAX_BODY,
         trusted_proxies: Vec::new(),
@@ -418,6 +422,10 @@ async fn the_route_is_mounted_and_answers_without_a_session() {
                 device_token: None,
             }),
             now: std::sync::Arc::new(|| 1_788_000_000),
+            recorders: Some(std::sync::Arc::new(recalld::webauth::Recorders {
+                tokens,
+                root,
+            })),
         }),
         sync_token: None,
         frontend: None,
@@ -430,10 +438,24 @@ async fn the_route_is_mounted_and_answers_without_a_session() {
         let _ = axum::serve(listener, app).await;
     });
 
-    // No session cookie, deliberately.
+    // No session cookie, deliberately: mounted and ungated, but nobody known
+    // is shown nobody's recorders.
     let (status, body) =
         crate::http::request(&addr.to_string(), "GET", "/api/sources", &[], None).await;
     assert_eq!(status, 200, "the route is mounted AND ungated: {body}");
+    let parsed: serde_json::Value = serde_json::from_str(&body).expect("json");
+    assert_eq!(parsed["items"].as_array().map(Vec::len), Some(0), "{body}");
+
+    // The recorder's own token: its owner's recorders.
+    let (status, body) = crate::http::request(
+        &addr.to_string(),
+        "GET",
+        "/api/sources",
+        &[("authorization", "Bearer tok")],
+        None,
+    )
+    .await;
+    assert_eq!(status, 200, "{body}");
 
     let parsed: serde_json::Value = serde_json::from_str(&body).expect("json");
     let items = parsed["items"].as_array().expect("items");

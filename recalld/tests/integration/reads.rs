@@ -344,6 +344,7 @@ fn gate_state() -> GateState {
             device_token: None,
         }),
         now: Arc::new(|| NOW),
+        recorders: None,
     }
 }
 

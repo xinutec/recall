@@ -235,6 +235,7 @@ fn signed_in(root: &Path, out: &Path) -> Result<Client> {
             device_token: None,
         }),
         now: Arc::new(move || now),
+        recorders: None,
     };
     let cookie = webauth::make_session_cookie(
         SECRET,

@@ -14,7 +14,9 @@ where supported, else `MIC`, and sends it two ways:
 
 The control host (`https://recall.xinutec.org` by default; a bare host means
 `http://<host>:8000`, see `ApiBase`) serves the capture pause, the device list,
-the heartbeat and uploads. `BootReceiver` restarts the stream after a reboot;
+the heartbeat and uploads. The phone's own segment token goes with each of
+these requests: it says whose phone asks, so the device list is its owner's and
+a meeting is filed under its owner (`Prefs.uploadToken`). `BootReceiver` restarts the stream after a reboot;
 `ResumeWarning` notifies 2 h before a bounded pause ends.
 
 ## Meeting mode
