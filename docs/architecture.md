@@ -264,8 +264,9 @@ long-lived Python process speaking line-delimited JSON on stdio, holding
 weights, taking one job at a time, doing no I/O beyond its stdio and the audio
 path it is handed. `asr` wraps mlx-whisper (large-v3-turbo, word timings);
 `voices` wraps pyannote (diarization and embeddings). The vocabulary the
-transcriber is biased with is read from the fleet at startup and handed to the
-shim per job; a runner that cannot read it refuses to transcribe unbiased.
+transcriber is biased with is read from the fleet for each transcription, so a
+new term applies from the next clip; a runner that cannot read it fails that job,
+which is retried, rather than transcribe unbiased.
 The transcribing runner also serves messages' queue of voice messages
 (`--messages-url`), one job whenever recall's queue is empty, so one set of
 Whisper weights serves both. Those jobs carry messages' own token, get no

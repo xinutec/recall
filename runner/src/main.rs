@@ -106,7 +106,9 @@ struct Queue<'a> {
     client: &'a Client,
     kinds: &'a [Kind],
     scratch: &'a Path,
-    prompt: Option<&'a str>,
+    /// Its transcriptions are biased by its server's vocabulary, read for
+    /// each one so a new term applies from the next clip.
+    biased: bool,
     pulse: Option<&'a Path>,
 }
 
@@ -170,7 +172,7 @@ fn one(queue: &Queue, shim: &mut Shim) -> Result<bool, Failed> {
         client,
         kinds,
         scratch,
-        prompt,
+        biased,
         pulse,
     } = *queue;
     let started = Utc::now();
@@ -194,6 +196,13 @@ fn one(queue: &Queue, shim: &mut Shim) -> Result<bool, Failed> {
             "job {id} names {filename:?}, not a plain file name"
         ))));
     };
+    // Unreachable, the job fails and is retried: an unbiased transcript would
+    // have to be redone.
+    let prompt = if biased && kind == Kind::TranscribeSegment {
+        client.prompt().map_err(Failed::Server)?
+    } else {
+        None
+    };
     let clip = scratch.join(&name);
     client
         .fetch_blob(&source, &filename, &clip)
@@ -201,7 +210,7 @@ fn one(queue: &Queue, shim: &mut Shim) -> Result<bool, Failed> {
     // Exhaustive: a new kind does not compile until it is given work here.
     let outcome = runner::renew::while_renewing(client, id, runner::renew::EVERY, || match kind {
         Kind::TranscribeSegment => shim
-            .transcribe(&clip, language.as_deref(), prompt)
+            .transcribe(&clip, language.as_deref(), prompt.as_deref())
             .map(|a| (a.raw, a.reply.segments.len())),
         Kind::DiarizeSegment => shim.diarize(&clip).map(|a| (a.raw, a.reply.turns.len())),
         // One model call per named turn.
@@ -301,31 +310,12 @@ fn main() {
         std::process::exit(1);
     }
     let (mut shim, name, kinds) = start_shim(&config);
-    // Fatal if unreachable for a transcribing runner: an unbiased transcript
-    // would have to be redone.
-    let prompt = if kinds.contains(&Kind::TranscribeSegment) {
-        match client.prompt() {
-            Ok(prompt) => {
-                tracing::info!(
-                    terms = prompt.as_deref().map_or(0, |p| p.split(',').count()),
-                    "vocabulary loaded"
-                );
-                prompt
-            }
-            Err(err) => {
-                tracing::error!(%err, "cannot read the vocabulary; refusing to transcribe unbiased");
-                std::process::exit(1);
-            }
-        }
-    } else {
-        None
-    };
     let recall = Queue {
         name: "recall",
         client: &client,
         kinds,
         scratch: &scratch,
-        prompt: prompt.as_deref(),
+        biased: true,
         pulse: config.pulse.as_deref(),
     };
     // Its own scratch directory: other people's voice messages never sit
@@ -342,7 +332,7 @@ fn main() {
         scratch: &messages_scratch,
         // Its server serves no vocabulary: recall's names must not bias other
         // people's messages.
-        prompt: None,
+        biased: false,
         pulse: None,
     });
     tracing::info!(url = %config.base, shim = %name, kinds = ?kinds, "runner: polling");
