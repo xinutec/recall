@@ -13,6 +13,8 @@ use sha2::{Digest, Sha256};
 use std::collections::BTreeMap;
 
 crate::statements! {
+    HOLDS_HOUSE_MIC: Meaning =
+        "SELECT EXISTS (SELECT 1 FROM main.sources WHERE owner = ?1 AND kind = 'coreaudio')";
     RECORD_EVENT: Meaning =
         "INSERT INTO capture_events (utc, kind, source_id, detail) VALUES (?1, ?2, NULL, ?3)";
 }
@@ -60,11 +62,60 @@ pub struct Reported {
     pub paused_until: Option<String>,
 }
 
+/// Whose pause a request controls: the household's, which the Mac applies and
+/// confirms, or one person's, which their own phone applies.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Whose {
+    House,
+    Person(String),
+}
+
+impl Whose {
+    /// The household's for a request nobody is known on and for whoever owns
+    /// the Mac's own mic (a `coreaudio` source); anyone else's is their own.
+    ///
+    /// # Errors
+    /// If the database refuses.
+    pub fn of(
+        conn: &Connection,
+        viewer: Option<&crate::webauth::Viewer>,
+    ) -> rusqlite::Result<Self> {
+        let Some(viewer) = viewer else {
+            return Ok(Self::House);
+        };
+        let house: bool = HOLDS_HOUSE_MIC.query_row(conn, [&viewer.user_id], |r| r.get(0))?;
+        Ok(if house {
+            Self::House
+        } else {
+            Self::Person(viewer.user_id.clone())
+        })
+    }
+
+    fn intent_key(&self) -> String {
+        match self {
+            Self::House => INTENT_KEY.to_owned(),
+            Self::Person(user) => format!("{INTENT_KEY}/{user}"),
+        }
+    }
+}
+
 /// The desired resume-by, or `None` when running. An elapsed or unreadable
 /// intent reads as running. Returns the stored spelling: the Mac echoes it and
 /// `settled` compares strings.
 pub fn intent_until(conn: &Connection, now: DateTime<Utc>) -> rusqlite::Result<Option<String>> {
-    let Some(raw) = settings::get(conn, INTENT_KEY)? else {
+    intent_until_of(conn, &Whose::House, now)
+}
+
+/// [`intent_until`] for `whose` pause.
+///
+/// # Errors
+/// If the database refuses.
+pub fn intent_until_of(
+    conn: &Connection,
+    whose: &Whose,
+    now: DateTime<Utc>,
+) -> rusqlite::Result<Option<String>> {
+    let Some(raw) = settings::get(conn, &whose.intent_key())? else {
         return Ok(None);
     };
     if raw.is_empty() {
@@ -149,6 +200,33 @@ pub fn reported_source_liveness(
     Ok(Some(out))
 }
 
+/// `whose` capture state: the household's is [`fleet_capture_state`]; a
+/// person's phone applies their intent itself, with no Mac to confirm it, so
+/// it reads as applied and settled.
+///
+/// # Errors
+/// If the database refuses.
+pub fn capture_state_of(
+    conn: &Connection,
+    whose: &Whose,
+    now: DateTime<Utc>,
+) -> rusqlite::Result<CaptureState> {
+    if *whose == Whose::House {
+        return fleet_capture_state(conn, now);
+    }
+    let desired_until = intent_until_of(conn, whose, now)?;
+    let desired_running = desired_until.is_none();
+    Ok(stamped(CaptureState {
+        running: desired_running,
+        paused_until: desired_until.clone(),
+        desired_running,
+        desired_paused_until: desired_until,
+        settled: true,
+        mic_reachable: true,
+        state_token: String::new(),
+    }))
+}
+
 /// The fleet's view: intent, plus the Mac's confirmation of it.
 pub fn fleet_capture_state(
     conn: &Connection,
@@ -207,16 +285,37 @@ pub fn intent_pause(
     now: DateTime<Utc>,
     minutes: Option<i64>,
 ) -> rusqlite::Result<String> {
+    intent_pause_of(conn, &Whose::House, now, minutes)
+}
+
+/// [`intent_pause`] for `whose` pause.
+///
+/// # Errors
+/// If the database refuses.
+pub fn intent_pause_of(
+    conn: &Connection,
+    whose: &Whose,
+    now: DateTime<Utc>,
+    minutes: Option<i64>,
+) -> rusqlite::Result<String> {
     let until = compute_resume_by(now, minutes);
     let iso = audiocore::instant::python_isoformat_utc(until);
-    settings::set(conn, INTENT_KEY, &iso)?;
+    settings::set(conn, &whose.intent_key(), &iso)?;
     notify_intent_changed();
     Ok(iso)
 }
 
 /// Record "run" as the intent: an empty value, not a deleted row.
 pub fn intent_resume(conn: &Connection) -> rusqlite::Result<()> {
-    settings::set(conn, INTENT_KEY, "")?;
+    intent_resume_of(conn, &Whose::House)
+}
+
+/// [`intent_resume`] for `whose` pause.
+///
+/// # Errors
+/// If the database refuses.
+pub fn intent_resume_of(conn: &Connection, whose: &Whose) -> rusqlite::Result<()> {
+    settings::set(conn, &whose.intent_key(), "")?;
     notify_intent_changed();
     Ok(())
 }
@@ -317,8 +416,10 @@ pub struct StatusQuery {
 /// trip, and paces the Mac's mirror.
 pub async fn status_route(
     State(st): State<Arc<Control>>,
+    asked: crate::webauth::Asked,
     Query(q): Query<StatusQuery>,
 ) -> Response {
+    let viewer = crate::webauth::viewer(asked);
     let root = st.root.clone();
     let wait = q.wait.clamp(0.0, WAIT_CAP.as_secs_f64());
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs_f64(wait);
@@ -326,8 +427,11 @@ pub async fn status_route(
     loop {
         let watcher = intent_watch();
         let root = root.clone();
+        let viewer = viewer.clone();
         let state = match route::blocking("capture", move || {
-            fleet_capture_state(&crate::work::open_write(&root)?, chrono::Utc::now())
+            let conn = crate::work::open_write(&root)?;
+            let whose = Whose::of(&conn, viewer.as_ref())?;
+            capture_state_of(&conn, &whose, chrono::Utc::now())
         })
         .await
         {
@@ -429,25 +533,27 @@ async fn control(st: Arc<Control>, intent: Intent, request: axum::extract::Reque
     let real_ip = parts.headers.get("x-real-ip").and_then(|v| v.to_str().ok());
     let host = client_host(peer, real_ip, &st.trusted_proxies);
     let asker = Asker::from(&parts, host);
+    let viewer = parts.extensions.get::<crate::webauth::Viewer>().cloned();
     let cfg = st.webauth.clone();
     let root = st.root.clone();
 
     route::json("capture-control", move || {
         let conn = crate::work::open_write(&root)?;
         let now = chrono::Utc::now();
+        let whose = Whose::of(&conn, viewer.as_ref())?;
         let verb = match intent {
             Intent::Pause { minutes } => {
-                intent_pause(&conn, now, minutes)?;
+                intent_pause_of(&conn, &whose, now, minutes)?;
                 "pause"
             }
             Intent::Resume => {
-                intent_resume(&conn)?;
+                intent_resume_of(&conn, &whose)?;
                 "resume"
             }
         };
         // After the action, so the audit cannot prevent it.
         audit(&conn, verb, &asker.describe(&cfg, now.timestamp()));
-        fleet_capture_state(&conn, now)
+        capture_state_of(&conn, &whose, now)
     })
     .await
 }

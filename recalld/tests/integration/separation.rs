@@ -376,7 +376,7 @@ fn case(route: &str, a: &A) -> Option<Case> {
             Global("a recorder's own report, sent without a session")
         }
         "GET /api/capture" | "POST /api/capture/pause" | "POST /api/capture/resume" => {
-            Global("the pause is still the house's; per person is part D")
+            Global("each person's own pause: a_pause_is_the_pausers_own")
         }
         "POST /api/log" | "POST /api/telemetry" => Global("write-only logs"),
         _ => return None,
@@ -540,4 +540,25 @@ async fn a_recorder_speaks_for_its_sources_owner() {
     );
     let (_, nobody) = list(None).await;
     assert!(!nobody.contains("phone-"), "{nobody}");
+}
+
+/// Each person's pause is their own: B pausing leaves A recording, and the
+/// house, asked by no one in particular, keeps its own.
+#[tokio::test]
+async fn a_pause_is_the_pausers_own() {
+    let (f, _) = world().await;
+    let wants_running = |text: &str| {
+        serde_json::from_str::<serde_json::Value>(text).expect("json")["desiredRunning"]
+            .as_bool()
+            .expect("desiredRunning")
+    };
+    let (status, text) = call(&f, "b", "POST", "/api/capture/pause", None).await;
+    assert!(status.is_success(), "{status} {text}");
+
+    let (_, b) = call(&f, "b", "GET", "/api/capture", None).await;
+    assert!(!wants_running(&b), "B paused: {b}");
+    let (_, a) = call(&f, "a", "GET", "/api/capture", None).await;
+    assert!(wants_running(&a), "A untouched: {a}");
+    let (_, house) = as_recorder(&f, None, Request::get("/api/capture"), Body::empty()).await;
+    assert!(wants_running(&house), "the house untouched: {house}");
 }

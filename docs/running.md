@@ -126,7 +126,10 @@ anyone else's, as for one that does not exist. A voice is guessed only among
 its recording's owner's people. Live lines carry no source and are shown to
 the owner of the Mac's own mic (a `coreaudio` source). A device's status rows
 are its source's owner's; a row whose id has no source at all is anyone's to
-clear. Still one for everybody: the capture pause and the glossary. A recorder
+clear. The capture pause is per person: the household's (asked by nobody in
+particular, or by whoever owns the Mac's own mic) is the one the Mac applies and
+confirms; anyone else's is their own, applied by their own phone
+(`capture::Whose`). Still one for everybody: the glossary. A recorder
 says whose it is with its own segment token (the ingest token table): on the
 routes open to devices it speaks for its source's owner, so its list of
 recorders is theirs and a meeting it uploads is theirs; with no identity at all
