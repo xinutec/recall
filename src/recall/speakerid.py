@@ -7,9 +7,13 @@ from __future__ import annotations
 import os
 from pathlib import Path
 
-from recall.diarize import inference_device
-
 _EMBED_RATE = 16000
+
+#: Where embeddings run: the CPU, not the Apple GPU the diarizer uses. Every
+#: span has its own length, and the GPU recompiles for each new shape:
+#: measured 0.015 s a span on the CPU against 0.49 s on the GPU, and about
+#: 10 s in production with the GPU also diarizing.
+EMBED_DEVICE = "cpu"
 
 
 def _decode_mono(audio: Path, rate: int = _EMBED_RATE) -> object:
@@ -38,9 +42,7 @@ def _inference(model: str, token: str | None) -> object:
         msg = f"could not load embedding model {model!r} (HF token/terms?)"
         raise RuntimeError(msg)
     inference = Inference(embedding_model, window="whole")
-    inference.to(
-        torch.device(inference_device(mps_available=torch.backends.mps.is_available()))
-    )
+    inference.to(torch.device(EMBED_DEVICE))
     _INFERENCE_CACHE[model] = inference
     return inference
 

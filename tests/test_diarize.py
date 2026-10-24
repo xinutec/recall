@@ -14,6 +14,7 @@ from typing import Any
 import pytest
 
 from recall.diarize import inference_device, tuned_parameters
+from recall.speakerid import EMBED_DEVICE
 
 SHIPPED: dict[str, Any] = {
     "segmentation": {"min_duration_off": 0.0},
@@ -61,3 +62,9 @@ def test_the_models_run_on_the_apple_gpu_when_there_is_one() -> None:
     # On the CPU a minute with speech took 51 s, on MPS 6 s, with the same turns.
     assert inference_device(mps_available=True) == "mps"
     assert inference_device(mps_available=False) == "cpu"
+
+
+def test_embeddings_run_on_the_cpu() -> None:
+    # Every span's length differs, and the GPU recompiles per shape: 0.49 s a
+    # span against 0.015 s on the CPU.
+    assert EMBED_DEVICE == "cpu"
