@@ -7,10 +7,19 @@ this measures that first: each mic's alignment against a reference, and their
 coherence per band once aligned.
 
 ```
-cargo run --release -p array -- --root /Volumes/Backup/recall \
-  --from 2026-10-22T08:21:40Z --to 2026-10-22T08:25:45Z \
-  --reference usb --sources oneplus6t-0,oneplus6t-1,pixel5,iphone11 [--dump]
+nix develop -c cargo run --release -p array -- measure --root /Volumes/Backup/recall \
+  --from 2026-10-22T08:21:45Z --to 2026-10-22T08:25:40Z \
+  --reference usb --sources oneplus6t-0,oneplus6t-1,pixel5,iphone11
+nix develop -c cargo run --release -p array -- combine … --out DIR   # WAVs + levels
 ```
+
+`measure`: each mic's clock against the reference (`clock::locate`: a loud 20 s
+located coarsely, then every loud 2 s chunk refined, and a line through them;
+offset only under a minute) and its coherence per band over 171 ms windows.
+`combine`: the mics resampled onto the reference's clock (`resample::onto`), a
+171 ms STFT, and a multichannel Wiener filter (`mwf`) estimating the speech as
+the reference hears it; each input and the result written as WAV with its
+speech-to-background ratio.
 
 - Delays: GCC-PHAT on Hann-tapered frames within 300 Hz–4 kHz (a shared hum
   outside it outvotes the speech otherwise), sinc-peak interpolation. Coarse 4 s
@@ -50,8 +59,8 @@ Coherence with 171 ms windows, each 2 s steered by its own measured delay
 | pixel5      | 0.26 | 0.47 | 0.51 | 0.43 | 0.12 |
 | iphone11    | 0.05 | 0.04 | 0.04 | 0.05 | 0.04 |
 
-iphone11 aligned with nothing on the call; on the loudspeaker test it is the
-best mic. Not yet explained.
+(iphone11 on the call is 6.7 s off the others, outside the search I first
+used; `array measure` finds it, at 0.37/0.58/0.59/0.50/0.20.)
 
 **White noise from the right loudspeaker, 2026-10-23 21:59** (one fixed
 source), against oneplus6t-0:
@@ -73,6 +82,25 @@ source), against oneplus6t-0:
   in any mic), so loudspeaker tests compare mics with each other, never with the
   file. At the volume first set, most mics did not hear them at all.
 
-So the combiner to build is a multichannel Wiener filter on long frames: per
-frequency, each mic's relation to the reference's speech, estimated from the
-recordings, and the mics combined through it.
+## The Wiener filter, 2026-10-24: real but small, because noise is not the problem
+
+Speech-to-background ratio in the speech band, speech frames (reference's
+loudest 40%) against background frames (its quietest 30%):
+
+| stretch | best single mic | combined, that mic as reference |
+|---|---|---|
+| loudspeaker speech, 23 Oct 21:59:40–22:00:20, 5 mics | usb 32.1 dB | 33.5 dB (+1.4) |
+| the call, 22 Oct 08:21:45–08:25:40, 5 mics | usb 23.5 dB | 23.6 dB (+0.1) |
+
+The background is already 23–32 dB below the speech, so there is little noise
+to take away. What a far mic loses is the room: its reverberation. This filter
+estimates the speech as the reference mic hears it, reverberation included, by
+design, so it cannot touch that.
+
+The physics that can: with two or more mics a room can be inverted exactly by
+FIR filters (the multiple-input/output inverse theorem, MINT), which no single
+mic allows, since a room's response is not minimum-phase. The classical method
+that uses it is multichannel linear prediction (weighted prediction error,
+WPE): it predicts each mic's late reverberation from all the mics' past
+samples and subtracts it. That is the next thing to try, scored by a
+reverberation measure, by ear, and by word error rate on hand-checked minutes.

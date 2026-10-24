@@ -5,7 +5,11 @@
 //! is built.
 
 pub mod align;
+pub mod clock;
 pub mod coherence;
+pub mod mwf;
+pub mod resample;
+pub mod stft;
 pub mod timeline;
 
 /// Every capture this measures is 48 kHz.

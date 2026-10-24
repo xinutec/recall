@@ -125,8 +125,8 @@ fn the_fit_recovers_offset_and_drift_and_ignores_a_wild_frame() {
 #[test]
 fn coherence_is_one_for_the_same_signal_and_low_for_independent_ones() {
     let x = noise(96_000, 7);
-    let same = band_coherence(&x, &x, 48_000, &[(500.0, 2_000.0)]);
-    let apart = band_coherence(&x, &noise(96_000, 8), 48_000, &[(500.0, 2_000.0)]);
+    let same = band_coherence(&x, &x, 48_000, 1024, &[(500.0, 2_000.0)]);
+    let apart = band_coherence(&x, &noise(96_000, 8), 48_000, 1024, &[(500.0, 2_000.0)]);
     assert!(same[0] > 0.99, "{same:?}");
     assert!(apart[0] < 0.05, "{apart:?}");
 }

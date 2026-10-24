@@ -1,17 +1,28 @@
-//! `array measure`: how well the house's mics line up, and how much of each
-//! one's signal the reference's explains, band by band, over one stretch.
+//! `array measure`: how well the house's mics line up and how much of the
+//! waveform they share. `array combine`: the multichannel Wiener filter over
+//! them, written out beside the reference and each mic, with each one's
+//! speech-to-background ratio.
 
 use array::RATE;
-use array::align::{Fit, Frame, fit_drift, gcc_phat_in};
+use array::align::Fit;
+use array::clock::{SPEECH, locate, mic_index};
 use array::coherence::band_coherence;
+use array::mwf::{Covariances, filter};
+use array::resample::onto;
+use array::stft::{FRAME, Spectrum, istft, stft};
 use array::timeline::{Run, runs};
 use chrono::{DateTime, Utc};
-use clap::Parser;
-use std::path::PathBuf;
+use clap::{Parser, Subcommand};
+use std::path::{Path, PathBuf};
 
-/// Measure alignment and coherence of `--sources` against `--reference`.
 #[derive(Parser)]
 struct Args {
+    #[command(subcommand)]
+    command: Command,
+}
+
+#[derive(clap::Args)]
+struct Stretch {
     /// The archive root, one directory per source.
     #[arg(long)]
     root: PathBuf,
@@ -23,177 +34,256 @@ struct Args {
     reference: String,
     #[arg(long, value_delimiter = ',')]
     sources: Vec<String>,
-    /// Print every coarse frame (at, lag, strength) to stderr, to see what the
-    /// fit was given.
-    #[arg(long)]
-    dump: bool,
 }
 
-/// Where speech is: delays are measured here only (`gcc_phat_in`).
-const SPEECH: (f64, f64) = (300.0, 4_000.0);
+#[derive(Subcommand)]
+enum Command {
+    /// Each mic's clock against the reference and its coherence per band.
+    Measure {
+        #[command(flatten)]
+        stretch: Stretch,
+    },
+    /// The Wiener filter over every mic that aligns, written as WAVs to `--out`.
+    Combine {
+        #[command(flatten)]
+        stretch: Stretch,
+        #[arg(long)]
+        out: PathBuf,
+    },
+}
 
-/// The bands coherence is reported in, Hz.
-const BANDS: [(f64, f64); 6] = [
+const BANDS: [(f64, f64); 5] = [
     (100.0, 300.0),
     (300.0, 1_000.0),
     (1_000.0, 2_000.0),
     (2_000.0, 4_000.0),
     (4_000.0, 8_000.0),
-    (8_000.0, 16_000.0),
 ];
-
-#[derive(serde::Serialize)]
-struct Report {
-    source: String,
-    run: usize,
-    frames: usize,
-    fit: Option<Fit>,
-    /// Mean coherence with the reference per band, over the speech frames.
-    coherence: Vec<f64>,
-}
 
 fn secs(at: DateTime<Utc>) -> f64 {
     at.timestamp_micros() as f64 / 1e6
 }
 
-/// A mic run's frames against the reference: each `frame` samples of the
-/// reference every `hop`, searched within `search` samples of `guess(at)`,
-/// the mic index the reference index `at` should match.
-fn frames(
-    reference: &[f32],
-    mic: &[f32],
-    frame: usize,
-    hop: usize,
-    search: usize,
-    guess: impl Fn(f64) -> f64,
-) -> Vec<Frame> {
-    let mut out = Vec::new();
-    let mut at = 0;
-    while at + frame <= reference.len() {
-        let start = guess(at as f64).round();
-        if start >= 0.0 && (start as usize) + frame <= mic.len() {
-            let s = start as usize;
-            if let Some(peak) = gcc_phat_in(
-                &reference[at..at + frame],
-                &mic[s..s + frame],
-                search,
-                SPEECH,
-            ) {
-                out.push(Frame {
-                    at: at as f64,
-                    lag: start + peak.lag - at as f64,
-                    strength: peak.strength,
-                });
-            }
-        }
-        at += hop;
-    }
-    out
+fn longest(runs: Vec<Run>) -> Option<Run> {
+    runs.into_iter().max_by_key(|r| r.samples.len())
 }
 
-fn measure(reference: &Run, mic: &Run, dump: bool) -> (usize, Option<Fit>, Vec<f64>) {
-    let r = RATE as usize;
-    // The names put the mic's run this many samples after the reference's.
-    let named = (secs(mic.start) - secs(reference.start)) * RATE;
-    // Coarse: 4 s frames, searched ±1.5 s around the names' guess.
-    let coarse = frames(
-        &reference.samples,
-        &mic.samples,
-        4 * r,
-        2 * r,
-        3 * r / 2,
-        |at| at - named,
-    );
-    if dump {
-        for f in &coarse {
-            eprintln!(
-                "{:.1}\t{:.1}\t{:.3}",
-                f.at / RATE,
-                f.lag / RATE * 1000.0,
-                f.strength
-            );
-        }
-    }
-    let Some(rough) = fit_drift(&coarse, 0.02, 0.005 * RATE) else {
-        return (coarse.len(), None, Vec::new());
+/// A mic that aligned: its name, its clock and its samples on the reference's timeline.
+struct Aligned {
+    name: String,
+    fit: Fit,
+    samples: Vec<f32>,
+}
+
+/// The reference, cut to the stretch, and every source that aligns with it.
+fn gather(stretch: &Stretch) -> (Vec<f32>, Vec<Aligned>) {
+    let Some(reference) = longest(runs(
+        &stretch.root,
+        &stretch.reference,
+        stretch.from,
+        stretch.to,
+        1.5,
+    )) else {
+        eprintln!("array: no audio for {} in the stretch", stretch.reference);
+        std::process::exit(1);
     };
-    // Fine: 1 s frames, each searched ±30 ms around the clock line. Within a
-    // frame the delay is the clock's plus the talker's geometry, and the talker
-    // moves between frames, so each frame keeps its own.
-    let line = move |at: f64| at + rough.offset + rough.ppm * 1e-6 * at;
-    let fine = frames(
-        &reference.samples,
-        &mic.samples,
-        r,
-        r / 2,
-        (0.030 * RATE) as usize,
-        line,
-    );
-    if dump {
-        for f in &fine {
-            let off = (f.lag - (rough.offset + rough.ppm * 1e-6 * f.at)) / RATE * 1000.0;
-            eprintln!("fine\t{:.1}\t{:.2}\t{:.3}", f.at / RATE, off, f.strength);
+    // Only the stretch: a run can hold other sources, whose delays differ.
+    let run_start = secs(reference.start);
+    let skip = ((secs(stretch.from) - secs(reference.start)).max(0.0) * RATE) as usize;
+    let keep = ((secs(stretch.to) - secs(stretch.from)) * RATE) as usize;
+    let reference = reference.samples
+        [skip.min(reference.samples.len())..(skip + keep).min(reference.samples.len())]
+        .to_vec();
+    let starts = secs(stretch.from).max(run_start);
+    let mut aligned = vec![Aligned {
+        name: stretch.reference.clone(),
+        fit: Fit {
+            offset: 0.0,
+            ppm: 0.0,
+            used: 0,
+            residual_ms: 0.0,
+        },
+        samples: reference.clone(),
+    }];
+    for source in &stretch.sources {
+        let Some(mic) = longest(runs(&stretch.root, source, stretch.from, stretch.to, 1.5)) else {
+            eprintln!("array: {source}: no audio in the stretch");
+            continue;
+        };
+        let named = secs(mic.start) - starts;
+        let Some(fit) = locate(&reference, &mic.samples, named) else {
+            eprintln!("array: {source}: no consistent alignment, left out");
+            continue;
+        };
+        if fit.residual_ms > 2.0 || fit.used < 4 {
+            eprintln!("array: {source}: alignment too loose ({fit:?}), left out");
+            continue;
         }
+        let samples = onto(&mic.samples, |i| mic_index(&fit, i), reference.len());
+        aligned.push(Aligned {
+            name: source.clone(),
+            fit,
+            samples,
+        });
     }
-    // Coherence over the louder half of the frames, each steered by its own
-    // delay: speech, not room tone.
-    let mut loud: Vec<&Frame> = fine.iter().collect();
-    let energy = |f: &Frame| -> f64 {
-        let a = f.at as usize;
-        reference.samples[a..a + r]
+    (reference, aligned)
+}
+
+/// Each 2 s chunk's coherence with `nfft`-sample windows, averaged over the
+/// louder half of the reference's chunks.
+fn coherence(reference: &[f32], mic: &[f32]) -> Vec<f64> {
+    let chunk = 2 * RATE as usize;
+    let mut chunks: Vec<usize> = (0..reference.len().min(mic.len()) / chunk).collect();
+    let energy = |c: usize| -> f64 {
+        reference[c * chunk..(c + 1) * chunk]
             .iter()
             .map(|v| f64::from(*v).powi(2))
             .sum()
     };
-    loud.sort_by(|a, b| energy(b).total_cmp(&energy(a)));
-    loud.truncate(loud.len() / 2);
-    let (mut xs, mut ys) = (Vec::new(), Vec::new());
-    for f in loud {
-        let (a, s) = (f.at as usize, (f.at + f.lag).round());
-        if s >= 0.0 && (s as usize) + r <= mic.samples.len() {
-            xs.extend_from_slice(&reference.samples[a..a + r]);
-            ys.extend_from_slice(&mic.samples[s as usize..s as usize + r]);
+    chunks.sort_by(|&a, &b| energy(b).total_cmp(&energy(a)));
+    chunks.truncate(chunks.len() / 2);
+    let mut sum = vec![0.0; BANDS.len()];
+    for &c in &chunks {
+        let r = c * chunk..(c + 1) * chunk;
+        for (s, v) in sum.iter_mut().zip(band_coherence(
+            &reference[r.clone()],
+            &mic[r],
+            RATE as u32,
+            FRAME,
+            &BANDS,
+        )) {
+            *s += v;
         }
     }
-    (
-        fine.len(),
-        Some(rough),
-        band_coherence(&xs, &ys, RATE as u32, &BANDS),
-    )
+    sum.iter().map(|s| s / chunks.len().max(1) as f64).collect()
+}
+
+/// Speech-band energy of each frame of `spectra`.
+fn frame_energy(spectra: &[Spectrum]) -> Vec<f64> {
+    let bin = |hz: f64| (hz / RATE * FRAME as f64) as usize;
+    spectra
+        .iter()
+        .map(|s| {
+            s[bin(SPEECH.0)..bin(SPEECH.1)]
+                .iter()
+                .map(rustfft::num_complex::Complex::norm_sqr)
+                .sum()
+        })
+        .collect()
+}
+
+/// Speech (`Some(true)`): the reference's louder 40% of frames; background
+/// (`Some(false)`): its quietest 30%; the rest is left out of both.
+fn classify(reference: &[Spectrum]) -> impl Fn(usize) -> Option<bool> {
+    let energy = frame_energy(reference);
+    let mut sorted = energy.clone();
+    sorted.sort_by(f64::total_cmp);
+    let (quiet, loud) = (sorted[sorted.len() * 3 / 10], sorted[sorted.len() * 6 / 10]);
+    move |f| {
+        let e = energy[f];
+        if e >= loud {
+            Some(true)
+        } else if e <= quiet {
+            Some(false)
+        } else {
+            None
+        }
+    }
+}
+
+/// Mean speech-band energy in speech frames over that in background frames, dB.
+fn speech_to_background(spectra: &[Spectrum], kind: &impl Fn(usize) -> Option<bool>) -> f64 {
+    let energy = frame_energy(spectra);
+    let mean = |want: bool| {
+        let v: Vec<f64> = energy
+            .iter()
+            .enumerate()
+            .filter(|(f, _)| kind(*f) == Some(want))
+            .map(|(_, e)| *e)
+            .collect();
+        v.iter().sum::<f64>() / v.len().max(1) as f64
+    };
+    10.0 * (mean(true) / mean(false)).log10()
+}
+
+fn write_wav(path: &Path, samples: &[f32]) -> std::io::Result<()> {
+    let data: Vec<u8> = samples
+        .iter()
+        .flat_map(|v| ((v.clamp(-1.0, 1.0) * 32767.0) as i16).to_le_bytes())
+        .collect();
+    let mut out = Vec::with_capacity(44 + data.len());
+    let rate = RATE as u32;
+    out.extend_from_slice(b"RIFF");
+    out.extend_from_slice(&(36 + data.len() as u32).to_le_bytes());
+    out.extend_from_slice(b"WAVEfmt ");
+    out.extend_from_slice(&16u32.to_le_bytes());
+    out.extend_from_slice(&1u16.to_le_bytes());
+    out.extend_from_slice(&1u16.to_le_bytes());
+    out.extend_from_slice(&rate.to_le_bytes());
+    out.extend_from_slice(&(rate * 2).to_le_bytes());
+    out.extend_from_slice(&2u16.to_le_bytes());
+    out.extend_from_slice(&16u16.to_le_bytes());
+    out.extend_from_slice(b"data");
+    out.extend_from_slice(&(data.len() as u32).to_le_bytes());
+    out.extend_from_slice(&data);
+    std::fs::write(path, out)
 }
 
 fn main() {
-    let args = Args::parse();
-    let reference = runs(&args.root, &args.reference, args.from, args.to, 1.5);
-    let Some(reference) = reference.into_iter().max_by_key(|r| r.samples.len()) else {
-        eprintln!("array: no audio for {} in the stretch", args.reference);
-        std::process::exit(1);
-    };
-    let self_check = measure(&reference, &reference, false);
-    let mut reports = vec![Report {
-        source: format!("{} (itself)", args.reference),
-        run: 0,
-        frames: self_check.0,
-        fit: self_check.1,
-        coherence: self_check.2,
-    }];
-    for source in &args.sources {
-        for (run, mic) in runs(&args.root, source, args.from, args.to, 1.5)
-            .iter()
-            .enumerate()
-        {
-            let (frames, fit, coherence) = measure(&reference, mic, args.dump);
-            reports.push(Report {
-                source: source.clone(),
-                run,
-                frames,
-                fit,
-                coherence,
-            });
+    match Args::parse().command {
+        Command::Measure { stretch } => {
+            let (reference, aligned) = gather(&stretch);
+            println!(
+                "{:14} {:>10} {:>8} {:>5} {:>7} | coherence, 171 ms: 100-300 300-1k 1-2k 2-4k 4-8k",
+                "mic", "offset s", "ppm", "used", "res ms"
+            );
+            for mic in &aligned {
+                let c = coherence(&reference, &mic.samples);
+                println!(
+                    "{:14} {:>10.4} {:>8.2} {:>5} {:>7.3} |                    {}",
+                    mic.name,
+                    mic.fit.offset / RATE,
+                    mic.fit.ppm,
+                    mic.fit.used,
+                    mic.fit.residual_ms,
+                    c.iter()
+                        .map(|v| format!("{v:.2}"))
+                        .collect::<Vec<_>>()
+                        .join("    ")
+                );
+            }
+        }
+        Command::Combine { stretch, out } => {
+            let (reference, aligned) = gather(&stretch);
+            let spectra: Vec<Vec<Spectrum>> = aligned.iter().map(|m| stft(&m.samples)).collect();
+            let kind = classify(&spectra[0]);
+            let cov = Covariances::estimate(&spectra, &kind);
+            let combined = filter(&spectra, &cov, 0);
+            std::fs::create_dir_all(&out).expect("the output directory");
+            println!(
+                "{} mics; {} speech frames, {} background frames",
+                aligned.len(),
+                cov.speech_frames,
+                cov.noise_frames
+            );
+            for (mic, s) in aligned.iter().zip(&spectra) {
+                println!(
+                    "{:14} speech-to-background {:5.1} dB",
+                    mic.name,
+                    speech_to_background(s, &kind)
+                );
+                write_wav(&out.join(format!("{}.wav", mic.name)), &mic.samples).expect("a wav");
+            }
+            println!(
+                "{:14} speech-to-background {:5.1} dB",
+                "combined",
+                speech_to_background(&combined, &kind)
+            );
+            write_wav(
+                &out.join("combined.wav"),
+                &istft(&combined, reference.len()),
+            )
+            .expect("a wav");
         }
     }
-    println!(
-        "{}",
-        serde_json::to_string_pretty(&reports).expect("a report serialises")
-    );
 }

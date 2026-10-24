@@ -5,17 +5,23 @@
 use rustfft::FftPlanner;
 use rustfft::num_complex::Complex;
 
-const NFFT: usize = 1024;
-const HOP: usize = NFFT / 2;
-
-/// The mean coherence of `x` and `y` within each `(low, high)` band in Hz.
-pub fn band_coherence(x: &[f32], y: &[f32], rate: u32, bands: &[(f64, f64)]) -> Vec<f64> {
+/// The mean coherence of `x` and `y` within each `(low, high)` band in Hz,
+/// over windows of `nfft` samples. A room's echo is a linear filter hundreds of
+/// milliseconds long: a window shorter than it reads the echo as unrelated.
+pub fn band_coherence(
+    x: &[f32],
+    y: &[f32],
+    rate: u32,
+    nfft: usize,
+    bands: &[(f64, f64)],
+) -> Vec<f64> {
+    let hop = nfft / 2;
     let len = x.len().min(y.len());
-    let window: Vec<f64> = (0..NFFT)
-        .map(|i| 0.5 - 0.5 * (std::f64::consts::TAU * i as f64 / NFFT as f64).cos())
+    let window: Vec<f64> = (0..nfft)
+        .map(|i| 0.5 - 0.5 * (std::f64::consts::TAU * i as f64 / nfft as f64).cos())
         .collect();
-    let fft = FftPlanner::<f64>::new().plan_fft_forward(NFFT);
-    let bins = NFFT / 2 + 1;
+    let fft = FftPlanner::<f64>::new().plan_fft_forward(nfft);
+    let bins = nfft / 2 + 1;
     let (mut sxx, mut syy) = (vec![0.0; bins], vec![0.0; bins]);
     let mut sxy = vec![Complex::new(0.0, 0.0); bins];
     let spectrum = |s: &[f32]| {
@@ -28,19 +34,19 @@ pub fn band_coherence(x: &[f32], y: &[f32], rate: u32, bands: &[(f64, f64)]) -> 
         buf
     };
     let mut start = 0;
-    while start + NFFT <= len {
+    while start + nfft <= len {
         let (a, b) = (
-            spectrum(&x[start..start + NFFT]),
-            spectrum(&y[start..start + NFFT]),
+            spectrum(&x[start..start + nfft]),
+            spectrum(&y[start..start + nfft]),
         );
         for k in 0..bins {
             sxx[k] += a[k].norm_sqr();
             syy[k] += b[k].norm_sqr();
             sxy[k] += a[k] * b[k].conj();
         }
-        start += HOP;
+        start += hop;
     }
-    let hz = |k: usize| k as f64 * f64::from(rate) / NFFT as f64;
+    let hz = |k: usize| k as f64 * f64::from(rate) / nfft as f64;
     bands
         .iter()
         .map(|&(low, high)| {
