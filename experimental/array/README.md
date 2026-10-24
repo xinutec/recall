@@ -143,3 +143,29 @@ differences a handful of words. Speech this clear and this loud is not limited
 by the room, so neither combiner can show a gain on it. The test that can is
 harder material: the same corpus played much quieter (a distant or soft
 talker), or hand-checked conversation (#1470).
+
+## Quiet speech and a real voice, 2026-10-24: a gain only at the edge of audibility
+
+The same kind of corpus speech from the left speaker, one minute, played 15 and
+25 dB below the run above (the file quieter, the volume as set); then a person
+in the room reading the Rainbow Passage twice, normal and quiet/far. Word
+errors:
+
+| | corpus −15 dB (138 w) | corpus −25 dB | voice, normal (98 w) | voice, quiet/far |
+|---|---|---|---|---|
+| usb (best single) | 25.4% | 75.4% | 0% | 4.1% |
+| iphone11 | 25.4% | 99% | 2.0% | 3.1% |
+| oneplus6t-0 | 26.1% | 99% | 2.0% | 3.1% |
+| Wiener, usb reference | 27.5% | **60.1%** | 0% | 4.1% |
+| WPE, usb alone | 25.4% | 67.4% | 0% | 7.1% |
+| WPE, all five | 24.6% | 70.3% | 2.0% | 4.1% |
+
+(The −15 dB errors are real: hard, poetic sentences at a low level.)
+
+- A voice in the room, quiet or from across it, is already transcribed at 0–6%
+  by almost any single mic: there is nothing left to win.
+- Combining helps only near the edge of audibility: at −25 dB, 83 errors
+  against the best mic's 104, though three phones alone heard nothing.
+- So at home the room's acoustics are not what limits accuracy, and recall's
+  best-mic-per-stretch already captures nearly all of it. Parked here: the tool
+  is ready if real conversation shows acoustic errors it could fix (#1470).
