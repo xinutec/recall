@@ -76,8 +76,15 @@ source), against oneplus6t-0:
 - Most pairs sit near the ceiling their own noise floors allow: the room costs
   little at 171 ms. A room's echo is a linear filter of the source, so a window
   long enough to hold it keeps the relation; at 21 ms most of it is lost.
-- geb loses coherence above 1 kHz and its delay wanders by up to 14 ms within
-  16 s; its capture path needs a look before it joins a combination.
+- geb's figures above came from that first, flawed pass. On the call `array
+  measure` aligns geb like the phones (drift −17 ppm; coherence with usb
+  0.38/0.56/0.49/0.35/0.16). On the loudspeaker test it barely heard the
+  speakers over its own floor, which sits 20–30 dB above the phones' (−45 to
+  −57 dBFS, most likely the machine's fans beside its mic). No fault; the
+  noisiest mic.
+- A drift figure under about 20 ppm is noise: over 4 minutes a talker's moves
+  shift the delays by a millisecond (the same phone fitted +12 and −2 ppm in
+  two runs).
 - The loudspeaker path itself loses the waveform (the played file is not found
   in any mic), so loudspeaker tests compare mics with each other, never with the
   file. At the volume first set, most mics did not hear them at all.
