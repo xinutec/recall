@@ -7,10 +7,12 @@
 pub mod align;
 pub mod clock;
 pub mod coherence;
+pub mod decimate;
 pub mod mwf;
 pub mod resample;
 pub mod stft;
 pub mod timeline;
+pub mod wpe;
 
 /// Every capture this measures is 48 kHz.
 pub const RATE: f64 = 48_000.0;

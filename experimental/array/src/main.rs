@@ -1,16 +1,19 @@
 //! `array measure`: how well the house's mics line up and how much of the
 //! waveform they share. `array combine`: the multichannel Wiener filter over
 //! them, written out beside the reference and each mic, with each one's
-//! speech-to-background ratio.
+//! speech-to-background ratio. `array dereverb`: multichannel dereverberation
+//! (WPE) at 16 kHz.
 
 use array::RATE;
 use array::align::Fit;
 use array::clock::{SPEECH, locate, mic_index};
 use array::coherence::band_coherence;
+use array::decimate::to_16k;
 use array::mwf::{Covariances, filter};
 use array::resample::onto;
-use array::stft::{FRAME, Spectrum, istft, stft};
+use array::stft::{FRAME, Spectrum, istft, istft_with, stft, stft_with};
 use array::timeline::{Run, runs};
+use array::wpe::{Wpe, dereverberate};
 use chrono::{DateTime, Utc};
 use clap::{Parser, Subcommand};
 use std::path::{Path, PathBuf};
@@ -50,7 +53,24 @@ enum Command {
         #[arg(long)]
         out: PathBuf,
     },
+    /// Multichannel dereverberation (WPE) at 16 kHz, the reference's output
+    /// beside the reference alone and single-mic WPE, as WAVs to `--out`.
+    Dereverb {
+        #[command(flatten)]
+        stretch: Stretch,
+        #[arg(long)]
+        out: PathBuf,
+        /// Frames of past each prediction uses (8 ms each).
+        #[arg(long, default_value_t = 15)]
+        taps: usize,
+        /// Frames kept from the present: echo closer than this stays.
+        #[arg(long, default_value_t = 3)]
+        delay: usize,
+    },
 }
+
+/// WPE's frames at 16 kHz: 32 ms, every 8 ms.
+const WPE_FRAME: usize = 512;
 
 const BANDS: [(f64, f64); 5] = [
     (100.0, 300.0),
@@ -158,9 +178,10 @@ fn coherence(reference: &[f32], mic: &[f32]) -> Vec<f64> {
     sum.iter().map(|s| s / chunks.len().max(1) as f64).collect()
 }
 
-/// Speech-band energy of each frame of `spectra`.
-fn frame_energy(spectra: &[Spectrum]) -> Vec<f64> {
-    let bin = |hz: f64| (hz / RATE * FRAME as f64) as usize;
+/// Speech-band energy of each frame of `spectra`, sampled at `rate`.
+fn frame_energy(spectra: &[Spectrum], rate: f64) -> Vec<f64> {
+    let frame = 2 * (spectra[0].len() - 1);
+    let bin = |hz: f64| (hz / rate * frame as f64) as usize;
     spectra
         .iter()
         .map(|s| {
@@ -174,8 +195,8 @@ fn frame_energy(spectra: &[Spectrum]) -> Vec<f64> {
 
 /// Speech (`Some(true)`): the reference's louder 40% of frames; background
 /// (`Some(false)`): its quietest 30%; the rest is left out of both.
-fn classify(reference: &[Spectrum]) -> impl Fn(usize) -> Option<bool> {
-    let energy = frame_energy(reference);
+fn classify(reference: &[Spectrum], rate: f64) -> impl Fn(usize) -> Option<bool> {
+    let energy = frame_energy(reference, rate);
     let mut sorted = energy.clone();
     sorted.sort_by(f64::total_cmp);
     let (quiet, loud) = (sorted[sorted.len() * 3 / 10], sorted[sorted.len() * 6 / 10]);
@@ -192,8 +213,12 @@ fn classify(reference: &[Spectrum]) -> impl Fn(usize) -> Option<bool> {
 }
 
 /// Mean speech-band energy in speech frames over that in background frames, dB.
-fn speech_to_background(spectra: &[Spectrum], kind: &impl Fn(usize) -> Option<bool>) -> f64 {
-    let energy = frame_energy(spectra);
+fn speech_to_background(
+    spectra: &[Spectrum],
+    rate: f64,
+    kind: &impl Fn(usize) -> Option<bool>,
+) -> f64 {
+    let energy = frame_energy(spectra, rate);
     let mean = |want: bool| {
         let v: Vec<f64> = energy
             .iter()
@@ -206,13 +231,12 @@ fn speech_to_background(spectra: &[Spectrum], kind: &impl Fn(usize) -> Option<bo
     10.0 * (mean(true) / mean(false)).log10()
 }
 
-fn write_wav(path: &Path, samples: &[f32]) -> std::io::Result<()> {
+fn write_wav(path: &Path, samples: &[f32], rate: u32) -> std::io::Result<()> {
     let data: Vec<u8> = samples
         .iter()
         .flat_map(|v| ((v.clamp(-1.0, 1.0) * 32767.0) as i16).to_le_bytes())
         .collect();
     let mut out = Vec::with_capacity(44 + data.len());
-    let rate = RATE as u32;
     out.extend_from_slice(b"RIFF");
     out.extend_from_slice(&(36 + data.len() as u32).to_le_bytes());
     out.extend_from_slice(b"WAVEfmt ");
@@ -231,59 +255,113 @@ fn write_wav(path: &Path, samples: &[f32]) -> std::io::Result<()> {
 
 fn main() {
     match Args::parse().command {
-        Command::Measure { stretch } => {
-            let (reference, aligned) = gather(&stretch);
-            println!(
-                "{:14} {:>10} {:>8} {:>5} {:>7} | coherence, 171 ms: 100-300 300-1k 1-2k 2-4k 4-8k",
-                "mic", "offset s", "ppm", "used", "res ms"
-            );
-            for mic in &aligned {
-                let c = coherence(&reference, &mic.samples);
-                println!(
-                    "{:14} {:>10.4} {:>8.2} {:>5} {:>7.3} |                    {}",
-                    mic.name,
-                    mic.fit.offset / RATE,
-                    mic.fit.ppm,
-                    mic.fit.used,
-                    mic.fit.residual_ms,
-                    c.iter()
-                        .map(|v| format!("{v:.2}"))
-                        .collect::<Vec<_>>()
-                        .join("    ")
-                );
-            }
-        }
-        Command::Combine { stretch, out } => {
-            let (reference, aligned) = gather(&stretch);
-            let spectra: Vec<Vec<Spectrum>> = aligned.iter().map(|m| stft(&m.samples)).collect();
-            let kind = classify(&spectra[0]);
-            let cov = Covariances::estimate(&spectra, &kind);
-            let combined = filter(&spectra, &cov, 0);
-            std::fs::create_dir_all(&out).expect("the output directory");
-            println!(
-                "{} mics; {} speech frames, {} background frames",
-                aligned.len(),
-                cov.speech_frames,
-                cov.noise_frames
-            );
-            for (mic, s) in aligned.iter().zip(&spectra) {
-                println!(
-                    "{:14} speech-to-background {:5.1} dB",
-                    mic.name,
-                    speech_to_background(s, &kind)
-                );
-                write_wav(&out.join(format!("{}.wav", mic.name)), &mic.samples).expect("a wav");
-            }
-            println!(
-                "{:14} speech-to-background {:5.1} dB",
-                "combined",
-                speech_to_background(&combined, &kind)
-            );
-            write_wav(
-                &out.join("combined.wav"),
-                &istft(&combined, reference.len()),
-            )
-            .expect("a wav");
-        }
+        Command::Measure { stretch } => measure(&stretch),
+        Command::Combine { stretch, out } => combine(&stretch, &out),
+        Command::Dereverb {
+            stretch,
+            out,
+            taps,
+            delay,
+        } => dereverb(&stretch, &out, taps, delay),
     }
+}
+
+fn measure(stretch: &Stretch) {
+    let (reference, aligned) = gather(stretch);
+    println!(
+        "{:14} {:>10} {:>8} {:>5} {:>7} | coherence, 171 ms: 100-300 300-1k 1-2k 2-4k 4-8k",
+        "mic", "offset s", "ppm", "used", "res ms"
+    );
+    for mic in &aligned {
+        let c = coherence(&reference, &mic.samples);
+        println!(
+            "{:14} {:>10.4} {:>8.2} {:>5} {:>7.3} |                    {}",
+            mic.name,
+            mic.fit.offset / RATE,
+            mic.fit.ppm,
+            mic.fit.used,
+            mic.fit.residual_ms,
+            c.iter()
+                .map(|v| format!("{v:.2}"))
+                .collect::<Vec<_>>()
+                .join("    ")
+        );
+    }
+}
+
+fn combine(stretch: &Stretch, out: &Path) {
+    let (reference, aligned) = gather(stretch);
+    let spectra: Vec<Vec<Spectrum>> = aligned.iter().map(|m| stft(&m.samples)).collect();
+    let kind = classify(&spectra[0], RATE);
+    let cov = Covariances::estimate(&spectra, &kind);
+    let combined = filter(&spectra, &cov, 0);
+    std::fs::create_dir_all(out).expect("the output directory");
+    println!(
+        "{} mics; {} speech frames, {} background frames",
+        aligned.len(),
+        cov.speech_frames,
+        cov.noise_frames
+    );
+    for (mic, s) in aligned.iter().zip(&spectra) {
+        println!(
+            "{:14} speech-to-background {:5.1} dB",
+            mic.name,
+            speech_to_background(s, RATE, &kind)
+        );
+        write_wav(
+            &out.join(format!("{}.wav", mic.name)),
+            &mic.samples,
+            RATE as u32,
+        )
+        .expect("a wav");
+    }
+    println!(
+        "{:14} speech-to-background {:5.1} dB",
+        "combined",
+        speech_to_background(&combined, RATE, &kind)
+    );
+    write_wav(
+        &out.join("combined.wav"),
+        &istft(&combined, reference.len()),
+        RATE as u32,
+    )
+    .expect("a wav");
+}
+
+fn dereverb(stretch: &Stretch, out: &Path, taps: usize, delay: usize) {
+    let (_, aligned) = gather(stretch);
+    let low: Vec<Vec<f32>> = aligned.iter().map(|m| to_16k(&m.samples)).collect();
+    let spectra: Vec<Vec<Spectrum>> = low.iter().map(|x| stft_with(x, WPE_FRAME)).collect();
+    let wpe = Wpe {
+        taps,
+        delay,
+        iterations: 3,
+    };
+    let kind = classify(&spectra[0], 16_000.0);
+    std::fs::create_dir_all(out).expect("the output directory");
+    let report = |name: &str, s: &[Spectrum], samples: &[f32]| {
+        println!(
+            "{name:22} speech-to-quiet {:5.1} dB",
+            speech_to_background(s, 16_000.0, &kind)
+        );
+        write_wav(&out.join(format!("{name}.wav")), samples, 16_000).expect("a wav");
+    };
+    let len = low[0].len();
+    println!(
+        "{} mics aligned; WPE {taps} taps after {delay} frames",
+        aligned.len()
+    );
+    report(&format!("{}-raw", aligned[0].name), &spectra[0], &low[0]);
+    let alone = dereverberate(&spectra[..1], wpe);
+    report(
+        &format!("{}-wpe-alone", aligned[0].name),
+        &alone[0],
+        &istft_with(&alone[0], len, WPE_FRAME),
+    );
+    let all = dereverberate(&spectra, wpe);
+    report(
+        &format!("{}-wpe-all", aligned[0].name),
+        &all[0],
+        &istft_with(&all[0], len, WPE_FRAME),
+    );
 }

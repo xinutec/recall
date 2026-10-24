@@ -11,6 +11,7 @@ nix develop -c cargo run --release -p array -- measure --root /Volumes/Backup/re
   --from 2026-10-22T08:21:45Z --to 2026-10-22T08:25:40Z \
   --reference usb --sources oneplus6t-0,oneplus6t-1,pixel5,iphone11
 nix develop -c cargo run --release -p array -- combine … --out DIR   # WAVs + levels
+nix develop -c cargo run --release -p array -- dereverb … --out DIR  # WPE at 16 kHz
 ```
 
 `measure`: each mic's clock against the reference (`clock::locate`: a loud 20 s
@@ -111,3 +112,34 @@ that uses it is multichannel linear prediction (weighted prediction error,
 WPE): it predicts each mic's late reverberation from all the mics' past
 samples and subtracts it. That is the next thing to try, scored by a
 reverberation measure, by ear, and by word error rate on hand-checked minutes.
+
+## Dereverberation (WPE), 2026-10-24
+
+`array dereverb`: the aligned mics at 16 kHz (`decimate`), 32 ms frames every
+8 ms, and multichannel linear prediction (`wpe`): each mic's echo from 24 ms on
+is predicted from every mic's past frames and subtracted. On a synthetic room
+with a 300 ms tail (`tests/dereverb.rs`) one mic cuts the late echo by 0.7 dB
+and four mics by 19.9 dB: what one point cannot tell from the speech, several
+can.
+
+## Speech of known text, 2026-10-24 10:37–10:43: nothing left to win
+
+LibriSpeech readers through the left speaker, then the right (2½ min each, the
+volume as set), transcribed with recall's own path (`recall.asr.mlx_transcribe`,
+whisper-large-v3-turbo) and scored against the corpus text:
+
+| | left (358 words) | right (355 words) |
+|---|---|---|
+| usb | 1.7% | 2.8% |
+| iphone11 | 1.7% | 1.1% |
+| oneplus6t-0 / -1 | 2.2% / 1.7% | 1.4% / 2.0% |
+| pixel5 | 23.5% | 31.0% |
+| Wiener, usb reference | 2.0% | 1.1% |
+| WPE, usb alone | 1.7% | 1.7% |
+| WPE, all five | 1.7% | 2.5% |
+
+Every mic but pixel5 already transcribes this at 1–3%: 4 to 10 errors, the
+differences a handful of words. Speech this clear and this loud is not limited
+by the room, so neither combiner can show a gain on it. The test that can is
+harder material: the same corpus played much quieter (a distant or soft
+talker), or hand-checked conversation (#1470).
