@@ -61,7 +61,15 @@ pub fn transcription(
     ingest: &Connection,
     clip: &Clip,
 ) -> Result<Option<Outcome<asr::Reply>>, ResultError> {
-    current(ingest, clip, Kind::TranscribeSegment)
+    current(ingest, &clip.filename, Kind::TranscribeSegment)
+}
+
+/// [`transcription`] by the clip's stored filename, for a leased job.
+pub fn transcription_of(
+    ingest: &Connection,
+    filename: &str,
+) -> Result<Option<Outcome<asr::Reply>>, ResultError> {
+    current(ingest, filename, Kind::TranscribeSegment)
 }
 
 /// Who spoke when in the clip; `None` before it has been diarized.
@@ -69,16 +77,25 @@ pub fn diarization(
     ingest: &Connection,
     clip: &Clip,
 ) -> Result<Option<Outcome<voices::Diarization>>, ResultError> {
-    current(ingest, clip, Kind::DiarizeSegment)
+    current(ingest, &clip.filename, Kind::DiarizeSegment)
+}
+
+/// Each transcribed segment's own print, by its index in the rendered
+/// segments; `None` before the clip has been embedded.
+pub fn segment_prints(
+    ingest: &Connection,
+    clip: &Clip,
+) -> Result<Option<Outcome<voices::Prints>>, ResultError> {
+    current(ingest, &clip.filename, Kind::EmbedLines)
 }
 
 fn current<T: DeserializeOwned>(
     ingest: &Connection,
-    clip: &Clip,
+    filename: &str,
     kind: Kind,
 ) -> Result<Option<Outcome<T>>, ResultError> {
     let Some((body, done)) = CURRENT
-        .query_row(ingest, (&clip.filename, kind), |r| {
+        .query_row(ingest, (filename, kind), |r| {
             Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?))
         })
         .optional()?

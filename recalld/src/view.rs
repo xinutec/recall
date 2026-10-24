@@ -48,7 +48,7 @@ crate::statements! {
          ORDER BY a.start_utc DESC";
     RESULT_VERSIONS: Ingest =
         "SELECT filename, kind, done_utc FROM jobs
-         WHERE kind IN (?1, ?2) AND done_utc IS NOT NULL AND result IS NOT NULL";
+         WHERE kind IN (?1, ?2, ?3) AND done_utc IS NOT NULL AND result IS NOT NULL";
     SPEECH_VERSIONS: Ingest = "SELECT filename, computed_utc FROM segment_speech";
     CLIP_EDITS: Meaning =
         "SELECT clip_id, max(id) FROM edits WHERE clip_id IS NOT NULL GROUP BY clip_id";
@@ -273,6 +273,7 @@ fn shown(meaning: &Connection, ingest: &Connection, root: &Path) -> Result<Vec<S
 struct Versions {
     transcribed: HashMap<String, String>,
     diarized: HashMap<String, String>,
+    embedded: HashMap<String, String>,
     speech: HashMap<String, String>,
     clip_edits: HashMap<i64, i64>,
     source_edits: HashMap<String, i64>,
@@ -289,18 +290,27 @@ impl Versions {
     ) -> rusqlite::Result<Self> {
         let mut transcribed = HashMap::new();
         let mut diarized = HashMap::new();
+        let mut embedded = HashMap::new();
         let mut stmt = RESULT_VERSIONS.prepare(ingest)?;
-        let rows = stmt.query_map((Kind::TranscribeSegment, Kind::DiarizeSegment), |r| {
-            Ok((
-                r.get::<_, String>(0)?,
-                r.get::<_, Kind>(1)?,
-                r.get::<_, String>(2)?,
-            ))
-        })?;
+        let rows = stmt.query_map(
+            (
+                Kind::TranscribeSegment,
+                Kind::DiarizeSegment,
+                Kind::EmbedLines,
+            ),
+            |r| {
+                Ok((
+                    r.get::<_, String>(0)?,
+                    r.get::<_, Kind>(1)?,
+                    r.get::<_, String>(2)?,
+                ))
+            },
+        )?;
         for row in rows {
             let (clip, kind, done) = row?;
             match kind {
                 Kind::TranscribeSegment => transcribed.insert(clip, done),
+                Kind::EmbedLines => embedded.insert(clip, done),
                 _ => diarized.insert(clip, done),
             };
         }
@@ -333,6 +343,7 @@ impl Versions {
         Ok(Self {
             transcribed,
             diarized,
+            embedded,
             speech,
             clip_edits,
             source_edits,
@@ -344,11 +355,14 @@ impl Versions {
     fn of(&self, clip: &Clip) -> String {
         let id = clip.id.stored();
         format!(
-            "transcribed={} diarized={} speech={} edit={} session-edit={} prints={:x}",
+            "transcribed={} diarized={} embedded={} speech={} edit={} session-edit={} prints={:x}",
             self.transcribed
                 .get(&clip.filename)
                 .map_or("-", String::as_str),
             self.diarized
+                .get(&clip.filename)
+                .map_or("-", String::as_str),
+            self.embedded
                 .get(&clip.filename)
                 .map_or("-", String::as_str),
             self.speech.get(&clip.filename).map_or("-", String::as_str),

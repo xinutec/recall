@@ -679,6 +679,12 @@ fn catching_up_follow_ons_takes_no_write_lock_while_it_reads() {
     conn.execute(
         "INSERT INTO jobs (kind, filename, state, created_utc, done_utc, result)
          VALUES (?1, ?2, 'done', '2026-09-11T11:00:00Z', '2026-09-11T11:00:00Z', ?3)",
+        (Kind::EmbedLines, &name, TRANSCRIBED),
+    )
+    .expect("and its segments' prints");
+    conn.execute(
+        "INSERT INTO jobs (kind, filename, state, created_utc, done_utc, result)
+         VALUES (?1, ?2, 'done', '2026-09-11T11:00:00Z', '2026-09-11T11:00:00Z', ?3)",
         (Kind::TranscribeSegment, &name, TRANSCRIBED),
     )
     .expect("finished job");
@@ -713,15 +719,23 @@ fn a_transcription_finished_without_its_diarization_is_caught_up() {
         .expect("finished job");
     }
 
+    // Both follow-ons for the one that succeeded: its diarization and its
+    // segments' prints.
     assert_eq!(
         recalld::queue::derive_follow_ons(&conn, now).expect("derive"),
-        1
+        2
     );
     assert_eq!(
         recalld::queue::derive_follow_ons(&conn, now).expect("again"),
         0
     );
-    assert!(kinds_queued(dir.path()).contains(&(Kind::DiarizeSegment.as_str().to_owned(), ok)));
+    let queued = kinds_queued(dir.path());
+    for kind in [Kind::DiarizeSegment, Kind::EmbedLines] {
+        assert!(
+            queued.contains(&(kind.as_str().to_owned(), ok.clone())),
+            "{kind}"
+        );
+    }
 }
 
 /// The SQLite VM steps one lease takes with `finished` transcriptions stored,
@@ -801,4 +815,72 @@ fn a_renewed_lease_holds_past_its_first_ten_minutes_and_a_finished_job_is_not_re
 
     assert!(done(dir.path(), job.id, TRANSCRIBED, later).expect("done"));
     assert!(!recalld::queue::renew(dir.path(), job.id, later).expect("renew"));
+}
+
+// ---- each segment's own print ----
+
+const EMBED: &[Kind] = &[Kind::EmbedLines];
+
+/// Four segments: long, too short to embed, untimed (rendering drops it, so
+/// it takes no index), long again.
+const FOUR_SEGMENTS: &str = r#"{"ok":true,"result":{"language":"nl","segments":[
+    {"start":0.0,"end":2.0,"text":" one"},
+    {"start":2.0,"end":2.3,"text":" two"},
+    {"text":" untimed"},
+    {"start":3.0,"end":6.0,"text":" four"}]}}"#;
+
+#[test]
+fn a_transcription_queues_each_segments_print_with_the_spans_render_uses() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let now: DateTime<Utc> = "2026-09-11T12:00:00Z".parse().expect("t");
+    let name = queued(dir.path(), "20260911T100000");
+    let job = lease(dir.path(), now, ASR).expect("lease").expect("job");
+    assert!(
+        lease(dir.path(), now, EMBED).expect("lease").is_none(),
+        "none before the words"
+    );
+    assert!(done(dir.path(), job.id, FOUR_SEGMENTS, now).expect("done"));
+
+    let mut embed = lease(dir.path(), now, EMBED).expect("lease").expect("job");
+    assert_eq!(
+        (embed.kind, embed.filename.as_str()),
+        (Kind::EmbedLines, name.as_str())
+    );
+    recalld::rendering::attach_segment_spans(dir.path(), &mut embed).expect("spans");
+    let spans: Vec<(i64, f64, f64)> = embed
+        .spans
+        .iter()
+        .map(|s| (s.segment_id, s.start_s, s.end_s))
+        .collect();
+    // The short one is left out; the untimed one takes no index, so "four" is 2.
+    assert_eq!(spans, [(0, 0.0, 2.0), (2, 3.0, 6.0)]);
+}
+
+#[test]
+fn the_catch_up_queues_a_print_job_for_every_transcription_without_one() {
+    // A transcription finished before the kind existed: the archive's case.
+    let dir = tempfile::tempdir().expect("tempdir");
+    let now: DateTime<Utc> = "2026-09-11T12:00:00Z".parse().expect("t");
+    let name = queued(dir.path(), "20260911T100000");
+    store::open(dir.path())
+        .expect("db")
+        .execute(
+            "UPDATE jobs SET state = 'done', done_utc = '2026-09-05T00:00:00Z', result = ?1",
+            [TRANSCRIBED],
+        )
+        .expect("done by hand");
+    let conn = store::open(dir.path()).expect("db");
+    assert_eq!(queue::derive_follow_ons(&conn, now).expect("derive"), 2);
+    let queued_kinds: Vec<(String, String)> = kinds_queued(dir.path());
+    for kind in [Kind::DiarizeSegment, Kind::EmbedLines] {
+        assert!(
+            queued_kinds.contains(&(kind.as_str().to_owned(), name.clone())),
+            "{kind}"
+        );
+    }
+    assert_eq!(
+        queue::derive_follow_ons(&conn, now).expect("again"),
+        0,
+        "idempotent"
+    );
 }

@@ -20,6 +20,9 @@ pub struct Guess {
     pub person: String,
     /// The softmax confidence, rounded to the six places stored.
     pub score: f64,
+    /// The best person's cosine minus the runner-up's (−1 when nobody else is
+    /// enrolled): how clearly this voice is that person and not the next.
+    pub margin: f64,
 }
 
 fn normalise(v: &[f64]) -> Vec<f64> {
@@ -74,8 +77,15 @@ pub fn match_one(embedding: &[f64], voiceprints: &[Voiceprint]) -> Option<Guess>
     let exps: Vec<f64> = logits.iter().map(|l| (l - peak).exp()).collect();
     let total: f64 = exps.iter().sum();
     let confidence = if total > 0.0 { exps[top] / total } else { 0.0 };
+    let runner_up = best
+        .iter()
+        .enumerate()
+        .filter(|(i, _)| *i != top)
+        .map(|(_, s)| *s)
+        .fold(-1.0, f64::max);
     Some(Guess {
         person: people[top].to_owned(),
         score: (confidence * 1e6).round() / 1e6,
+        margin: best[top] - runner_up,
     })
 }

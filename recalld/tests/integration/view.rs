@@ -563,3 +563,68 @@ fn a_word_timing_is_stored_as_a_three_element_array() {
     let read: Vec<recalld::line::WordTiming> = serde_json::from_str(&stored).expect("reads");
     assert_eq!(read, [word]);
 }
+
+/// Who the visible lines are guessed to be, in order.
+fn guesses(f: &Fleet) -> Vec<Option<String>> {
+    f.meaning
+        .prepare("SELECT speaker_guess FROM rendered_lines WHERE hidden_reason IS NULL ORDER BY start_utc")
+        .expect("prepare")
+        .query_map([], |r| r.get(0))
+        .expect("query")
+        .collect::<rusqlite::Result<_>>()
+        .expect("rows")
+}
+
+/// One diarized voice over both sentences, which its print calls Alex; then
+/// the segments' own prints land, and the second is clearly Sam.
+#[test]
+fn a_segments_own_print_lands_and_names_its_line() {
+    let f = fleet();
+    f.ingest
+        .execute(
+            "INSERT INTO jobs (kind, filename, state, created_utc, done_utc, result)
+             VALUES (?1, ?2, 'done', '2026-10-04T12:03:00Z', '2026-10-04T12:03:00Z', ?3)",
+            (
+                Kind::DiarizeSegment,
+                FILE,
+                r#"{"ok":true,"result":{"turns":[{"speaker":"SPEAKER_00","start":0.0,"end":15.0}],
+                    "speakers":[{"speaker":"SPEAKER_00","vector":[1.0,0.0,0.0]}]}}"#,
+            ),
+        )
+        .expect("diarization");
+    f.meaning
+        .execute_batch(
+            "INSERT INTO speakers (id, name) VALUES (1, 'Alex'), (2, 'Sam');
+             INSERT INTO speaker_embeddings (speaker_id, vector, created_utc) VALUES
+                 (1, '[1.0,0.0,0.0]', '2026-10-01T00:00:00+00:00'),
+                 (2, '[0.0,1.0,0.0]', '2026-10-01T00:00:00+00:00');",
+        )
+        .expect("enrolled");
+    f.refresh(false);
+    assert_eq!(
+        guesses(&f),
+        [Some("Alex".to_owned()), Some("Alex".to_owned())]
+    );
+
+    f.ingest
+        .execute(
+            "INSERT INTO jobs (kind, filename, state, created_utc, done_utc, result)
+             VALUES (?1, ?2, 'done', '2026-10-04T12:04:00Z', '2026-10-04T12:04:00Z', ?3)",
+            (
+                Kind::EmbedLines,
+                FILE,
+                r#"{"ok":true,"result":{"prints":[{"segment_id":0,"vector":[0.98,0.1,0.0]},
+                                                  {"segment_id":1,"vector":[0.05,0.99,0.0]}]}}"#,
+            ),
+        )
+        .expect("segment prints");
+    let after = f.refresh(false);
+    assert_eq!(
+        after.rendered, 1,
+        "the prints landing moves the clip's inputs"
+    );
+    assert_eq!(
+        guesses(&f),
+        [Some("Alex".to_owned()), Some("Sam".to_owned())]
+    );
+}

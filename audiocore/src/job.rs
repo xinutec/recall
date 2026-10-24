@@ -16,13 +16,17 @@ pub enum Kind {
     DiarizeSegment,
     /// A person's naming of a stretch made into a reference voiceprint.
     EnrollSpeaker,
+    /// Each transcribed segment of a clip embedded on its own, so a segment
+    /// can be named by its own voice where the diarizer merged two people.
+    EmbedLines,
 }
 
 impl Kind {
-    pub const ALL: [Self; 3] = [
+    pub const ALL: [Self; 4] = [
         Self::TranscribeSegment,
         Self::DiarizeSegment,
         Self::EnrollSpeaker,
+        Self::EmbedLines,
     ];
 
     /// The stored and wire spelling.
@@ -31,6 +35,7 @@ impl Kind {
             Self::TranscribeSegment => "transcribe-segment",
             Self::DiarizeSegment => "diarize-segment",
             Self::EnrollSpeaker => "enroll-speaker",
+            Self::EmbedLines => "embed-lines",
         }
     }
 }

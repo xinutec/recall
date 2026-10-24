@@ -191,9 +191,12 @@ recorders, the Mac and the browser. It owns:
   a runner that dies lets it lapse; a job nobody finishes is retired after
   three leases. A lease reads only the open jobs, in one short write: it holds
   the lock every upload and finish waits on. A finished transcription queues
-  its diarization as it lands. Kinds:
-  `transcribe-segment` and `diarize-segment` for every microphone clip and
-  uploaded meeting, `enroll-speaker` for stretches a person has named.
+  its follow-ons as it lands, and the catch-up queues any it missed (all
+  of them, for a kind that is new). Kinds:
+  `transcribe-segment`, then `diarize-segment` and `embed-lines` (each
+  transcribed segment of 0.5 s or more embedded on its own, the spans filled at
+  lease) for every microphone clip and uploaded meeting, `enroll-speaker` for
+  stretches a person has named.
   Enrolment outranks capture time in the lease, or a label would wait
   behind days of backlog.
 - **The passes.** `view` renders every clip whose inputs moved (its results,
@@ -249,11 +252,20 @@ to the nearest one, so uncovered speech still reaches a voice. A person's naming
 wins over its span, and naming a voice names it for the session. Every guess is
 shown with its strength; no bar is applied yet (#1894).
 
+The diarizer can put two people in one voice, and then no print of that voice
+names both. So each transcribed segment is also embedded on its own
+(`embed-lines`), and a segment whose own print is clearly one person, by a
+cosine margin over the runner-up of `render::SEGMENT_MARGIN` (0.08), is named
+by it over its voice's guess; a person's naming still wins over both.
+
 Scored on what people named, leaving each clip's own prints out
-(`examples/naming_census.rs`), household microphones are named right about nine
-times in ten. In meetings the misses are mostly short replies spoken over the
-other person, which pyannote's exclusive turns give to one voice; that is
-accepted (#1711).
+(`examples/naming_census.rs`; `examples/naming_export.rs` for other rules),
+the voice's guess alone named household microphones right 90.4% of the time
+and uploads 87.8%; with each named span's own print under that margin, 93.5%
+and 89.6%, both halves of the clips up (2026-10-24). Of the misses, merged
+voices were most of the uploads' (88 of 94) and a third of the microphones'
+(14 of 46). A rule on the span's length instead scored higher on microphones
+and lower on uploads, so it was not taken.
 
 ## runner and the model shims
 

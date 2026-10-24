@@ -28,8 +28,19 @@ pub fn facts(ingest: &Connection, clip: &Clip) -> Result<Facts, results::ResultE
         Some(Outcome::Answer { answer, .. }) => Some(heard(&answer)),
         Some(Outcome::Refused { .. }) | None => None,
     };
+    let segment_prints = match results::segment_prints(ingest, clip)? {
+        Some(Outcome::Answer { answer, .. }) => answer
+            .prints
+            .into_iter()
+            .filter_map(|p| Some((usize::try_from(p.segment_id).ok()?, p.vector)))
+            .collect(),
+        Some(Outcome::Refused { .. }) | None => Vec::new(),
+    };
     let voices = match results::diarization(ingest, clip)? {
-        Some(Outcome::Answer { answer, .. }) => Some(voices_of(&answer)),
+        Some(Outcome::Answer { answer, .. }) => Some(Voices {
+            segment_prints,
+            ..voices_of(&answer)
+        }),
         Some(Outcome::Refused { .. }) | None => None,
     };
     Ok(Facts {
@@ -51,8 +62,11 @@ pub fn lines(clip: &Clip, facts: &Facts, edits: &[Edit], enrolled: &[Voiceprint]
     })
 }
 
-/// A stored segment without times cannot be placed, and is left out.
-fn heard(reply: &asr::Reply) -> Heard {
+/// A stored segment without times cannot be placed, and is left out. Its
+/// segments' indices are the ones [`Kind::EmbedLines`] prints are keyed by.
+///
+/// [`Kind::EmbedLines`]: audiocore::job::Kind::EmbedLines
+pub fn heard(reply: &asr::Reply) -> Heard {
     Heard {
         language: reply.language.clone(),
         segments: reply
@@ -96,5 +110,49 @@ fn voices_of(diarization: &voices::Diarization) -> Voices {
             .iter()
             .map(|s| (s.speaker.clone(), s.vector.clone()))
             .collect(),
+        segment_prints: Vec::new(),
     }
+}
+
+/// A segment shorter than this cannot be embedded: the model's kernel is
+/// longer than its frames.
+const SHORTEST_EMBEDDABLE_S: f64 = 0.5;
+
+/// Fill an [`Kind::EmbedLines`] job's spans at lease time: the clip's
+/// transcribed segments long enough to embed, each by its index in [`heard`],
+/// the index [`facts`] keys the prints by. Other kinds are left as they are.
+///
+/// [`Kind::EmbedLines`]: audiocore::job::Kind::EmbedLines
+///
+/// # Errors
+/// If the ingest plane refuses.
+pub fn attach_segment_spans(
+    root: &std::path::Path,
+    job: &mut audiocore::work::Job,
+) -> rusqlite::Result<()> {
+    if job.kind != audiocore::job::Kind::EmbedLines {
+        return Ok(());
+    }
+    let reply = match results::transcription_of(&crate::store::open(root)?, &job.filename) {
+        Ok(Some(Outcome::Answer { answer, .. })) => answer,
+        Ok(_) => return Ok(()),
+        Err(results::ResultError::Db(err)) => return Err(err),
+        // Unreadable: no spans, and the job stores an empty result.
+        Err(err) => {
+            tracing::warn!(filename = %job.filename, %err, "embed-lines: transcription does not read");
+            return Ok(());
+        }
+    };
+    job.spans = heard(&reply)
+        .segments
+        .iter()
+        .enumerate()
+        .filter(|(_, s)| s.end - s.start >= SHORTEST_EMBEDDABLE_S)
+        .map(|(i, s)| audiocore::work::Span {
+            segment_id: i64::try_from(i).unwrap_or(i64::MAX),
+            start_s: s.start,
+            end_s: s.end,
+        })
+        .collect();
+    Ok(())
 }

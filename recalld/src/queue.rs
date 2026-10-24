@@ -95,24 +95,25 @@ const LEASE_TTL_S: i64 = 10 * 60;
 /// kills the shim would hold the GPU for ever.
 pub const MAX_ATTEMPTS: i64 = 3;
 
-/// Derive the diarize job for every clip whose transcription succeeded and has
-/// none: without words to align, diarization attributes nothing. [`done`]
-/// derives each as its transcription lands; this catches up on any it missed.
-/// Idempotent. Not on the lease path: it reads results.
+/// What a successful transcription is followed by: diarization (without words
+/// to align it attributes nothing) and each segment's own print.
+const FOLLOW_ONS: [Kind; 2] = [Kind::DiarizeSegment, Kind::EmbedLines];
+
+/// Derive the follow-on jobs for every clip whose transcription succeeded and
+/// has none. [`done`] derives each as its transcription lands; this catches up
+/// on any it missed, and on the whole archive when a kind is new. Idempotent.
+/// Not on the lease path: it reads results.
 pub fn derive_follow_ons(conn: &Connection, now: DateTime<Utc>) -> rusqlite::Result<usize> {
-    let missing: Vec<String> = {
-        let mut stmt = FOLLOW_ONS_MISSING.prepare(conn)?;
-        let rows = stmt.query_map((Kind::DiarizeSegment, Kind::TranscribeSegment), |r| {
-            r.get(0)
-        })?;
-        rows.collect::<Result<_, _>>()?
-    };
     let mut derived = 0;
-    for filename in missing {
-        derived += DERIVE_JOB.execute(
-            conn,
-            (Kind::DiarizeSegment, &filename, IngestStamp::of(now)),
-        )?;
+    for kind in FOLLOW_ONS {
+        let missing: Vec<String> = {
+            let mut stmt = FOLLOW_ONS_MISSING.prepare(conn)?;
+            let rows = stmt.query_map((kind, Kind::TranscribeSegment), |r| r.get(0))?;
+            rows.collect::<Result<_, _>>()?
+        };
+        for filename in missing {
+            derived += DERIVE_JOB.execute(conn, (kind, &filename, IngestStamp::of(now)))?;
+        }
     }
     Ok(derived)
 }
@@ -262,21 +263,18 @@ fn retire_exhausted(conn: &Connection, now: DateTime<Utc>) -> rusqlite::Result<u
 }
 
 /// Retire a job with its result, opaque JSON the passes interpret.
-/// A finished transcription queues its diarization in the same write.
+/// A finished transcription queues its follow-ons in the same write.
 pub fn done(root: &Path, id: i64, result: &str, now: DateTime<Utc>) -> rusqlite::Result<bool> {
     let mut conn = store::open(root)?;
     let tx = crate::sql::write(&mut conn)?;
     let updated = FINISH.execute(&tx, (IngestStamp::of(now), result, id))?;
     if updated == 1 {
-        FOLLOW_ON_OF.execute(
-            &tx,
-            (
-                Kind::DiarizeSegment,
-                IngestStamp::of(now),
-                id,
-                Kind::TranscribeSegment,
-            ),
-        )?;
+        for kind in FOLLOW_ONS {
+            FOLLOW_ON_OF.execute(
+                &tx,
+                (kind, IngestStamp::of(now), id, Kind::TranscribeSegment),
+            )?;
+        }
     }
     tx.commit()?;
     Ok(updated == 1)

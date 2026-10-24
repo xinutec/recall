@@ -22,8 +22,8 @@ pub struct Job {
     /// Carried, not parsed from the filename: `meeting-20260907-0905` is a
     /// source id, so no split on a hyphen is safe.
     pub source: String,
-    /// For [`Kind::EnrollSpeaker`] only: the stretches to embed, filled at
-    /// lease time.
+    /// For [`Kind::EnrollSpeaker`] and [`Kind::EmbedLines`]: the stretches to
+    /// embed, filled at lease time.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub spans: Vec<Span>,
     /// For [`Kind::TranscribeSegment`] only: the language its session is pinned

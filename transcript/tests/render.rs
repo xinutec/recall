@@ -124,6 +124,7 @@ fn a_line_breaks_where_the_speaker_changes_between_sentences_and_where_the_segme
             },
         ],
         prints: vec![],
+        ..Default::default()
     };
     // B speaks across the segment boundary at 4 s: still two lines, never one.
     assert_eq!(
@@ -155,6 +156,7 @@ fn a_speaker_change_inside_a_sentence_does_not_break_it() {
             },
         ],
         prints: vec![],
+        ..Default::default()
     };
     let got = lines(&h, Some(&v), &Speech::default(), &[]);
     let shown: Vec<(&str, String)> = got
@@ -190,6 +192,7 @@ fn a_person_naming_part_of_a_sentence_breaks_it_there() {
             end: 6.0,
         }],
         prints: vec![],
+        ..Default::default()
     };
     let named = |id: i64, a: f64, b: f64, who: &str| {
         edit(
@@ -252,6 +255,7 @@ fn a_run_shorter_than_half_a_second_goes_to_its_neighbour() {
             },
         ],
         prints: vec![],
+        ..Default::default()
     };
     assert_eq!(
         texts(&h, Some(&v), &Speech::default(), &[]),
@@ -420,6 +424,7 @@ fn the_speaker_is_a_persons_naming_then_the_voice_then_the_print_then_the_label(
             end: 2.0,
         }],
         prints: vec![("SPEAKER_00".into(), vec![1.0, 0.0])],
+        ..Default::default()
     };
     let s = Speech::default();
     let clip = clip();
@@ -509,6 +514,7 @@ fn render_is_deterministic_and_no_model_word_vanishes_without_a_reason() {
             },
         ],
         prints: vec![],
+        ..Default::default()
     };
     let speech = Speech {
         seconds: Some(8.0),
@@ -620,6 +626,7 @@ fn a_persons_words_take_the_voice_heard_there_unless_they_named_it() {
             end: 2.0,
         }],
         prints: Vec::new(),
+        ..Default::default()
     };
     let words = edit(
         1,
@@ -661,6 +668,7 @@ fn a_line_keeps_the_voice_diarized_under_it_whoever_it_is_attributed_to() {
             },
         ],
         prints: vec![],
+        ..Default::default()
     };
     let named = edit(
         1,
@@ -788,4 +796,91 @@ fn a_model_line_carries_its_words_and_their_times() {
     let joined: String = line.words().iter().map(|(_, w)| w.as_str()).collect();
     assert_eq!(joined.trim(), line.text());
     assert_eq!(line.words()[1].0, span(1.0, 2.0));
+}
+
+/// One diarized voice over two people: the clip's print names it Alex, but
+/// each segment's own print says who spoke it. Two enrolled people, one voice.
+fn merged(second: Vec<f64>) -> (Heard, Voices, [Voiceprint; 2]) {
+    let h = heard(vec![
+        segment(0.0, 4.0, "hello there how are you."),
+        segment(4.0, 8.0, "fine thanks and you."),
+    ]);
+    let v = Voices {
+        turns: vec![VoiceTurn {
+            speaker: "SPEAKER_00".into(),
+            start: 0.0,
+            end: 8.0,
+        }],
+        prints: vec![("SPEAKER_00".into(), vec![1.0, 0.0, 0.0])],
+        segment_prints: vec![(0, vec![0.98, 0.1, 0.0]), (1, second)],
+    };
+    let enrolled = [
+        Voiceprint {
+            person: "Alex".into(),
+            vector: vec![1.0, 0.0, 0.0],
+        },
+        Voiceprint {
+            person: "Sam".into(),
+            vector: vec![0.0, 1.0, 0.0],
+        },
+    ];
+    (h, v, enrolled)
+}
+
+fn guessed(h: &Heard, v: &Voices, enrolled: &[Voiceprint], edits: &[Edit]) -> Vec<Option<String>> {
+    let clip = clip();
+    render(&Input {
+        clip: &clip,
+        heard: Some(h),
+        voices: Some(v),
+        speech: &Speech::default(),
+        edits,
+        enrolled,
+    })
+    .lines
+    .iter()
+    .map(|l| match l.speaker() {
+        Some(Speaker::Guess { name, .. }) => Some(name.clone()),
+        Some(Speaker::Voice { name, .. } | Speaker::Named { name, .. }) => {
+            Some(name.as_str().to_owned())
+        }
+        _ => None,
+    })
+    .collect()
+}
+
+#[test]
+fn a_segments_own_print_names_it_when_it_is_sure() {
+    let (h, v, enrolled) = merged(vec![0.05, 0.99, 0.0]);
+    assert_eq!(
+        guessed(&h, &v, &enrolled, &[]),
+        [Some("Alex".to_owned()), Some("Sam".to_owned())]
+    );
+}
+
+#[test]
+fn an_unsure_segment_print_leaves_the_voices_guess() {
+    // Nearly as close to Alex as to Sam: the margin is under the bar.
+    let (h, v, enrolled) = merged(vec![0.70, 0.71, 0.0]);
+    assert_eq!(
+        guessed(&h, &v, &enrolled, &[]),
+        [Some("Alex".to_owned()), Some("Alex".to_owned())]
+    );
+}
+
+#[test]
+fn a_persons_naming_of_the_voice_still_wins_over_a_segment_print() {
+    let (h, v, enrolled) = merged(vec![0.05, 0.99, 0.0]);
+    let voice = edit(
+        1,
+        Act::Voice {
+            source: SourceId::parse("usb").unwrap(),
+            cluster: "SPEAKER_00".into(),
+            name: Name::new("Robin").unwrap(),
+        },
+    );
+    assert_eq!(
+        guessed(&h, &v, &enrolled, std::slice::from_ref(&voice)),
+        [Some("Robin".to_owned()), Some("Robin".to_owned())]
+    );
 }

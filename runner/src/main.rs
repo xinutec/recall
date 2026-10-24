@@ -32,7 +32,7 @@ fn kinds_for(shim_name: &str) -> Option<&'static [Kind]> {
         "asr" => Some(&[Kind::TranscribeSegment]),
         // `enroll-speaker` shares the process because both are pyannote; a
         // separate runner would load the weights twice.
-        "voices" => Some(&[Kind::DiarizeSegment, Kind::EnrollSpeaker]),
+        "voices" => Some(&[Kind::DiarizeSegment, Kind::EnrollSpeaker, Kind::EmbedLines]),
         _ => None,
     }
 }
@@ -213,8 +213,8 @@ fn one(queue: &Queue, shim: &mut Shim) -> Result<bool, Failed> {
             .transcribe(&clip, language.as_deref(), prompt.as_deref())
             .map(|a| (a.raw, a.reply.segments.len())),
         Kind::DiarizeSegment => shim.diarize(&clip).map(|a| (a.raw, a.reply.turns.len())),
-        // One model call per named turn.
-        Kind::EnrollSpeaker => embed_spans(shim, &clip, &spans),
+        // One model call per named turn, or per transcribed segment.
+        Kind::EnrollSpeaker | Kind::EmbedLines => embed_spans(shim, &clip, &spans),
     });
     // The scratch copy is removed whatever the outcome.
     let _ = std::fs::remove_file(&clip);

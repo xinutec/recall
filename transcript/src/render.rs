@@ -14,7 +14,9 @@
 //!    line breaks where the segment ends or the speaker changes between
 //!    sentences, never inside one, except where a person named part of it.
 //! 5. A line's speaker is, in order: a person's naming of that stretch, a
-//!    person's naming of that voice, the voiceprint guess, the diarized label.
+//!    person's naming of that voice, its model segment's own print when that
+//!    is clear ([`SEGMENT_MARGIN`]), the voice's print guess, the diarized
+//!    label.
 //!    A person's words take the voice diarized at their midpoint, like a word.
 //! 6. A model line is doubted, its confidence zero, when it is mostly in a
 //!    foreign script, implausibly slow, or in a language not the household's.
@@ -27,6 +29,13 @@ use crate::{Act, Clip, Edit, EditId, Instant, Name, Span};
 /// Diarized runs shorter than this, in microseconds, are alignment jitter or a
 /// backchannel, and go to a neighbour.
 pub const MIN_TURN_US: i64 = 500_000;
+
+/// A model segment's own print names it over its voice's when it is at least
+/// this much closer (cosine) to one person than to the next. The diarizer can
+/// put two people in one voice; a segment's print then says who spoke it.
+/// Fixed by measurement before it was used here: on what people named,
+/// 93.5% against 90.4% on microphones, 89.6% against 87.8% on uploads.
+pub const SEGMENT_MARGIN: f64 = 0.08;
 
 /// What the model heard in the clip; times in seconds from the clip's start.
 #[derive(Debug, Clone, PartialEq)]
@@ -59,6 +68,9 @@ pub struct HeardWord {
 pub struct Voices {
     pub turns: Vec<VoiceTurn>,
     pub prints: Vec<(String, Vec<f64>)>,
+    /// Model segments' own prints, by index in [`Heard::segments`]; none for
+    /// a clip not yet embedded, or a segment too short to embed.
+    pub segment_prints: Vec<(usize, Vec<f64>)>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -225,7 +237,7 @@ pub fn render(input: &Input<'_>) -> Rendered {
                 span: *span,
                 text: text.clone(),
                 by: Author::Person(*id),
-                speaker: speakers.resolve(mid, cluster.as_deref()),
+                speaker: speakers.resolve(mid, cluster.as_deref(), None),
                 cluster,
                 language: input.heard.and_then(|h| h.language.clone()),
                 confidence: None,
@@ -404,6 +416,8 @@ struct Speakers<'a> {
     voices: Vec<(String, Name, EditId)>,
     turns: &'a [VoiceTurn],
     guesses: Vec<(String, String, f64)>,
+    /// Model segments whose own print is clear, by index: name and score.
+    segment_guesses: Vec<(usize, String, f64)>,
 }
 
 impl<'a> Speakers<'a> {
@@ -431,16 +445,36 @@ impl<'a> Speakers<'a> {
                     .collect()
             })
             .unwrap_or_default();
+        let segment_guesses = input
+            .voices
+            .map(|v| {
+                v.segment_prints
+                    .iter()
+                    .filter_map(|(segment, print)| {
+                        match_one(print, input.enrolled)
+                            .filter(|g| g.margin >= SEGMENT_MARGIN)
+                            .map(|g| (*segment, g.person, g.score))
+                    })
+                    .collect()
+            })
+            .unwrap_or_default();
         Self {
             named,
             voices,
             turns: input.voices.map_or(&[], |v| v.turns.as_slice()),
             guesses,
+            segment_guesses,
         }
     }
 
-    /// The speaker at `at`, given the diarized `cluster` there.
-    fn resolve(&self, at: Instant, cluster: Option<&str>) -> Option<Speaker> {
+    /// The speaker at `at`, given the diarized `cluster` there and the model
+    /// `segment` the word came from (none for a person's words).
+    fn resolve(
+        &self,
+        at: Instant,
+        cluster: Option<&str>,
+        segment: Option<usize>,
+    ) -> Option<Speaker> {
         if let Some((_, name, by)) = self
             .named
             .iter()
@@ -452,13 +486,24 @@ impl<'a> Speakers<'a> {
                 by: *by,
             });
         }
-        let cluster = cluster?;
-        if let Some((_, name, by)) = self.voices.iter().rev().find(|(c, _, _)| c == cluster) {
+        if let Some(cluster) = cluster
+            && let Some((_, name, by)) = self.voices.iter().rev().find(|(c, _, _)| c == cluster)
+        {
             return Some(Speaker::Voice {
                 name: name.clone(),
                 by: *by,
             });
         }
+        if let Some(segment) = segment
+            && let Some((_, name, score)) =
+                self.segment_guesses.iter().find(|(s, _, _)| *s == segment)
+        {
+            return Some(Speaker::Guess {
+                name: name.clone(),
+                score: *score,
+            });
+        }
+        let cluster = cluster?;
         if let Some((_, name, score)) = self.guesses.iter().find(|(c, _, _)| c == cluster) {
             return Some(Speaker::Guess {
                 name: name.clone(),
@@ -548,7 +593,7 @@ fn model_lines(words: &[Word], speakers: &Speakers<'_>, heard: Option<&Heard>) -
     let resolved: Vec<Option<Speaker>> = words
         .iter()
         .zip(&clusters)
-        .map(|(w, c)| speakers.resolve(w.mid, c.as_deref()))
+        .map(|(w, c)| speakers.resolve(w.mid, c.as_deref(), Some(w.segment)))
         .collect();
     let speaker = by_sentence(words, &resolved);
     let language = heard.and_then(|h| h.language.clone());
