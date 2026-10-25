@@ -256,7 +256,9 @@ The diarizer can put two people in one voice, and then no print of that voice
 names both. So each transcribed segment is also embedded on its own
 (`embed-lines`), and a segment whose own print is clearly one person, by a
 cosine margin over the runner-up of `render::SEGMENT_MARGIN` (0.08), is named
-by it over its voice's guess; a person's naming still wins over both.
+by it over its voice's guess; a person's naming still wins over both. Only a
+segment the diarizer heard as one voice: a model segment can run across a
+change of speaker, and its print is then the majority speaker's.
 
 Scored on what people named, leaving each clip's own prints out
 (`examples/naming_census.rs`; `examples/naming_export.rs` for other rules),

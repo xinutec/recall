@@ -416,7 +416,9 @@ struct Speakers<'a> {
     voices: Vec<(String, Name, EditId)>,
     turns: &'a [VoiceTurn],
     guesses: Vec<(String, String, f64)>,
-    /// Model segments whose own print is clear, by index: name and score.
+    /// Model segments whose own print is clear and that the diarizer heard as
+    /// one voice, by index: name and score. A segment holding two voices has
+    /// the majority speaker's print, which would rename the other's words.
     segment_guesses: Vec<(usize, String, f64)>,
 }
 
@@ -450,6 +452,12 @@ impl<'a> Speakers<'a> {
             .map(|v| {
                 v.segment_prints
                     .iter()
+                    .filter(|(segment, _)| {
+                        input
+                            .heard
+                            .and_then(|h| h.segments.get(*segment))
+                            .is_some_and(|s| one_voice(s, &v.turns))
+                    })
                     .filter_map(|(segment, print)| {
                         match_one(print, input.enrolled)
                             .filter(|g| g.margin >= SEGMENT_MARGIN)
@@ -569,6 +577,15 @@ fn clusters(words: &[Word], turns: &[VoiceTurn]) -> Vec<Option<String>> {
         }
     }
     out
+}
+
+/// Whether the diarized turns overlapping `segment` are all one voice.
+fn one_voice(segment: &HeardSegment, turns: &[VoiceTurn]) -> bool {
+    let mut voices = turns
+        .iter()
+        .filter(|t| t.end.min(segment.end) > t.start.max(segment.start))
+        .map(|t| t.speaker.as_str());
+    voices.next().is_none_or(|first| voices.all(|v| v == first))
 }
 
 /// The diarized turn containing `at`, else the nearest one by edge distance.

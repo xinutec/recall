@@ -1,8 +1,12 @@
 //! The naming census's rows, for measuring other ways of naming a voice: each
 //! naming's clip, file and span, who was named, and what the per-voice guess
 //! (`match_one` on the diarized voice under most of the span, leaving the
-//! clip's own prints out) said; and every voiceprint with the clip it came
-//! from. Writes `namings.tsv` and `prints.json` to `--out`.
+//! clip's own prints out) said; what the transcribed segment under most of the
+//! span said by its own print (`embed-lines`, the same leave-out), with its
+//! margin, or nothing when the clip or segment has no print, and how many
+//! diarized voices that segment overlaps; and every
+//! voiceprint with the clip it came from. Writes `namings.tsv` and
+//! `prints.json` to `--out`.
 //!
 //! Writes names: keep its output out of tracked files.
 //!
@@ -86,6 +90,46 @@ fn prints(meaning: &Connection) -> Vec<(Voiceprint, Option<i64>)> {
     out
 }
 
+/// What the transcribed segment under most of `from..to` says by its own
+/// print: name and margin (empty without a print), and how many diarized
+/// voices it overlaps.
+fn segment_column(
+    heard: Option<&transcript::render::Heard>,
+    voices: &transcript::render::Voices,
+    others: &[Voiceprint],
+    from: f64,
+    to: f64,
+) -> (String, String, usize) {
+    let Some((i, segment)) = heard.and_then(|heard| {
+        heard
+            .segments
+            .iter()
+            .enumerate()
+            .map(|(i, s)| (i, s, s.end.min(to) - s.start.max(from)))
+            .filter(|(_, _, o)| *o > 0.0)
+            .max_by(|a, b| a.2.total_cmp(&b.2))
+            .map(|(i, s, _)| (i, s))
+    }) else {
+        return (String::new(), String::new(), 0);
+    };
+    let count = voices
+        .turns
+        .iter()
+        .filter(|t| t.end.min(segment.end) > t.start.max(segment.start))
+        .map(|t| t.speaker.as_str())
+        .collect::<std::collections::HashSet<_>>()
+        .len();
+    let (person, margin) = voices
+        .segment_prints
+        .iter()
+        .find(|(s, _)| *s == i)
+        .and_then(|(_, print)| match_one(print, others))
+        .map_or((String::new(), String::new()), |g| {
+            (g.person, format!("{:.4}", g.margin))
+        });
+    (person, margin, count)
+}
+
 fn main() {
     use std::io::Write;
     let cli = Cli::parse();
@@ -117,7 +161,7 @@ fn main() {
     let mut tsv = std::fs::File::create(cli.out.join("namings.tsv")).expect("tsv");
     writeln!(
         tsv,
-        "clip\tsource\tpath\tfrom\tto\tnamed\tguessed\tscore\tupload\tcluster"
+        "clip\tsource\tpath\tfrom\tto\tnamed\tguessed\tscore\tupload\tcluster\tembedded\tsegment_guess\tsegment_margin\tsegment_voices"
     )
     .expect("tsv");
     let mut written = 0;
@@ -152,17 +196,20 @@ fn main() {
         let Some(guess) = match_one(print, &others) else {
             continue;
         };
+        let (segment_person, segment_margin, segment_voices) =
+            segment_column(facts.heard.as_ref(), &voices, &others, from, to);
         let upload = kinds.get(clip.source.as_str()).map(String::as_str) == Some("upload");
         writeln!(
             tsv,
-            "{}\t{}\t{}\t{from:.3}\t{to:.3}\t{}\t{}\t{:.4}\t{}\t{cluster}",
+            "{}\t{}\t{}\t{from:.3}\t{to:.3}\t{}\t{}\t{:.4}\t{}\t{cluster}\t{}\t{segment_person}\t{segment_margin}\t{segment_voices}",
             clip.id.stored(),
             clip.source.as_str(),
             clip.path,
             l.name.as_str(),
             guess.person,
             guess.score,
-            u8::from(upload)
+            u8::from(upload),
+            u8::from(!voices.segment_prints.is_empty())
         )
         .expect("tsv");
         written += 1;

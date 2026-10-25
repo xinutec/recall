@@ -884,3 +884,32 @@ fn a_persons_naming_of_the_voice_still_wins_over_a_segment_print() {
         [Some("Robin".to_owned()), Some("Robin".to_owned())]
     );
 }
+
+#[test]
+fn a_segment_the_diarizer_splits_keeps_each_voices_guess() {
+    // Alex for five seconds, Sam for three, in one model segment: its print is
+    // the majority speaker's, so it must not rename Sam's words.
+    let h = heard(vec![segment(
+        0.0,
+        8.0,
+        "hello there how are you. fine thanks.",
+    )]);
+    let turn = |speaker: &str, start, end| VoiceTurn {
+        speaker: speaker.into(),
+        start,
+        end,
+    };
+    let v = Voices {
+        turns: vec![turn("SPEAKER_00", 0.0, 5.0), turn("SPEAKER_01", 5.0, 8.0)],
+        prints: vec![
+            ("SPEAKER_00".into(), vec![1.0, 0.0, 0.0]),
+            ("SPEAKER_01".into(), vec![0.0, 1.0, 0.0]),
+        ],
+        segment_prints: vec![(0, vec![0.98, 0.1, 0.0])],
+    };
+    let (_, _, enrolled) = merged(vec![]);
+    assert_eq!(
+        guessed(&h, &v, &enrolled, &[]),
+        [Some("Alex".to_owned()), Some("Sam".to_owned())]
+    );
+}
