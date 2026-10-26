@@ -47,13 +47,24 @@ fn a_summer_day_and_a_winter_day_do_not_share_an_offset() {
     }
 }
 
+/// A calendar day apart, each at its own local midnight: not 24 hours, since
+/// the day after a clock change is 23 or 25 hours from the one before.
 #[test]
 fn today_and_yesterday_are_a_day_apart() {
     let (today, _) = bounds("today").expect("today");
     let (yesterday, _) = bounds("yesterday").expect("yesterday");
-    let today = chrono::DateTime::parse_from_rfc3339(&today).expect("rfc3339");
-    let yesterday = chrono::DateTime::parse_from_rfc3339(&yesterday).expect("rfc3339");
-    assert_eq!(today - yesterday, chrono::Duration::days(1));
+    let local = |s: &str| {
+        chrono::DateTime::parse_from_rfc3339(s)
+            .expect("rfc3339")
+            .with_timezone(&chrono::Local)
+    };
+    let (today, yesterday) = (local(&today), local(&yesterday));
+    assert_eq!(
+        today.date_naive() - yesterday.date_naive(),
+        chrono::Duration::days(1)
+    );
+    assert_eq!(today.time(), chrono::NaiveTime::MIN);
+    assert_eq!(yesterday.time(), chrono::NaiveTime::MIN);
 }
 
 /// Refused, not guessed: a typo must not answer about the wrong day.
