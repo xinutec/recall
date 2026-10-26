@@ -33,6 +33,6 @@ recalld = { path = "../recalld" }
 transcript = { path = "../transcript" }
 # The end-to-end test reads back the row recalld wrote: a 200 says stored,
 # not correct.
-rusqlite = { version = "0.40", features = ["bundled"] }
+rusqlite = { version = "0.41", features = ["bundled"] }
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "net"] }
 axum = "0.8"

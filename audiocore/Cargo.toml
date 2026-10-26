@@ -33,7 +33,7 @@ serde_json = "1"
 # The web app's types (`ts`), for recalld's export; the recorders build without.
 ts-rs = { version = "12", features = ["serde-compat"], optional = true }
 # Only so `job::Kind` can be a column type.
-rusqlite = { version = "0.40", features = ["bundled"] }
+rusqlite = { version = "0.41", features = ["bundled"] }
 # The speech detector's ONNX runtime, Debian's system library: ort's prebuilt
 # one needs AVX2, which the fleet's Ivy Bridge servers lack (SIGILL). `api-21`
 # matches Debian trixie's 1.21. Here so the Mac and the fleet run the same

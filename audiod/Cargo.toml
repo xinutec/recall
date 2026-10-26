@@ -32,7 +32,7 @@ audiocore = { path = "../audiocore" }
 serde_json = { version = "1", features = ["preserve_order"] }
 chrono = { version = "0.4", default-features = false, features = ["clock"] }
 # Bundled: no system sqlite at link time.
-rusqlite = { version = "0.40", features = ["bundled"] }
+rusqlite = { version = "0.41", features = ["bundled"] }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 # The uploader (src/upload.rs); recalld is reached over https.

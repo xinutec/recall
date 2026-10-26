@@ -31,7 +31,7 @@ audiocore = { path = "../audiocore", features = ["ts"] }
 axum = { version = "0.8", features = ["multipart"] }
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "net"] }
 # Bundled: no system sqlite at link time, in the Docker build too.
-rusqlite = { version = "0.40", features = ["bundled", "functions"] }
+rusqlite = { version = "0.41", features = ["bundled", "functions"] }
 sha2 = "0.11"
 # The SSO gate's signed cookie.
 hmac = "0.13"
@@ -74,4 +74,4 @@ tokio = { version = "1", features = ["rt-multi-thread", "macros", "net"] }
 tower = { version = "0.5", features = ["util"] }
 http-body-util = "0.1"
 # `hooks`: the queue's cost test counts the statements' work.
-rusqlite = { version = "0.40", features = ["bundled", "functions", "hooks"] }
+rusqlite = { version = "0.41", features = ["bundled", "functions", "hooks"] }

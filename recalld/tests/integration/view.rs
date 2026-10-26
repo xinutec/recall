@@ -376,8 +376,10 @@ fn a_clip_whose_rows_will_not_write_is_reported_and_the_rest_still_render() {
     );
 }
 
-/// Commits on the meaning plane while `f` runs.
-fn commits(f: &Fleet, run: impl FnOnce()) -> usize {
+/// Counts the commits on the meaning plane from here until [`unhook`]. A
+/// hook takes the connection mutably, so it is set and cleared around the
+/// work rather than around a closure that borrows the fleet too.
+fn hook(f: &mut Fleet) -> std::sync::Arc<std::sync::atomic::AtomicUsize> {
     let count = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
     let counted = count.clone();
     f.meaning
@@ -386,7 +388,11 @@ fn commits(f: &Fleet, run: impl FnOnce()) -> usize {
             false
         }))
         .expect("hook");
-    run();
+    count
+}
+
+/// The commits counted since [`hook`].
+fn unhook(f: &mut Fleet, count: &std::sync::atomic::AtomicUsize) -> usize {
     f.meaning.commit_hook(None::<fn() -> bool>).expect("unhook");
     count.load(std::sync::atomic::Ordering::Relaxed)
 }
@@ -395,7 +401,7 @@ fn commits(f: &Fleet, run: impl FnOnce()) -> usize {
 fn a_full_render_with_nothing_changed_writes_nothing() {
     // Every start renders every clip, in case render's rules changed; almost
     // always they did not, and rewriting 100k lines took minutes.
-    let f = fleet();
+    let mut f = fleet();
     f.refresh(false);
     let before = f.lines();
     let fts: i64 = f
@@ -403,8 +409,9 @@ fn a_full_render_with_nothing_changed_writes_nothing() {
         .query_row("SELECT count(*) FROM rendered_fts", [], |r| r.get(0))
         .expect("fts");
 
-    let mut done = Refreshed::default();
-    let wrote = commits(&f, || done = f.refresh(true));
+    let count = hook(&mut f);
+    let done = f.refresh(true);
+    let wrote = unhook(&mut f, &count);
 
     assert_eq!(done.rendered, 1, "rendered, to compare");
     assert_eq!(done.written, 0, "nothing changed, nothing written");
@@ -420,7 +427,7 @@ fn a_full_render_with_nothing_changed_writes_nothing() {
 #[test]
 fn a_refresh_writes_its_clips_in_one_commit_not_one_each() {
     // A commit is an fsync: one per clip was 16 minutes on Isis's disk.
-    let f = fleet();
+    let mut f = fleet();
     for minute in 1..=3 {
         let name = format!("usb-20261004T12{minute:02}00.flac");
         recalld::store::insert(
@@ -463,8 +470,9 @@ fn a_refresh_writes_its_clips_in_one_commit_not_one_each() {
             .expect("result");
     }
 
-    let mut done = Refreshed::default();
-    let wrote = commits(&f, || done = f.refresh(false));
+    let count = hook(&mut f);
+    let done = f.refresh(false);
+    let wrote = unhook(&mut f, &count);
 
     assert_eq!((done.rendered, done.written), (4, 4));
     assert_eq!(wrote, 1);
