@@ -263,11 +263,15 @@ change of speaker, and its print is then the majority speaker's.
 Scored on what people named, leaving each clip's own prints out
 (`examples/naming_census.rs`; `examples/naming_export.rs` for other rules),
 the voice's guess alone named household microphones right 90.4% of the time
-and uploads 87.8%; with each named span's own print under that margin, 93.5%
-and 89.6%, both halves of the clips up (2026-10-24). Of the misses, merged
-voices were most of the uploads' (88 of 94) and a third of the microphones'
-(14 of 46). A rule on the span's length instead scored higher on microphones
-and lower on uploads, so it was not taken.
+and uploads 87.8%. With the segment rule, 91.7% and 87.9% (2026-10-27); without
+the one-voice condition, 90.2% and 78.1%. Of the misses, merged voices were
+most of the uploads' (88 of 94) and a third of the microphones' (14 of 46).
+
+Each named span's own print would have reached 93.5% and 89.6%: a person cuts a
+span to one speaker, while the misses it alone fixes are mostly short replies
+inside a longer model segment (uploads: 13 of 19 in a segment of two voices).
+A rule on the span's length instead scored higher on microphones and lower on
+uploads, so it was not taken.
 
 ## runner and the model shims
 
