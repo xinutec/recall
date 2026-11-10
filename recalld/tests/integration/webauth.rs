@@ -2,7 +2,7 @@
 
 use recalld::webauth::{
     Config, Session, accepts_device_token, authorize_url, make_session_cookie, make_state,
-    read_session_cookie, read_state, requires_session, validate_return_to,
+    read_session_cookie, read_state, renewed_session_cookie, requires_session, validate_return_to,
 };
 use std::collections::{HashMap, HashSet};
 
@@ -66,10 +66,10 @@ fn a_cookie_expires_and_a_state_expires_much_sooner() {
     let cookie = make_session_cookie(SECRET, &session(), NOW).expect("sign");
     let state = make_state(SECRET, Some("/timeline"), NOW).expect("sign");
 
-    let a_week = 7 * 24 * 60 * 60;
-    assert!(read_session_cookie(SECRET, Some(&cookie), NOW + a_week - 1).is_some());
+    let a_month = 30 * 24 * 60 * 60;
+    assert!(read_session_cookie(SECRET, Some(&cookie), NOW + a_month - 1).is_some());
     assert_eq!(
-        read_session_cookie(SECRET, Some(&cookie), NOW + a_week + 1),
+        read_session_cookie(SECRET, Some(&cookie), NOW + a_month + 1),
         None
     );
 
@@ -280,8 +280,10 @@ fn a_cookie_minted_by_the_python_verifies_here() {
         Some("/sessions/42")
     );
 
-    // The other direction: this mints the same bytes.
-    let ours = make_session_cookie(SECRET, &session(), NOW).expect("sign");
+    // The other direction: this mints the same bytes — at the moment that gives
+    // the Python's cookie its expiry (1 788 604 800) under a month's lifetime.
+    let minted_at = 1_788_604_800 - 30 * 24 * 60 * 60;
+    let ours = make_session_cookie(SECRET, &session(), minted_at).expect("sign");
     assert_eq!(
         ours, PY_COOKIE,
         "the token encoding drifted from the Python's"
@@ -725,4 +727,29 @@ fn the_proof_is_made_only_by_a_present_matching_state() {
     assert!(StateMatched::check("", "n0nce").is_none());
     assert!(StateMatched::check("nonce", "n0nce").is_none());
     assert!(StateMatched::check("n0nc", "n0nce").is_none());
+}
+
+#[test]
+fn a_used_session_lasts_a_month_from_its_last_use() {
+    const DAY: i64 = 24 * 60 * 60;
+    let token = make_session_cookie(SECRET, &session(), NOW).expect("sign");
+    // Fresh: nothing to re-mint.
+    assert_eq!(renewed_session_cookie(SECRET, Some(&token), NOW), None);
+    // Used 25 days later: re-minted, and good for a month from then.
+    let later = NOW + 25 * DAY;
+    let fresh = renewed_session_cookie(SECRET, Some(&token), later).expect("renewed");
+    assert_eq!(
+        read_session_cookie(SECRET, Some(&fresh), later + 29 * DAY),
+        Some(session())
+    );
+    // Forged, expired or absent: never re-minted.
+    assert_eq!(
+        renewed_session_cookie("other-secret", Some(&token), later),
+        None
+    );
+    assert_eq!(
+        renewed_session_cookie(SECRET, Some(&token), NOW + 31 * DAY),
+        None
+    );
+    assert_eq!(renewed_session_cookie(SECRET, None, later), None);
 }

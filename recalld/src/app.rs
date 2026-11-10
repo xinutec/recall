@@ -202,11 +202,16 @@ pub fn router(config: Arc<Config>) -> Router {
     let frontend = config.frontend.clone();
     let browsing_plane = config.webauth.clone().map(|st| {
         browsing(
-            st,
+            st.clone(),
             config.root.clone(),
             config.root.join("logs/client.log"),
             config.trusted_proxies.clone(),
         )
+        // A used session goes back re-minted, so it lasts a month from its last use.
+        .layer(axum::middleware::from_fn_with_state(
+            st,
+            webauth::renew_session,
+        ))
     });
     let sync_gate = config.sync_token.clone().map(|expected| {
         Arc::new(sync::Gate {

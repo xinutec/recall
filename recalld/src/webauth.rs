@@ -20,7 +20,14 @@ pub const COOKIE_NAME: &str = "recall_session";
 /// The sign-in this browser started: the `state` it was sent with, so the
 /// callback can prove the URL's `state` came back to the same browser.
 const PENDING_COOKIE: &str = "recall_signin";
-const SESSION_TTL_SECS: i64 = 7 * 24 * 60 * 60;
+/// How long a session lasts UNUSED: a used one is re-minted
+/// ([`renewed_session_cookie`]), so a login in use never ends.
+const SESSION_TTL_SECS: i64 = 30 * 24 * 60 * 60;
+/// A session is re-minted only when its expiry would move by more than this.
+const RENEW_INTERVAL_SECS: i64 = 60 * 60;
+/// The cookie's own lifetime: 400 days, the most a browser keeps. The token's
+/// `exp` decides when a session ends.
+const COOKIE_MAX_AGE_SECS: i64 = 400 * 24 * 60 * 60;
 const STATE_TTL_SECS: i64 = 10 * 60;
 
 /// Paths open to devices that cannot sign in. The outbox report and heartbeat
@@ -205,6 +212,24 @@ pub fn make_session_cookie(secret: &str, session: &Session, now: i64) -> Option<
             name: session.display_name.clone(),
             uid: session.user_id.clone(),
         },
+    )
+}
+
+/// A valid session token re-minted to expire [`SESSION_TTL_SECS`] from `now`, or
+/// `None` when it is absent, forged, expired, or would move by an hour or less.
+#[must_use]
+pub fn renewed_session_cookie(secret: &str, token: Option<&str>, now: i64) -> Option<String> {
+    let claims: SessionClaims = verify(secret, token?, now)?;
+    if now + SESSION_TTL_SECS - claims.exp <= RENEW_INTERVAL_SECS {
+        return None;
+    }
+    make_session_cookie(
+        secret,
+        &Session {
+            user_id: claims.uid,
+            display_name: claims.name,
+        },
+        now,
     )
 }
 
@@ -552,6 +577,24 @@ fn cookie_value(headers: &HeaderMap, name: &str) -> Option<String> {
         })
 }
 
+/// Sends a used session back re-minted ([`renewed_session_cookie`]), so it
+/// lasts a month from its last use. Decides nothing: every request passes.
+pub async fn renew_session(
+    State(st): State<GateState>,
+    request: axum::extract::Request,
+    next: axum::middleware::Next,
+) -> Response {
+    let fresh = cookie_value(request.headers(), COOKIE_NAME)
+        .and_then(|c| renewed_session_cookie(&st.cfg.session_secret, Some(&c), (st.now)()));
+    let mut res = next.run(request).await;
+    if let Some(token) = fresh
+        && let Ok(v) = header::HeaderValue::from_str(&set_cookie(&token))
+    {
+        res.headers_mut().append(header::SET_COOKIE, v);
+    }
+    res
+}
+
 /// The gate on every request; it decides and never serves. The device token is
 /// tried only after the cookie fails.
 pub async fn gate(
@@ -644,7 +687,7 @@ pub struct CallbackQuery {
 const COOKIE_ATTRS: &str = "Path=/; HttpOnly; Secure; SameSite=Lax";
 
 fn set_cookie(token: &str) -> String {
-    format!("{COOKIE_NAME}={token}; Max-Age={SESSION_TTL_SECS}; {COOKIE_ATTRS}")
+    format!("{COOKIE_NAME}={token}; Max-Age={COOKIE_MAX_AGE_SECS}; {COOKIE_ATTRS}")
 }
 
 /// The OAuth flow (`/login`, `/auth/callback`, `/logout`) and `/api/me`.
