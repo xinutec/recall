@@ -37,14 +37,10 @@ fn fixture_version() -> usize {
         .expect("the fixture must record the version it was dumped at")
 }
 
-/// Build a database by applying exactly `rungs` migrations.
+/// Build a database by climbing exactly `rungs` migrations, as the server does.
 fn built_to(rungs: usize) -> rusqlite::Connection {
     let conn = rusqlite::Connection::open_in_memory().expect("db");
-    for (index, statement) in MIGRATIONS.iter().enumerate().take(rungs) {
-        conn.execute_batch(statement).expect("rung");
-        conn.execute_batch(&format!("PRAGMA user_version = {}", index + 1))
-            .expect("stamp");
-    }
+    ensure_to(&conn, rungs).expect("climb");
     conn
 }
 
