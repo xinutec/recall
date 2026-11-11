@@ -16,6 +16,7 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
@@ -433,6 +434,9 @@ private typealias Press = (String, suspend (String, String) -> CaptureState?) ->
 /** The windows one press opens, in minutes, as the web app's menu. */
 private val SPANS = listOf("30 min" to 30L, "1 h" to 60L, "2 h" to 120L)
 
+/** Four to a row on a phone: Material's 24 dp sides would wrap "30 min" and "Until…". */
+private val SPAN_PADDING = PaddingValues(horizontal = 4.dp, vertical = 8.dp)
+
 /**
  * The web app's recording banner and menu in one card: the window asked for, pause or
  * unpause and stop inside it, and a new window for a while or until a time. Shown only
@@ -511,7 +515,8 @@ private fun CaptureBanner(capture: CaptureState?, now: Instant, onPress: Press) 
                             }
                         },
                         modifier = Modifier.weight(1f),
-                    ) { Text(label) }
+                        contentPadding = SPAN_PADDING,
+                    ) { Text(label, maxLines = 1, softWrap = false) }
                 }
                 OutlinedButton(
                     onClick = {
@@ -522,7 +527,8 @@ private fun CaptureBanner(capture: CaptureState?, now: Instant, onPress: Press) 
                         }
                     },
                     modifier = Modifier.weight(1f),
-                ) { Text("Until…") }
+                    contentPadding = SPAN_PADDING,
+                ) { Text("Until…", maxLines = 1, softWrap = false) }
             }
         }
     }
