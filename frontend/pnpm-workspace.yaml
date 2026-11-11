@@ -20,7 +20,7 @@ allowBuilds:
   esbuild: true
   lmdb: true
   msgpackr-extract: true
-  "@xinutec/ui-harness@https://codeload.github.com/xinutec/ui-harness/tar.gz/668377e632d9ef3a1f7d788a35124f4e8fd6b770": true
+  "@xinutec/ui-harness@https://codeload.github.com/xinutec/ui-harness/tar.gz/a3848c2306ba1a67e910baed8dc2870936ad20ea": true
 
 # Two floors the Angular toolchain will not reach on its own, so `pnpm update`
 # cannot shift either — nothing in the tree asks for a newer version, and an
@@ -60,7 +60,7 @@ overrides:
   hono: ^4.13.5
   # @angular/build 22.2.3 pins vite 8.3.0, whose launch-editor has three advisories
   # fixed in 8.3.3. Drop once Angular's own pin passes it.
-  vite: ~8.3.5
+  vite: ~8.3.7
 
 # The catalog names only versions a day old (dev-lint tables/deps.dhall);
 # strict, so a younger install fails instead of writing itself an exclusion.
