@@ -17,8 +17,9 @@ cd "$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)/ios"
 # builds the Swift toolchain from source.
 nix run --inputs-from 'git+file:..?ref=HEAD' nixpkgs#xcodegen -- generate --quiet
 
-# A Nix devshell points DEVELOPER_DIR at its own SDK; xcodebuild needs Xcode's.
-env -u DEVELOPER_DIR xcodebuild test \
+# A Nix devshell points DEVELOPER_DIR at its own SDK, and LD at its own linker,
+# which xcodebuild takes as its LD build setting; it needs Xcode's for both.
+env -u DEVELOPER_DIR -u LD xcodebuild test \
     -project RecallMic.xcodeproj \
     -scheme RecallMic \
     -destination 'platform=iOS Simulator,name=recall-test' \
