@@ -589,3 +589,33 @@ async fn a_window_is_the_openers_own() {
     let (_, house) = as_recorder(&f, None, Request::get("/api/capture"), Body::empty()).await;
     assert!(!wants_running(&house), "the house untouched: {house}");
 }
+
+/// A press must say whose window it is: from nobody known it is refused and
+/// changes nothing, while a recorder's own token still presses for its owner.
+#[tokio::test]
+async fn a_press_from_nobody_known_is_refused() {
+    let (f, _) = world().await;
+    let until = (chrono::Utc::now() + chrono::Duration::hours(1))
+        .to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
+    let record = || Request::post(format!("/api/capture/record?until={until}"));
+    let wants_running = |text: &str| {
+        serde_json::from_str::<serde_json::Value>(text).expect("json")["desiredRunning"]
+            .as_bool()
+            .expect("desiredRunning")
+    };
+    for path in [
+        "/api/capture/stop",
+        "/api/capture/pause",
+        "/api/capture/unpause",
+    ] {
+        let (status, text) = as_recorder(&f, None, Request::post(path), Body::empty()).await;
+        assert_eq!(status, StatusCode::UNAUTHORIZED, "{path}: {text}");
+    }
+    let (status, text) = as_recorder(&f, None, record(), Body::empty()).await;
+    assert_eq!(status, StatusCode::UNAUTHORIZED, "{text}");
+    let (_, house) = as_recorder(&f, None, Request::get("/api/capture"), Body::empty()).await;
+    assert!(!wants_running(&house), "the house untouched: {house}");
+
+    let (status, text) = as_recorder(&f, Some("token-a"), record(), Body::empty()).await;
+    assert!(status.is_success(), "{status} {text}");
+}

@@ -559,14 +559,21 @@ async fn control(st: Arc<Control>, pressed: Press, request: axum::extract::Reque
     let real_ip = parts.headers.get("x-real-ip").and_then(|v| v.to_str().ok());
     let host = client_host(peer, real_ip, &st.trusted_proxies);
     let asker = Asker::from(&parts, host);
-    let viewer = parts.extensions.get::<crate::webauth::Viewer>().cloned();
+    // A press must say whose window it is: a session or a recorder's token.
+    let Some(viewer) = parts.extensions.get::<crate::webauth::Viewer>().cloned() else {
+        return (
+            axum::http::StatusCode::UNAUTHORIZED,
+            axum::Json(serde_json::json!({"error": "say whose recording this is"})),
+        )
+            .into_response();
+    };
     let cfg = st.webauth.clone();
     let root = st.root.clone();
 
     route::json("capture-control", move || {
         let conn = crate::work::open_write(&root)?;
         let now = chrono::Utc::now();
-        let whose = Whose::of(&conn, viewer.as_ref())?;
+        let whose = Whose::of(&conn, Some(&viewer))?;
         press(&conn, &whose, now, pressed)?;
         // After the action, so the audit cannot prevent it.
         audit(

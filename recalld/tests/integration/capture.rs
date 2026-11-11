@@ -511,7 +511,7 @@ async fn the_capture_routes_are_reachable_through_the_real_router() {
 
 #[tokio::test]
 async fn pressing_through_the_real_router_needs_no_login() {
-    // The phones' buttons carry no credential.
+    // A phone presses with its own token, not a login.
     for (method, path) in [
         ("GET", "/api/capture"),
         ("POST", "/api/capture/record"),
