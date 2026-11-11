@@ -99,7 +99,16 @@ let
           + "this file. To change: edit that module + commit, then in "
           + "~/.config/home-manager run 'nix flake update recall && home-manager "
           + "switch --flake .#$USER'.";
-        ProgramArguments = [ "${program}/bin/recall-${name}" ];
+        # A child of the bash that holds Full Disk Access: macOS judges a read of
+        # /Volumes/Backup by the job's own executable, and one without a grant
+        # hangs in open(), silently. A wrapper's store path moves with every
+        # commit, so the grant cannot be its. The program stays last.
+        ProgramArguments = [
+          "${pkgs.bashInteractive}/bin/bash"
+          "-c"
+          ''"$0"; exit $?''
+          "${program}/bin/recall-${name}"
+        ];
         RunAtLoad = true;
         KeepAlive = true;
         ProcessType = "Background";

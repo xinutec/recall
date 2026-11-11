@@ -219,7 +219,7 @@
           pkgs.linkFarm "recall-agents" (
             lib.mapAttrsToList (label: agent: {
               name = label;
-              path = lib.head agent.config.ProgramArguments;
+              path = lib.last agent.config.ProgramArguments;
             }) hm.launchd.agents
           );
 
