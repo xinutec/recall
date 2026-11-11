@@ -579,17 +579,30 @@ pub fn delete_session(
 }
 
 /// Unlink a deleted session's audio and its own directory, and its ingest
-/// directory only if empty: anything still there is not this delete's. Best
-/// effort: the rows are already gone.
-pub fn remove_files(root: &std::path::Path, source: &str, paths: &[String]) {
+/// directory only if empty: anything still there is not this delete's. The
+/// rows are already gone, so a file that stays is returned with why, for the
+/// fault log; one already gone is not.
+#[must_use]
+pub fn remove_files(
+    root: &std::path::Path,
+    source: &str,
+    paths: &[String],
+) -> Vec<(String, std::io::Error)> {
+    let mut left = Vec::new();
     for path in paths {
-        let _ = std::fs::remove_file(path);
+        match std::fs::remove_file(path) {
+            Err(err) if err.kind() != std::io::ErrorKind::NotFound => {
+                left.push((path.clone(), err));
+            }
+            _ => {}
+        }
     }
     let own = root.join(source);
     if own.is_dir() {
         let _ = std::fs::remove_dir_all(&own);
     }
     let _ = std::fs::remove_dir(crate::store::source_dir(root, source));
+    left
 }
 
 pub async fn delete_route(
@@ -628,7 +641,9 @@ pub async fn delete_route(
         // The ingest plane holds the session's words in its jobs.
         crate::store::forget_upload(&mut ingest, &deleted)?;
         // Files only after the commits, in case a delete rolls back.
-        remove_files(&root, &source, deleted.paths());
+        for (path, err) in remove_files(&root, &source, deleted.paths()) {
+            route::record("session delete left audio", &format!("{path}: {err}"));
+        }
         Ok(())
     });
     match done.await {

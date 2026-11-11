@@ -649,14 +649,41 @@ fn a_deleted_sessions_files_leave_no_directory_behind() {
     std::fs::write(&clip, b"audio").expect("clip");
     std::fs::write(own.join("derived"), b"x").expect("derived");
 
-    recalld::sessions::remove_files(
+    let left = recalld::sessions::remove_files(
         root.path(),
         "meeting-1",
         &[clip.to_string_lossy().into_owned()],
     );
 
+    assert!(left.is_empty(), "{left:?}");
+
     assert!(!ingest.exists());
     assert!(!own.exists());
+}
+
+#[test]
+fn audio_a_delete_could_not_remove_is_named_and_one_already_gone_is_not() {
+    // A meeting whose rows are gone but whose audio stayed must be said, not
+    // left as an orphan nobody knows about.
+    let root = tempfile::tempdir().expect("tmp");
+    let ingest = recalld::store::source_dir(root.path(), "meeting-1");
+    std::fs::create_dir_all(&ingest).expect("ingest dir");
+    // A directory where the audio should be: unlinking it fails.
+    let stuck = ingest.join("meeting-1-20261004T120000.wav");
+    std::fs::create_dir_all(&stuck).expect("stuck");
+    let gone = ingest.join("meeting-1-20261004T130000.wav");
+
+    let left = recalld::sessions::remove_files(
+        root.path(),
+        "meeting-1",
+        &[
+            stuck.to_string_lossy().into_owned(),
+            gone.to_string_lossy().into_owned(),
+        ],
+    );
+
+    assert_eq!(left.len(), 1, "{left:?}");
+    assert_eq!(left[0].0, stuck.to_string_lossy());
 }
 
 #[test]
@@ -667,7 +694,9 @@ fn an_ingest_directory_still_holding_audio_is_kept() {
     let other = ingest.join("meeting-1-20261004T130000.wav");
     std::fs::write(&other, b"audio").expect("other");
 
-    recalld::sessions::remove_files(root.path(), "meeting-1", &[]);
+    let left = recalld::sessions::remove_files(root.path(), "meeting-1", &[]);
+
+    assert!(left.is_empty(), "{left:?}");
 
     assert!(other.exists());
 }
