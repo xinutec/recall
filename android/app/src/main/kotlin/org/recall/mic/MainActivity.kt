@@ -133,11 +133,11 @@ class MainActivity : ComponentActivity() {
         StreamService.stop(this)
     }
 
-    /** Resume streaming on open if it was left enabled and the mic permission is in place. */
+    /** Resume on open if it was left enabled and the mic permission is in place; with
+     * no recorder host it records files ([FilesOnly]). */
     private fun resumeIfEnabled() {
         val ready =
             Prefs.enabled(this) &&
-                Prefs.host(this).isNotEmpty() &&
                 ContextCompat.checkSelfPermission(this, Manifest.permission.RECORD_AUDIO) ==
                 PackageManager.PERMISSION_GRANTED
         if (ready) StreamService.start(this)
@@ -328,7 +328,7 @@ private fun MicContent(
             Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
                 Button(
                     onClick = onStart,
-                    enabled = host.isNotBlank() && !running,
+                    enabled = !running,
                     modifier = Modifier.weight(1f),
                 ) { Text("Start") }
                 OutlinedButton(
@@ -337,11 +337,11 @@ private fun MicContent(
                     modifier = Modifier.weight(1f),
                 ) { Text("Stop") }
             }
-            if (host.isBlank()) {
+            if (FilesOnly.applies(host)) {
                 Text(
-                    "Set the recorder host in Settings before starting.",
+                    "No recorder host: this phone records on its own and uploads to recall.",
                     style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.error,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
             }
         }
@@ -356,32 +356,12 @@ private fun StatusCard(
     level: Float,
     host: String,
 ) {
-    val (label, detail, accent) =
-        when {
-            connected -> {
-                Triple("Streaming", "to $host", MaterialTheme.colorScheme.primary)
-            }
-
-            // Off closes the host's listener; not an error.
-            running && quiet -> {
-                Triple(
-                    "Off",
-                    "no recording window open",
-                    MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-            }
-
-            running -> {
-                Triple(
-                    "Waiting for recall host",
-                    "trying $host…",
-                    MaterialTheme.colorScheme.tertiary,
-                )
-            }
-
-            else -> {
-                Triple("Stopped", "not recording", MaterialTheme.colorScheme.onSurfaceVariant)
-            }
+    val (label, detail, tone) = Status.of(running, connected, quiet, host)
+    val accent =
+        when (tone) {
+            Status.Tone.LIVE -> MaterialTheme.colorScheme.primary
+            Status.Tone.WAITING -> MaterialTheme.colorScheme.tertiary
+            Status.Tone.IDLE -> MaterialTheme.colorScheme.onSurfaceVariant
         }
 
     Card(Modifier.fillMaxWidth()) {

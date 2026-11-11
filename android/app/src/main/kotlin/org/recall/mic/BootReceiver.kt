@@ -27,7 +27,6 @@ class BootReceiver : BroadcastReceiver() {
             BootPolicy.decide(
                 sdkInt = Build.VERSION.SDK_INT,
                 enabled = Prefs.enabled(context),
-                hostSet = Prefs.host(context).isNotEmpty(),
                 hasMicPermission = hasMic,
             )
         when (action) {

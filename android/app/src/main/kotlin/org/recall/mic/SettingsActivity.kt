@@ -113,7 +113,8 @@ fun SettingsScreen(
                 if (running) {
                     "Stop the stream to change this."
                 } else {
-                    "Where the live microphone stream goes — the recorder on the home LAN."
+                    "Where the live microphone stream goes: the recorder on the home LAN. " +
+                        "Leave it empty and this phone records on its own and uploads to recall."
                 },
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
@@ -166,9 +167,9 @@ fun SettingsScreen(
                 modifier = Modifier.fillMaxWidth(),
             )
             Text(
-                "This device's own credential for delivering recorded segments to the " +
-                    "archive. Write-only and pinned to this device — losing the phone " +
-                    "costs nothing but its uploads. Empty sends none.",
+                "This phone's own token: it delivers its recordings and tells recall whose " +
+                    "phone this is, for the recording window and the devices list. " +
+                    "Write-only and pinned to this device. Empty sends none.",
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
