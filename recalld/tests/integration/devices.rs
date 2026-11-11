@@ -404,7 +404,7 @@ fn gated(root: &std::path::Path) -> axum::Router {
                 nc_base_url: "https://dash.example.org".into(),
                 nc_internal_url: "https://dash.example.org".into(),
                 redirect_uri: "http://127.0.0.1/auth/callback".into(),
-                allowed_users: std::collections::HashSet::new(),
+                allowed_users: ["user".to_owned()].into(),
                 device_token: None,
             }),
             now: Arc::new(|| NOW),

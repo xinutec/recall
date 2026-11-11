@@ -24,7 +24,7 @@ fn cfg(device_token: Option<&str>) -> Config {
         nc_base_url: "https://dash.example.org".into(),
         nc_internal_url: "https://dash.example.org".into(),
         redirect_uri: "http://10.100.0.2:8000/auth/callback".into(),
-        allowed_users: HashSet::new(),
+        allowed_users: ["user".to_owned()].into(),
         device_token: device_token.map(str::to_owned),
     }
 }
@@ -207,9 +207,28 @@ fn the_allowlist_narrows_who_may_enter_after_a_valid_sign_in() {
     assert!(c.permits("user"));
     assert!(!c.permits("someone-else"));
 
-    // Empty means any authenticated user.
+    // Empty admits nobody: a setting meant to keep people out must not open
+    // the door when it is blank.
     c.allowed_users = HashSet::new();
-    assert!(c.permits("anyone"));
+    assert!(!c.permits("anyone"));
+}
+
+#[test]
+fn a_blank_allowlist_admits_nobody_rather_than_everyone() {
+    let read = |value: &'static str| {
+        recalld::webauth::Config::from_env(&|key| match key {
+            "RECALL_SESSION_SECRET" => Some(SECRET.to_owned()),
+            "NC_CLIENT_ID" => Some("cid".to_owned()),
+            "NC_CLIENT_SECRET" => Some("csec".to_owned()),
+            "RECALL_ALLOWED_USERS" => Some(value.to_owned()),
+            _ => None,
+        })
+        .expect("a whole gate")
+    };
+    for blank in ["", " , "] {
+        assert!(!read(blank).permits("anyone"), "{blank:?}");
+    }
+    assert!(read("a, b").permits("b"));
 }
 
 #[test]

@@ -242,7 +242,7 @@ use std::sync::Arc;
 use tower::ServiceExt;
 
 fn gated(root: &std::path::Path) -> axum::Router {
-    gated_for(root, &[], None, None)
+    gated_for(root, &["user"], None, None)
 }
 
 /// [`gated`], admitting `allowed`, accepting `device_token`, and knowing the

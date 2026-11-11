@@ -231,7 +231,7 @@ fn signed_in(root: &Path, out: &Path) -> Result<Client> {
             nc_base_url: "https://nextcloud.invalid".into(),
             nc_internal_url: "https://nextcloud.invalid".into(),
             redirect_uri: "https://recall.invalid/auth/callback".into(),
-            allowed_users: std::collections::HashSet::new(),
+            allowed_users: ["snapshot".to_owned()].into(),
             device_token: None,
         }),
         now: Arc::new(move || now),

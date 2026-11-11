@@ -35,7 +35,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             nc_base_url: "https://nextcloud.invalid".into(),
             nc_internal_url: "https://nextcloud.invalid".into(),
             redirect_uri: "https://recall.invalid/auth/callback".into(),
-            allowed_users: std::collections::HashSet::new(),
+            allowed_users: ["lab".to_owned()].into(),
             device_token: None,
         }),
         now: Arc::new(move || now),

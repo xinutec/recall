@@ -271,7 +271,7 @@ pub struct Config {
     /// service.
     pub nc_internal_url: String,
     pub redirect_uri: String,
-    /// Empty admits any Nextcloud user. Defaults to one.
+    /// Who may sign in; empty admits nobody. Defaults to one.
     pub allowed_users: HashSet<String>,
     pub device_token: Option<String>,
 }
@@ -356,7 +356,7 @@ impl Config {
 
     #[must_use]
     pub fn permits(&self, user_id: &str) -> bool {
-        self.allowed_users.is_empty() || self.allowed_users.contains(user_id)
+        self.allowed_users.contains(user_id)
     }
 
     #[must_use]

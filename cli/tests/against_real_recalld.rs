@@ -5,7 +5,6 @@
 use cli::api::Api;
 use cli::render;
 use recalld::app::{Config as ServerConfig, router};
-use std::collections::HashSet;
 use std::path::Path;
 use std::sync::Arc;
 
@@ -22,7 +21,7 @@ fn serve(root: &Path) -> String {
             nc_internal_url: "http://nextcloud.invalid".to_owned(),
             redirect_uri: "http://recall.invalid/auth/callback".to_owned(),
             // Empty means any authenticated user.
-            allowed_users: HashSet::new(),
+            allowed_users: ["user".to_owned()].into(),
             device_token: None,
         }),
         now: Arc::new(|| 1_700_000_000),
