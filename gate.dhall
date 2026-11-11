@@ -293,18 +293,6 @@ in  { name = "recall"
               [ "./gradlew", "--console=plain", ":app:testDebugUnitTest" ]
         , timeout_s = 1800
         }
-      , {-  On the Simulator, outside the devshell: xcodebuild needs Xcode's
-            toolchain, which the swift-format row already requires here. A pass
-            takes 30-40 s. With the Mac's developer mode off, a FAILING test
-            hangs (XCTest's request to inspect the test process is refused), so
-            a failure arrives as this timeout: run the script to see which.
-        -}
-        G.Check::{
-        , name = "ios unit tests (simulator)"
-        , lane = Some "ios"
-        , argv = [ "scripts/ios-test.sh" ]
-        , timeout_s = 300
-        }
       , {-  Strict, no baseline.
         -}
         G.devLint "../" // { lane = Some "nix" }

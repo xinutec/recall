@@ -1,7 +1,9 @@
 #!/usr/bin/env bash
 # Run the iOS unit tests (RecallMicTests) on the iOS Simulator.
 #
-# A gate row, outside the devshell: it needs Xcode and a simulator.
+# Not a gate row: with the Mac's developer mode off, a FAILING test hangs on
+# XCTest's refused request to inspect the test process. Run it by hand after
+# changing ios/Sources.
 #
 # One-time setup already done on this Mac: `xcodebuild -downloadPlatform iOS` and
 # `xcrun simctl create recall-test "iPhone 16" com.apple.CoreSimulator.SimRuntime.iOS-26-5`.

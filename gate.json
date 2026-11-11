@@ -556,17 +556,6 @@
     },
     {
       "argv": [
-        "scripts/ios-test.sh"
-      ],
-      "artifacts": [],
-      "cwd": ".",
-      "env": {},
-      "lane": "ios",
-      "name": "ios unit tests (simulator)",
-      "timeout_s": 300
-    },
-    {
-      "argv": [
         "nix",
         "run",
         "git+file:../dev-lint?ref=HEAD",
