@@ -1,8 +1,7 @@
 #!/usr/bin/env bash
 # Run the iOS unit tests (RecallMicTests) on the iOS Simulator.
 #
-# Not in the gate (it needs Xcode and a simulator, and takes a minute); the gate
-# only lints the Swift. Run it after changing ios/Sources.
+# A gate row, outside the devshell: it needs Xcode and a simulator.
 #
 # One-time setup already done on this Mac: `xcodebuild -downloadPlatform iOS` and
 # `xcrun simctl create recall-test "iPhone 16" com.apple.CoreSimulator.SimRuntime.iOS-26-5`.
@@ -12,7 +11,9 @@ cd "$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)/ios"
 
 # The project is generated from project.yml, gitignored, and lists every source
 # file, so a stale one misses new files (#1381). Regenerating takes a second.
-nix run nixpkgs#xcodegen -- generate --quiet
+# From the flake's locked nixpkgs: the registry's moves, and a moved one
+# builds the Swift toolchain from source.
+nix run --inputs-from 'git+file:..?ref=HEAD' nixpkgs#xcodegen -- generate --quiet
 
 # A Nix devshell points DEVELOPER_DIR at its own SDK; xcodebuild needs Xcode's.
 env -u DEVELOPER_DIR xcodebuild test \
