@@ -309,4 +309,5 @@ in  { name = "recall"
         G.devLint "../" // { lane = Some "nix" }
       , G.checkTable "../dev-lint"
       ]
+      # G.acting "../dev-lint"
     }

@@ -1,0 +1,131 @@
+{
+  "ceilings": {
+    "acts": 1,
+    "bootstrap": 0,
+    "by_design": 0,
+    "observer_checks": 0,
+    "observes": 0
+  },
+  "subjects": [
+    {
+      "class": "Acts",
+      "path": "android/deploy.sh",
+      "why": "builds the APK and installs it on a phone over adb: the phone-shells plan's target (automation-model item 14)"
+    },
+    {
+      "class": "OutOfScope",
+      "path": "frontend/gen-icons.sh",
+      "why": ""
+    },
+    {
+      "class": "OutOfScope",
+      "path": "scripts/check-doc-paths.sh",
+      "why": ""
+    },
+    {
+      "class": "OutOfScope",
+      "path": "scripts/check-pii.sh",
+      "why": ""
+    },
+    {
+      "class": "OutOfScope",
+      "path": "scripts/check_pure_crate.py",
+      "why": ""
+    },
+    {
+      "class": "OutOfScope",
+      "path": "scripts/check_workspace_members.py",
+      "why": ""
+    },
+    {
+      "class": "OutOfScope",
+      "path": "scripts/diarize_sweep.py",
+      "why": ""
+    },
+    {
+      "class": "OutOfScope",
+      "path": "scripts/gen-speech-fixture.sh",
+      "why": ""
+    },
+    {
+      "class": "OutOfScope",
+      "path": "scripts/gen-types.sh",
+      "why": ""
+    },
+    {
+      "class": "OutOfScope",
+      "path": "scripts/gen_latin_ranges.py",
+      "why": ""
+    },
+    {
+      "class": "OutOfScope",
+      "path": "scripts/ios-test.sh",
+      "why": ""
+    },
+    {
+      "class": "OutOfScope",
+      "path": "scripts/recall-build-frontend.sh",
+      "why": ""
+    },
+    {
+      "class": "OutOfScope",
+      "path": "scripts/sandbox_sampler.sh",
+      "why": ""
+    },
+    {
+      "class": "OutOfScope",
+      "path": "scripts/setup-hooks.sh",
+      "why": ""
+    },
+    {
+      "class": "OutOfScope",
+      "path": "scripts/stall_base_rate.py",
+      "why": "names restic and rsync as processes to count; runs neither"
+    },
+    {
+      "class": "OutOfScope",
+      "path": "src/recall/__init__.py",
+      "why": ""
+    },
+    {
+      "class": "OutOfScope",
+      "path": "src/recall/asr.py",
+      "why": ""
+    },
+    {
+      "class": "OutOfScope",
+      "path": "src/recall/diarize.py",
+      "why": ""
+    },
+    {
+      "class": "OutOfScope",
+      "path": "src/recall/score_asr.py",
+      "why": ""
+    },
+    {
+      "class": "OutOfScope",
+      "path": "src/recall/shim.py",
+      "why": ""
+    },
+    {
+      "class": "OutOfScope",
+      "path": "src/recall/shim_asr.py",
+      "why": ""
+    },
+    {
+      "class": "OutOfScope",
+      "path": "src/recall/shim_voices.py",
+      "why": ""
+    },
+    {
+      "class": "OutOfScope",
+      "path": "src/recall/speakerid.py",
+      "why": ""
+    },
+    {
+      "class": "OutOfScope",
+      "path": "src/recall/wer.py",
+      "why": ""
+    }
+  ]
+}

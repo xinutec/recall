@@ -595,6 +595,37 @@
       "env": {},
       "name": "the table matches its Dhall",
       "timeout_s": 300
+    },
+    {
+      "argv": [
+        "nix",
+        "run",
+        "git+file:../dev-lint?ref=HEAD#fleet",
+        "--",
+        "--acting",
+        "."
+      ],
+      "artifacts": [],
+      "cwd": ".",
+      "env": {},
+      "name": "the acting table classifies every script",
+      "timeout_s": 300
+    },
+    {
+      "argv": [
+        "nix",
+        "run",
+        "git+file:../dev-lint?ref=HEAD#gate",
+        "--",
+        "--check-table",
+        "acting.dhall",
+        "acting.json"
+      ],
+      "artifacts": [],
+      "cwd": ".",
+      "env": {},
+      "name": "the acting table matches its Dhall",
+      "timeout_s": 300
     }
   ],
   "name": "recall"
