@@ -30,7 +30,7 @@
     "@angular/platform-browser": "^22.2.6",
     "@angular/router": "^22.2.6",
     "@angular/service-worker": "^22.2.6",
-    "@xinutec/ui-scaffold": "github:xinutec/ui-harness#f3dcfff77efae5cb8768604bd026d1c90713adf3&path:/scaffold",
+    "@xinutec/ui-scaffold": "github:xinutec/ui-harness#1640f9d345d481481d81b01cb9987476ee7a14fe&path:/scaffold",
     "material-icons": "^1.13.14",
     "rxjs": "~7.8.2",
     "tslib": "^2.9.1"
@@ -40,7 +40,7 @@
     "@angular/cli": "^22.2.7",
     "@angular/compiler-cli": "^22.2.6",
     "@playwright/test": "1.63.0",
-    "@xinutec/ui-harness": "github:xinutec/ui-harness#f3dcfff77efae5cb8768604bd026d1c90713adf3",
+    "@xinutec/ui-harness": "github:xinutec/ui-harness#1640f9d345d481481d81b01cb9987476ee7a14fe",
     "angular-eslint": "^22.6.0",
     "eslint": "^10.15.0",
     "jsdom": "^30.1.3",
